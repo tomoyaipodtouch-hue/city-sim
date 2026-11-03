@@ -13,7 +13,7 @@ import {
 import { CELL } from './constants';
 import { ADVISORS, Advice, computeRating, Loan, LOAN_AMOUNTS, loanRate, makeAdvice, MAX_LOANS, newLoan, ordinanceCost, ordinanceEffects, OrdinanceEffects, OrdinanceId, ORDINANCES, payLoan, rewardUnlocked, REWARD_REQ } from './governance';
 import { defaultServiceState, makeServiceMaps, ServiceMaps, ServiceState, updateServices } from './services';
-import { assignTrips, buildJunctions, buildTransitModel, congestionFactor, Destination, LAYER, Origin } from './traffic';
+import { assignTrips, buildJunctions, buildRoadGraph, buildTransitModel, congestionFactor, Destination, LAYER, Origin } from './traffic';
 
 export enum BState {
   Building = 0,
@@ -1120,13 +1120,24 @@ export class World {
         l.push(d);
       }
     };
+    // 住宅の出発地は、3×3 マスの区画ごと（道路がつながっている場合だけ）にまとめて計算する（計算を軽くするため）
+    const comp = groundRoadComponents(g);
+    const rep = new Map<number, number>();
+    const BLK = 3, bw = Math.ceil(n / BLK);
+    const repCell = (c: number) => {
+      const key = comp[c] * bw * bw + (((c / n) | 0) / BLK | 0) * bw + ((c % n) / BLK | 0);
+      let r = rep.get(key);
+      if (r === undefined) rep.set(key, (r = c));
+      return r;
+    };
     for (const b of this.buildings.values()) {
       if (b.civic || b.state !== BState.Normal) continue;
       const def = GROW[b.type as GrowKind];
       const acc = this.accessCells(b);
       if (!acc.length) continue;
-      const cell = acc[b.seed % acc.length];
+      let cell = acc[b.seed % acc.length];
       if (def.zone === ZoneType.R) {
+        cell = repCell(cell);
         const f = NO_CAR[b.type] ?? 0;
         const workers = b.occ * 0.5, shop = b.occ * 0.2;
         addOrigin(commuters, cell, b.id, Math.round(workers * (1 - f)), 0);
@@ -1226,8 +1237,9 @@ export class World {
     }
     this.airportBoost = airportBoost;
     this.seaportBoost = seaportBoost;
-    const rc = assignTrips(g, [...commuters.values()], jobsAt, cong, junctions, rnd, { externalCap: external, maxMinutes: 80, weight: 1 }, tm);
-    const rs = assignTrips(g, [...shoppers.values()], shopsAt, cong, junctions, rnd, { externalCap: this.neighborConnected ? pop * 0.03 : 0, maxMinutes: 30, weight: 0.5 }, tm);
+    const graph = buildRoadGraph(g, cong, junctions);
+    const rc = assignTrips(g, [...commuters.values()], jobsAt, cong, junctions, rnd, { externalCap: external, maxMinutes: 80, weight: 1 }, tm, graph);
+    const rs = assignTrips(g, [...shoppers.values()], shopsAt, cong, junctions, rnd, { externalCap: this.neighborConnected ? pop * 0.03 : 0, maxMinutes: 30, weight: 0.5 }, tm, graph);
     // 公共交通の乗客数（バス、鉄道、高架鉄道、モノレール、地下鉄の順に N マスずつ）
     const riders = this.maps.riders;
     for (let l = 0; l < 5; l++) {
@@ -1238,7 +1250,7 @@ export class World {
     const tot = Math.max(1, rc.modes.car + rc.modes.transit + rc.modes.walk);
     this.modeShare = { car: rc.modes.car / tot, transit: rc.modes.transit / tot, walk: rc.modes.walk / tot };
     // 貨物：隣の都市（道路・高速道路）、港、貨物駅のうち近いところへ
-    const rf = assignTrips(g, [...trucks.values()], freightAt, cong, junctions, rnd, { externalCap: 1e9, externalOnly: freightAt.size === 0, carOnly: true, maxMinutes: 90, weight: 2.5 });
+    const rf = assignTrips(g, [...trucks.values()], freightAt, cong, junctions, rnd, { externalCap: 1e9, externalOnly: freightAt.size === 0, carOnly: true, maxMinutes: 90, weight: 2.5 }, undefined, graph);
     // 交通量と混雑度（前の月と平均してなめらかにする）
     for (let v = 0; v < 2 * N; v++) {
       const t = g.nodeType(v);
@@ -1682,4 +1694,32 @@ export function blur(src: Float32Array, n: number, radius: number, passes: numbe
     }
   }
   return a;
+}
+
+// 地上の道路がつながっているまとまりに番号をつける（道路のないマスは -1）
+function groundRoadComponents(g: Grid): Int32Array {
+  const n = g.n, N = n * n;
+  const comp = new Int32Array(N).fill(-1);
+  const stack: number[] = [];
+  let k = 0;
+  for (let s = 0; s < N; s++) {
+    if (comp[s] >= 0 || !g.road[s]) continue;
+    comp[s] = k;
+    stack.push(s);
+    while (stack.length) {
+      const c = stack.pop()!;
+      const m = g.conn[c], x = c % n, y = (c / n) | 0;
+      for (let d = 0; d < 8; d++) {
+        if (!(m & (1 << d))) continue;
+        const nx = x + DX[d], ny = y + DY[d];
+        if (nx < 0 || ny < 0 || nx >= n || ny >= n) continue;
+        const j = ny * n + nx;
+        if (comp[j] >= 0 || !g.road[j]) continue;
+        comp[j] = k;
+        stack.push(j);
+      }
+    }
+    k++;
+  }
+  return comp;
 }
