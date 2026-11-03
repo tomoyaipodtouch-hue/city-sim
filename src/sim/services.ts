@@ -49,11 +49,13 @@ export interface ServiceResult {
   lifeExp: number;
   crimeAvg: number; // 住人が感じる犯罪（0..1）
   garbageLevel: number; // 処理しきれないゴミの割合（0..1）
+  cover: { police: number; fire: number; health: number }; // 住人のうち範囲内の割合
+  schoolSeats: number;
 }
 
 export function updateServices(
   g: Grid, buildings: Iterable<Building>, s: ServiceState, m: ServiceMaps,
-  ctx: { pollution: Uint8Array; landValue: Uint8Array; resDensity: Float32Array },
+  ctx: { pollution: Uint8Array; landValue: Uint8Array; resDensity: Float32Array; crimeMul?: number; fireMul?: number; hqBonus?: number; garbageMul?: number },
 ): ServiceResult {
   const n = g.n, N = n * n;
   const news: string[] = [];
@@ -133,8 +135,8 @@ export function updateServices(
       crimeBase = (0.08 + 0.4 * dense + 0.3 * (1 - lv)) * crimeScale;
       fireBase = 0.2 + 0.4 * dense + (g.zone[i] === ZoneType.I ? 0.4 : 0);
     }
-    m.crime[i] = Math.round(Math.max(0, crimeBase * (1 - 0.85 * Math.min(1, police[i]))) * 255);
-    m.fireRisk[i] = Math.round(Math.max(0, fireBase * (1 - 0.9 * Math.min(1, fire[i]))) * 255);
+    m.crime[i] = Math.round(Math.min(1, Math.max(0, crimeBase * (ctx.crimeMul ?? 1) * (1 - 0.85 * Math.min(1, police[i])))) * 255);
+    m.fireRisk[i] = Math.round(Math.min(1, Math.max(0, fireBase * (ctx.fireMul ?? 1) * (1 - 0.9 * Math.min(1, fire[i])))) * 255);
     m.police[i] = Math.round(Math.min(1, police[i]) * 255);
     m.fire[i] = Math.round(Math.min(1, fire[i]) * 255);
     m.health[i] = Math.round(Math.min(1, health[i]) * 255);
@@ -148,7 +150,7 @@ export function updateServices(
     libSum += b.occ * (lib[i] > 0 ? Math.min(1, lib[i]) : 0);
     crimeSum += b.occ * (m.crime[i] / 255);
   }
-  const hqTarget = pop > 0 ? (hqSum / pop) * 100 : 50;
+  const hqTarget = Math.min(100, (pop > 0 ? (hqSum / pop) * 100 : 50) + (ctx.hqBonus ?? 0));
   s.hq += (hqTarget - s.hq) / 6;
   // 教育水準（子ども → 大人 → 高齢者）
   const children = pop * 0.22, adults = pop * 0.6;
@@ -162,12 +164,23 @@ export function updateServices(
   s.eq.adult += (adultTarget - s.eq.adult) / 60;
   s.eq.elderly += (s.eq.adult - s.eq.elderly) / 120;
   // ゴミ
-  const produced = pop * GARBAGE_PER_RES + jobs * GARBAGE_PER_JOB;
+  const produced = (pop * GARBAGE_PER_RES + jobs * GARBAGE_PER_JOB) * (ctx.garbageMul ?? 1);
   const afterRecycle = Math.max(0, produced - recycle);
   const excess = Math.max(0, afterRecycle - dispose);
   const prevExcess = s.garbage.excess;
   s.garbage = { produced: Math.round(produced), handled: Math.round(Math.min(afterRecycle, dispose) + Math.min(produced, recycle)), excess: Math.round(excess) };
   if (excess > 50 && prevExcess <= 50) news.push('ゴミが処理しきれず、街が汚れています。埋立地や焼却場を作りましょう。');
+  const cov = () => {
+    let p = 0, f = 0, h = 0;
+    for (const b of homes) {
+      const i = g.idx(b.x, b.y);
+      if (m.police[i] > 25) p += b.occ;
+      if (m.fire[i] > 25) f += b.occ;
+      if (m.health[i] > 25) h += b.occ;
+    }
+    const t = Math.max(1, pop);
+    return { police: p / t, fire: f / t, health: h / t };
+  };
   return {
     news,
     pop,
@@ -175,5 +188,7 @@ export function updateServices(
     crimeAvg: pop > 0 ? crimeSum / pop : 0,
     // 小さな町ではゴミの問題は目立たない（ゴミの量が月 3,000 を超えると本格的になる）
     garbageLevel: produced > 0 ? Math.min(1, excess / produced) * Math.min(1, produced / 3000) : 0,
+    cover: cov(),
+    schoolSeats: children > 0 ? seatsE / children : 1,
   };
 }

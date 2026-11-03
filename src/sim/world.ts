@@ -11,6 +11,7 @@ import {
   applyCloverleaf, applyDiamond, applyRamp, applyTransitLine, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
 } from './plan';
 import { CELL } from './constants';
+import { ADVISORS, Advice, computeRating, Loan, LOAN_AMOUNTS, loanRate, makeAdvice, MAX_LOANS, newLoan, ordinanceCost, ordinanceEffects, OrdinanceEffects, OrdinanceId, ORDINANCES, payLoan, rewardUnlocked, REWARD_REQ } from './governance';
 import { defaultServiceState, makeServiceMaps, ServiceMaps, ServiceState, updateServices } from './services';
 import { assignTrips, buildJunctions, buildTransitModel, congestionFactor, Destination, LAYER, Origin } from './traffic';
 
@@ -70,6 +71,12 @@ export interface Stats {
   neighborConnected: boolean;
   transitRiders: number;
   modeShare: { car: number; transit: number; walk: number };
+  rating: number;
+  ratingParts: [string, number][];
+  advice: Advice[];
+  ordinances: OrdinanceId[];
+  loans: Loan[];
+  loanRate: number;
   services: { funding: Record<Dept, number>; strike: Record<Dept, number>; eq: { child: number; adult: number; elderly: number }; hq: number; lifeExp: number; crime: number; garbage: { produced: number; handled: number; excess: number } };
 }
 
@@ -122,6 +129,9 @@ export interface SaveData {
   history: { pop: number; funds: number }[];
   milestones: number[];
   services?: ServiceState;
+  ordinances?: OrdinanceId[];
+  loans?: Loan[];
+  rating?: number;
 }
 
 export interface CmdResult {
@@ -144,7 +154,10 @@ export type Command =
   | { t: 'busstop'; x: number; y: number }
   | { t: 'junction'; cell: number; ctl: number; split: number; flags: number }
   | { t: 'funding'; dept: Dept; value: number }
-  | { t: 'facilityFund'; id: number; value: number };
+  | { t: 'facilityFund'; id: number; value: number }
+  | { t: 'ordinance'; id: OrdinanceId; on: boolean }
+  | { t: 'loan'; amount: number }
+  | { t: 'repay'; id: number };
 
 const emptyKinds = (v: number) => Object.fromEntries(GROW_KINDS.map((k) => [k, v])) as Record<GrowKind, number>;
 
@@ -264,6 +277,9 @@ export class World {
       history: this.history.slice(),
       milestones: this.milestones.slice(),
       services: JSON.parse(JSON.stringify(this.services)),
+      ordinances: [...this.ordinances],
+      loans: this.loans.map((l) => ({ ...l })),
+      rating: this.rating,
     };
   }
 
@@ -296,6 +312,11 @@ export class World {
     w.history = d.history || [];
     w.milestones = d.milestones || [];
     if (d.services) w.services = { ...defaultServiceState(), ...d.services };
+    w.ordinances = new Set(d.ordinances ?? []);
+    w.fx = ordinanceEffects(w.ordinances);
+    w.loans = (d.loans ?? []).map((l) => ({ ...l }));
+    w.nextLoanId = Math.max(1, ...w.loans.map((l) => l.id + 1));
+    w.rating = d.rating ?? 55;
     w.recomputeAll();
     return w;
   }
@@ -364,6 +385,11 @@ export class World {
       case 'plop': {
         const plan = planPlop(g, c.id, c.x, c.y);
         if (!plan.ok) return { ok: false, msg: plan.reason };
+        if (REWARD_REQ[c.id]) {
+          if ([...this.buildings.values()].some((b) => b.type === c.id)) return { ok: false, msg: `${CIVIC[c.id].name}は1つしか建てられません` };
+          // サンドボックスでは条件なしで建てられる
+          if (!this.sandbox && !rewardUnlocked(c.id, this.population(), this.rating, this.services.eq.adult)) return { ok: false, msg: `まだ建てられません（条件：${REWARD_REQ[c.id].label}）` };
+        }
         if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
         const def = CIVIC[c.id];
         flattenRect(g, plan.x, plan.y, def.w, def.h, plan.flatH);
@@ -435,6 +461,35 @@ export class World {
         this.mapsVersion++;
         this.gridVersion++;
         return { ok: true };
+      }
+      case 'ordinance': {
+        const def = ORDINANCES.find((o) => o.id === c.id);
+        if (!def) return { ok: false, msg: '条例が見つかりません' };
+        if (c.on && this.population() < def.minPop) return { ok: false, msg: `人口が ${def.minPop.toLocaleString()} 人を超えると施行できます` };
+        if (c.on) this.ordinances.add(c.id);
+        else this.ordinances.delete(c.id);
+        this.fx = ordinanceEffects(this.ordinances);
+        this.updateStats();
+        return { ok: true, msg: `${def.name}を${c.on ? '施行' : '廃止'}しました` };
+      }
+      case 'loan': {
+        if (!LOAN_AMOUNTS.includes(c.amount)) return { ok: false, msg: '金額が正しくありません' };
+        if (this.loans.length >= MAX_LOANS) return { ok: false, msg: `借入は ${MAX_LOANS} 件までです` };
+        const rate = loanRate(this.funds, this.lastMonthIncome - this.lastMonthExpense, this.loans.length);
+        const l = newLoan(this.nextLoanId++, c.amount, rate);
+        this.loans.push(l);
+        if (!this.sandbox) this.funds += c.amount;
+        this.updateStats();
+        return { ok: true, msg: `§${c.amount.toLocaleString()} を年利 ${rate.toFixed(1)}% で借りました（毎月 §${Math.round(l.payment).toLocaleString()} を10年間返済）` };
+      }
+      case 'repay': {
+        const l = this.loans.find((x) => x.id === c.id);
+        if (!l) return { ok: false, msg: '借入が見つかりません' };
+        const amount = Math.round(l.remaining);
+        if (!this.spend(amount)) return { ok: false, msg: '資金が足りません' };
+        this.loans = this.loans.filter((x) => x !== l);
+        this.updateStats();
+        return { ok: true, msg: `§${amount.toLocaleString()} を返して、借入を終えました` };
       }
       case 'funding': {
         this.services.funding[c.dept] = Math.max(0, Math.min(150, Math.round(c.value)));
@@ -660,7 +715,7 @@ export class World {
     const hlt = this.maps.health[i] / 255, edu = this.maps.edu[i] / 255;
     const garbage = this.svc.garbageLevel;
     const eq = this.services.eq.adult;
-    const svcR = -0.45 * crime - 0.25 * fire - 0.35 * garbage + 0.15 * hlt + 0.1 * edu;
+    const svcR = -0.45 * crime - 0.25 * fire - 0.35 * garbage + 0.15 * hlt + 0.1 * edu + this.fx.rDesire;
     const svcC = -0.3 * crime - 0.2 * fire - 0.25 * garbage;
     const base = this.desirabilityBase(kind, lv, pol, commutePen, res, traffic, water, eq);
     const zone = GROW[kind].zone;
@@ -885,7 +940,7 @@ export class World {
   private powerNeed(b: Building) {
     if (b.civic) return b.type === 'pump' ? 25 : b.type === 'tower' ? 8 : 0;
     const def = GROW[b.type as GrowKind];
-    return Math.max(1, (b.state === BState.Building ? b.cap : b.occ || b.cap) * def.powerPer);
+    return Math.max(1, (b.state === BState.Building ? b.cap : b.occ || b.cap) * def.powerPer * this.fx.power);
   }
 
   // ---------------- 水道 ----------------
@@ -980,7 +1035,7 @@ export class World {
   private waterNeed(b: Building) {
     if (b.civic) return 0;
     const def = GROW[b.type as GrowKind];
-    return Math.max(1, (b.occ || b.cap) * def.waterPer);
+    return Math.max(1, (b.occ || b.cap) * def.waterPer * this.fx.water);
   }
 
   // ---------------- 汚染と地価 ----------------
@@ -999,7 +1054,7 @@ export class World {
         pk = def.park || 0;
       } else {
         const def = GROW[b.type as GrowKind];
-        p = b.state === BState.Abandoned ? def.pollution * 0.2 : def.pollution * (b.occ / Math.max(1, b.cap));
+        p = (b.state === BState.Abandoned ? def.pollution * 0.2 : def.pollution * (b.occ / Math.max(1, b.cap))) * (def.zone === ZoneType.I ? this.fx.indPollution : 1);
         if (def.zone === ZoneType.R) for (let y = b.y; y < b.y + b.h; y++) for (let x = b.x; x < b.x + b.w; x++) res[g.idx(x, y)] = b.occ / area;
       }
       for (let y = b.y; y < b.y + b.h; y++) for (let x = b.x; x < b.x + b.w; x++) {
@@ -1007,7 +1062,7 @@ export class World {
         if (pk) park[g.idx(x, y)] = Math.max(park[g.idx(x, y)], pk);
       }
     }
-    for (let i = 0; i < N; i++) if (g.anyRoad(i)) src[i] += Math.min(0.6, (this.maps.traffic[i] + this.maps.traffic[i + N]) / 3000);
+    for (let i = 0; i < N; i++) if (g.anyRoad(i)) src[i] += Math.min(0.6, (this.maps.traffic[i] + this.maps.traffic[i + N]) / 3000) * this.fx.roadPollution;
     const pol = blur(src, n, 3, 3);
     for (let i = 0; i < N; i++) this.maps.pollution[i] = Math.min(255, Math.round(pol[i] * 140));
 
@@ -1188,7 +1243,7 @@ export class World {
     for (let v = 0; v < 2 * N; v++) {
       const t = g.nodeType(v);
       if (!t) { traffic[v] = 0; cong[v] = 1; this.maps.freight[v] = 0; continue; }
-      const vol = rc.volume[v] + rs.volume[v] + rf.volume[v];
+      const vol = (rc.volume[v] + rs.volume[v] + rf.volume[v]) * this.fx.traffic;
       traffic[v] = traffic[v] * 0.4 + vol * 0.6;
       this.maps.freight[v] = this.maps.freight[v] * 0.4 + rf.volume[v] * 0.6;
       const cap = ROADS[t].capacity;
@@ -1247,7 +1302,17 @@ export class World {
   junctionCtl: Uint8Array = new Uint8Array(0);
   transitRiders = 0; // 1日の公共交通の乗客数
   services: ServiceState = defaultServiceState();
+  ordinances = new Set<OrdinanceId>();
+  loans: Loan[] = [];
+  private nextLoanId = 1;
+  rating = 55;
+  private ratingParts: [string, number][] = [];
+  private advice: Advice[] = [];
+  private fx: OrdinanceEffects = ordinanceEffects(new Set());
+  private lastBad = new Set<string>();
   private svc = { lifeExp: 72, crimeAvg: 0, garbageLevel: 0 };
+  private svcCover = { police: 0, fire: 0, health: 0 };
+  private schoolSeats = 1;
   private airportBoost = 0;
   private seaportBoost = 0;
   modeShare = { car: 0, transit: 0, walk: 0 };
@@ -1304,6 +1369,15 @@ export class World {
     for (const k of ['CS2', 'CS3', 'CO2', 'CO3'] as const) raw[k] += this.airportBoost;
     raw.CS1 += this.airportBoost * 0.5;
     for (const k of ['ID', 'IM'] as const) raw[k] += this.seaportBoost;
+    // 記念施設
+    const has = (t: string) => [...this.buildings.values()].some((b) => b.type === t);
+    if (has('stadium')) for (const k of ['CS1', 'CS2', 'CS3'] as const) raw[k] += 0.1;
+    if (has('museum')) this.services.eq.adult = Math.min(150, this.services.eq.adult + 0.05);
+    // 条例
+    for (const k of ['R1', 'R2', 'R3'] as const) raw[k] += this.fx.demand.R + (this.rating - 50) / 250;
+    for (const k of ['CS1', 'CS2', 'CS3', 'CO2', 'CO3'] as const) raw[k] += this.fx.demand.C;
+    for (const k of ['ID', 'IM', 'IH', 'IA'] as const) raw[k] += this.fx.demand.I;
+    raw.ID += this.fx.demand.ID;
     raw.R1 -= unemployment * 1.5;
     raw.R2 -= unemployment * 1.5;
     raw.R3 -= unemployment * 1.5;
@@ -1384,6 +1458,20 @@ export class World {
       if (g.bstop[i]) exp.公共交通 += BUS_STOP_UPKEEP;
       if (g.pline[i]) exp.電力 += POWER_LINE_UPKEEP;
     }
+    // 条例（カジノは収入）
+    const pop = this.population();
+    for (const id of this.ordinances) {
+      const c = ordinanceCost(id, pop);
+      if (c < 0) inc.カジノ = (inc.カジノ || 0) - c;
+      else exp.条例 = (exp.条例 || 0) + c;
+    }
+    // 借入の返済
+    if (!this.sandbox) {
+      for (const l of this.loans) exp.借入の返済 = (exp.借入の返済 || 0) + payLoan(l);
+      const done = this.loans.filter((l) => l.months <= 0 || l.remaining <= 0.5);
+      if (done.length) this.pushNews(`借入の返済が ${done.length} 件終わりました。`);
+      this.loans = this.loans.filter((l) => !done.includes(l));
+    }
     let income = 0, expense = 0;
     for (const k in inc) { inc[k] = Math.round(inc[k]); income += inc[k]; }
     for (const k in exp) { exp[k] = Math.round(exp[k]); expense += exp[k]; }
@@ -1422,9 +1510,59 @@ export class World {
   private updateServicesMonthly() {
     const r = updateServices(this.g, this.buildings.values(), this.services, this.maps, {
       pollution: this.maps.pollution, landValue: this.maps.landValue, resDensity: this.resDensity,
+      crimeMul: this.fx.crime, fireMul: this.fx.fire, hqBonus: this.fx.hqBonus, garbageMul: this.fx.garbage,
     });
+    this.svcCover = r.cover;
+    this.schoolSeats = r.schoolSeats;
     for (const msg of r.news) this.pushNews(msg);
     this.svc = { lifeExp: r.lifeExp, crimeAvg: r.crimeAvg, garbageLevel: r.garbageLevel };
+  }
+
+  private updateRating() {
+    const pop = this.population();
+    let polSum = 0, n = 0;
+    for (const b of this.buildings.values()) {
+      if (b.civic || b.state !== BState.Normal || GROW[b.type as GrowKind].zone !== ZoneType.R) continue;
+      polSum += b.occ * Math.min(1, this.maps.pollution[this.g.idx(b.x, b.y)] / 140);
+      n += b.occ;
+    }
+    const taxes = Object.values(this.taxes);
+    const workers = pop * 0.5;
+    const r = computeRating({
+      pop, avgTax: taxes.reduce((a, b) => a + b, 0) / taxes.length, crime: this.svc.crimeAvg, pollution: n ? polSum / n : 0,
+      commute: this.avgCommute, unemployment: workers > 50 ? Math.max(0, 1 - this.employedTotal / workers) : 0,
+      garbage: this.svc.garbageLevel, powerShort: this.powerDemand > this.powerSupply && this.powerSupply > 0,
+      waterShort: this.waterDemand > this.waterSupply && this.waterSupply > 0, health: this.services.hq, eq: this.services.eq.adult,
+      funds: this.funds, ordinanceBonus: this.fx.rating,
+      rewards: [...this.buildings.values()].filter((b) => REWARD_REQ[b.type as string]).length,
+    });
+    this.rating += (r.value - this.rating) * 0.25;
+    this.ratingParts = r.parts;
+    // アドバイザー
+    const free = { R: 0, C: 0, I: 0 };
+    const g = this.g;
+    for (let i = 0; i < g.n * g.n; i++) if (g.zone[i] && !g.bldg[i]) free[(['', 'R', 'C', 'I'] as const)[g.zone[i]] as 'R' | 'C' | 'I']++;
+    let congested = 0, roads = 0;
+    for (let i = 0; i < g.n * g.n; i++) if (g.road[i]) { roads++; if (this.maps.congestion[i] > 1.6) congested++; }
+    const d = this.demand;
+    this.advice = makeAdvice({
+      pop, funds: this.funds, net: this.lastMonthIncome - this.lastMonthExpense, avgTax: taxes.reduce((a, b) => a + b, 0) / taxes.length,
+      loans: this.loans.length, demandR: Math.max(d.R1, d.R2, d.R3), demandC: Math.max(d.CS1, d.CS2, d.CS3, d.CO2, d.CO3),
+      demandI: Math.max(d.IA, d.ID, d.IM, d.IH), freeZones: free, commute: this.avgCommute, congested: roads ? congested / roads : 0,
+      transitShare: this.modeShare.transit, crime: this.svc.crimeAvg, fireRisk: 0, policeCover: this.svcCover.police,
+      fireCover: this.svcCover.fire, healthCover: this.svcCover.health, hq: this.services.hq, eqChild: this.services.eq.child,
+      eqAdult: this.services.eq.adult, schoolSeats: this.schoolSeats,
+      powerShort: this.powerDemand > this.powerSupply && this.powerSupply > 0, waterShort: this.waterDemand > this.waterSupply && this.waterSupply > 0,
+      powerMargin: this.powerSupply > 0 ? 1 - this.powerDemand / this.powerSupply : 1, waterMargin: this.waterSupply > 0 ? 1 - this.waterDemand / this.waterSupply : 1,
+      garbage: this.svc.garbageLevel, pollution: n ? polSum / n : 0,
+      strikes: Object.entries(this.services.strike).filter(([, v]) => v > 0).map(([k]) => DEPT_NAMES[k as Dept]),
+      rating: this.rating,
+      sandbox: this.sandbox,
+    });
+    // 新しく出た「問題」は、アドバイザーからのニュースとして知らせる
+    const bad = new Set(this.advice.filter((a) => a.level === 2).map((a) => a.text));
+    for (const a of this.advice) if (a.level === 2 && !this.lastBad.has(a.text)) this.pushNews(`${ADVISORS[a.advisor]}アドバイザー：${a.text}`);
+    this.lastBad = bad;
   }
 
   private monthly() {
@@ -1437,6 +1575,7 @@ export class World {
     this.updateDemand();
     this.updateOccupancy();
     this.updateBudget();
+    this.updateRating();
     this.candidatesDirty = true;
     this.mapsVersion++;
     this.buildingVersion++;
@@ -1503,6 +1642,12 @@ export class World {
         funding: { ...this.services.funding }, strike: { ...this.services.strike }, eq: { ...this.services.eq }, hq: this.services.hq,
         lifeExp: this.svc.lifeExp, crime: this.svc.crimeAvg, garbage: { ...this.services.garbage },
       },
+      rating: Math.round(this.rating),
+      ratingParts: this.ratingParts,
+      advice: this.advice,
+      ordinances: [...this.ordinances],
+      loans: this.loans.map((l) => ({ ...l })),
+      loanRate: loanRate(this.funds, this.lastMonthIncome - this.lastMonthExpense, this.loans.length),
     };
   }
 }

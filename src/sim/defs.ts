@@ -173,7 +173,8 @@ export const GARBAGE_PER_JOB = 0.6;
 export type CivicId = 'coal' | 'gas' | 'pump' | 'tower' | 'park_s' | 'park_l' | 'plaza' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station'
   | 'ferry_p' | 'ferry_c' | 'seaport' | 'airport_s' | 'airport_l' | 'freight_st'
   | 'police_s' | 'police_l' | 'fire_s' | 'fire_l' | 'clinic' | 'hospital' | 'school_e' | 'school_h' | 'college' | 'library'
-  | 'landfill' | 'incinerator' | 'recycling';
+  | 'landfill' | 'incinerator' | 'recycling'
+  | 'mayor_house' | 'city_hall' | 'statue' | 'museum' | 'stadium';
 
 export interface CivicDef {
   id: CivicId;
@@ -196,6 +197,7 @@ export interface CivicDef {
   service?: ServiceKind; // 公共サービス
   radius?: number; // 効果が届く範囲（マス）
   capacity?: number; // 受け入れ人数（学校の席、病院のベッドなど）／ゴミの処理量（月）
+  reward?: boolean; // 記念施設（条件を満たすと建てられる）
   desc: string;
 }
 
@@ -229,6 +231,11 @@ export const CIVIC: Record<CivicId, CivicDef> = {
   library: { id: 'library', name: '図書館', w: 2, h: 2, cost: 2500, upkeep: 100, service: 'library', radius: 16, desc: '周りの住人の教育水準を少し上げる' },
   landfill: { id: 'landfill', name: '埋立地', w: 4, h: 4, cost: 2000, upkeep: 80, service: 'landfill', capacity: 6000, pollution: 4, desc: '月 6,000 のゴミを処理する。周りの地価が下がる' },
   incinerator: { id: 'incinerator', name: '焼却場', w: 3, h: 3, cost: 9000, upkeep: 260, service: 'incinerator', capacity: 9000, pollution: 14, desc: '月 9,000 のゴミを処理する。大気汚染がある' },
+  mayor_house: { id: 'mayor_house', name: '市長公邸', w: 2, h: 2, cost: 1000, upkeep: 20, park: 0.15, reward: true, desc: '記念施設。周りの地価が上がり、市長評価が上がる' },
+  city_hall: { id: 'city_hall', name: '市役所', w: 4, h: 3, cost: 12000, upkeep: 120, park: 0.2, reward: true, desc: '記念施設。周りの地価が上がり、市長評価が上がる' },
+  statue: { id: 'statue', name: '市長の銅像', w: 1, h: 1, cost: 500, upkeep: 5, park: 0.1, reward: true, desc: '記念施設。市長評価が上がる' },
+  museum: { id: 'museum', name: '博物館', w: 3, h: 3, cost: 15000, upkeep: 200, park: 0.25, reward: true, desc: '記念施設。周りの地価と、大人の教育水準が上がる' },
+  stadium: { id: 'stadium', name: 'スタジアム', w: 6, h: 6, cost: 40000, upkeep: 400, park: 0.1, reward: true, desc: '記念施設。商業の需要が上がり、市長評価が上がる' },
   recycling: { id: 'recycling', name: 'リサイクルセンター', w: 3, h: 2, cost: 6000, upkeep: 200, service: 'recycling', capacity: 4000, desc: 'ゴミを月 4,000 減らす' },
   freight_st: { id: 'freight_st', name: '貨物駅', w: 3, h: 2, cost: 8000, upkeep: 120, freightRail: true, desc: '線路と道路に接するように置く。線路がマップの端まで続いていれば、トラックの荷物を鉄道で運ぶ' },
 };

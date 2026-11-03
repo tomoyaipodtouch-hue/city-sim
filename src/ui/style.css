@@ -162,7 +162,11 @@ button:disabled { opacity: 0.38; cursor: default; }
   position: absolute; left: calc(var(--sl) + 40px); right: calc(var(--sr) + 40px); bottom: 0; top: calc(var(--st) + 24px);
   background: #18212b; border: 1px solid var(--line); border-bottom: 0; border-radius: 16px 16px 0 0; display: flex; flex-direction: column;
 }
-.sheet-h { display: flex; align-items: center; padding: 8px 10px 0; gap: 4px; border-bottom: 1px solid var(--line); }
+.sheet-h { display: flex; align-items: center; padding: 8px 10px 0; gap: 4px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.sheet-h .tab { flex: 0 0 auto; white-space: nowrap; }
+.adv { display: flex; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; line-height: 1.5; }
+.adv .dot { width: 9px; height: 9px; border-radius: 5px; margin-top: 5px; flex: 0 0 auto; }
+.adv b { color: var(--fg2); font-weight: 600; margin-right: 4px; }
 .tab { padding: 8px 12px 9px; font-size: 13px; color: var(--fg2); border-bottom: 2px solid transparent; }
 .tab.on { color: var(--fg); border-bottom-color: var(--accent); }
 .sheet-h .grow { flex: 1; }

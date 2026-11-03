@@ -82,6 +82,11 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { tool: 'plop:landfill', name: CIVIC.landfill.name, note: yen(CIVIC.landfill.cost) },
       { tool: 'plop:incinerator', name: CIVIC.incinerator.name, note: yen(CIVIC.incinerator.cost) },
       { tool: 'plop:recycling', name: CIVIC.recycling.name, note: yen(CIVIC.recycling.cost) },
+      { tool: 'plop:mayor_house', name: `記念：${CIVIC.mayor_house.name}`, note: '人口2千・評価55' },
+      { tool: 'plop:statue', name: `記念：${CIVIC.statue.name}`, note: '人口5千・評価70' },
+      { tool: 'plop:museum', name: `記念：${CIVIC.museum.name}`, note: '人口8千・評価55・教育90' },
+      { tool: 'plop:city_hall', name: `記念：${CIVIC.city_hall.name}`, note: '人口1万・評価50' },
+      { tool: 'plop:stadium', name: `記念：${CIVIC.stadium.name}`, note: '人口3万・評価60' },
     ],
   },
   {

@@ -424,3 +424,42 @@ describe('stage 4a services', () => {
     expect(w.stats.services.strike.police).toBeGreaterThan(0);
   });
 });
+
+describe('stage 4b governance', () => {
+  it('loans add funds and are repaid monthly', () => {
+    const w = new World(32);
+    w.funds = 1000;
+    const r = w.exec({ t: 'loan', amount: 50000 });
+    expect(r.ok, r.msg).toBe(true);
+    expect(w.funds).toBe(51000);
+    const before = w.loans[0].remaining;
+    for (let d = 0; d < 30; d++) w.stepDay();
+    expect(w.loans[0].remaining).toBeLessThan(before);
+    expect(w.stats.expenseBreakdown['借入の返済']).toBeGreaterThan(400);
+    expect(w.exec({ t: 'repay', id: w.loans[0].id }).ok).toBe(true);
+    expect(w.loans.length).toBe(0);
+  });
+
+  it('ordinances need population and change effects', () => {
+    const w = new World(32);
+    expect(w.exec({ t: 'ordinance', id: 'gambling', on: true }).ok).toBe(false); // 人口が足りない
+    expect(w.exec({ t: 'ordinance', id: 'power', on: true }).ok).toBe(false);
+  });
+
+  it('rewards need conditions, and the mayor rating is computed', { timeout: 60000 }, () => {
+    const w = World.create({ name: 'g', seed: 12345, style: 'river', difficulty: 0, sandbox: false });
+    w.funds = 1e7;
+    buildTestCity(w);
+    const g = w.g;
+    let msg = '';
+    for (let y = 2; y < g.n - 2 && !msg; y++) for (let x = 2; x < g.n - 2; x++) {
+      const r = w.exec({ t: 'plop', id: 'stadium', x, y });
+      if (!r.ok && r.msg?.includes('条件')) { msg = r.msg; break; }
+    }
+    expect(msg).toContain('人口 30,000人');
+    for (let m = 0; m < 12; m++) for (let d = 0; d < 30; d++) w.stepDay();
+    console.log(`rating: ${w.stats.rating} ${JSON.stringify(w.stats.ratingParts)} advice=${w.stats.advice.length}`);
+    expect(w.stats.rating).toBeGreaterThan(0);
+    expect(w.stats.advice.length).toBeGreaterThan(3);
+  });
+});

@@ -139,6 +139,11 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     case 'landfill': landfill(mb, f, rng); break;
     case 'incinerator': incinerator(mb, f); break;
     case 'recycling': recycling(mb, f, rng); break;
+    case 'mayor_house': mansion(mb, f, rng, tf); break;
+    case 'city_hall': cityHall(mb, f, tf); break;
+    case 'statue': statue(mb, f, tf); break;
+    case 'museum': museum(mb, f, tf); break;
+    case 'stadium': stadium(mb, f, rng); break;
   }
   mb.abandoned = false;
 }
@@ -871,4 +876,73 @@ function hightech(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
   roofUnits(mb, -W / 2, -D / 2, W / 2 - 6, D / 2 - 4, h, rng, 2);
   mb.ground(-f.W / 2 + 1, f.D / 2 - 5, f.W / 2 - 1, f.D / 2 - 0.5, 0.1, PALETTE.asphalt);
   for (let k = 0; k < 6; k++) tf(-f.W / 2 + 2 + rng.next() * (f.W - 4), -f.D / 2 + 2 + rng.next() * 3, 0.8 + rng.next() * 0.4);
+}
+
+// ---------------- 記念施設 ----------------
+const STONE = new THREE.Color(0xe4dccb), BRONZE = new THREE.Color(0x7a5a33), DOME = new THREE.Color(0x6f9a8c);
+
+function columns(mb: MeshBuilder, x0: number, x1: number, z: number, h: number, step: number) {
+  for (let x = x0; x <= x1 + 0.01; x += step) mb.cylinder(x, z, 1.2, h, 0.55, 8, PALETTE.white);
+}
+
+function cityHall(mb: MeshBuilder, f: LotFrame, tf: TF) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.pavement);
+  const W = f.W - 8, z0 = -f.D / 2 + 4, z1 = f.D / 2 - 10;
+  mb.box(-W / 2, 0, z0, W / 2, 1.2, z1 + 4, STONE);
+  mb.box(-W / 2 + 1, 1.2, z0 + 1, W / 2 - 1, 14, z1, STONE, PAT.house, PALETTE.concrete);
+  columns(mb, -10, 10, z1 + 2, 12, 4);
+  mb.box(-11.5, 12, z1 - 0.5, 11.5, 13, z1 + 3.5, PALETTE.white);
+  mb.quad([-12, 13, z1 + 3.6], [12, 13, z1 + 3.6], [0, 17, z1 + 3.6], [0, 17, z1 + 3.6], PALETTE.white);
+  // ドーム
+  mb.cylinder(0, (z0 + z1) / 2, 14, 20, 6, 16, STONE);
+  mb.cylinder(0, (z0 + z1) / 2, 20, 26, 6, 16, DOME, DOME, 1);
+  mb.box(-0.15, 26, (z0 + z1) / 2 - 0.15, 0.15, 30, (z0 + z1) / 2 + 0.15, PALETTE.steel);
+  for (const x of [-f.W / 2 + 3, f.W / 2 - 3]) tf(x, f.D / 2 - 3, 1.1);
+}
+
+function statue(mb: MeshBuilder, f: LotFrame, tf: TF) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.lawn2);
+  mb.box(-2, 0, -2, 2, 2.5, 2, STONE);
+  mb.box(-0.6, 2.5, -0.4, 0.6, 4.8, 0.4, BRONZE);
+  mb.box(-0.45, 4.8, -0.35, 0.45, 5.6, 0.35, BRONZE);
+  mb.box(0.6, 4.0, -0.15, 1.6, 4.3, 0.15, BRONZE);
+  for (const [x, z] of [[-5, -5], [5, -5], [-5, 5], [5, 5]]) tf(x, z, 0.7);
+}
+
+function museum(mb: MeshBuilder, f: LotFrame, tf: TF) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.pavement);
+  const W = f.W - 6, z0 = -f.D / 2 + 3, z1 = f.D / 2 - 9;
+  mb.box(-W / 2, 0, z0, W / 2, 1.5, z1 + 5, STONE);
+  mb.box(-W / 2 + 1, 1.5, z0 + 1, W / 2 - 1, 12, z1, STONE, PAT.none, PALETTE.concrete);
+  columns(mb, -W / 2 + 3, W / 2 - 3, z1 + 3, 11, 3.2);
+  mb.box(-W / 2 + 1, 11, z1 - 0.5, W / 2 - 1, 12.2, z1 + 4.5, PALETTE.white);
+  mb.quad([-W / 2 + 0.5, 12.2, z1 + 4.6], [W / 2 - 0.5, 12.2, z1 + 4.6], [0, 16.5, z1 + 4.6], [0, 16.5, z1 + 4.6], PALETTE.white);
+  mb.gableX(-W / 2 + 1, z0 + 1, W / 2 - 1, z1, 12, 4.5, PALETTE.roof[1], STONE, 0.2);
+  tf(-f.W / 2 + 2, f.D / 2 - 2, 0.9);
+  tf(f.W / 2 - 2, f.D / 2 - 2, 0.9);
+}
+
+function stadium(mb: MeshBuilder, f: LotFrame, rng: Rng) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.07, PALETTE.asphalt);
+  // 観客席（外側の壁と段）を八角形で
+  const R = Math.min(f.W, f.D) / 2 - 3, seg = 16;
+  const seat = new THREE.Color(0x2f86d0), wall = PALETTE.concrete;
+  for (let k = 0; k < seg; k++) {
+    const a0 = (k / seg) * Math.PI * 2, a1 = ((k + 1) / seg) * Math.PI * 2;
+    const c0 = Math.cos(a0), s0 = Math.sin(a0), c1 = Math.cos(a1), s1 = Math.sin(a1);
+    // 外壁
+    mb.quad([c1 * R, 0, s1 * R], [c0 * R, 0, s0 * R], [c0 * R, 16, s0 * R], [c1 * R, 16, s1 * R], wall, PAT.industrial);
+    // 段々の客席（内側へ下がる斜面）
+    const r2 = R * 0.62;
+    mb.quad([c0 * R, 16, s0 * R], [c1 * R, 16, s1 * R], [c1 * r2, 3, s1 * r2], [c0 * r2, 3, s0 * r2], k % 2 ? seat : new THREE.Color(0xe8e8e2));
+  }
+  // フィールド
+  mb.ground(-R * 0.6, -R * 0.45, R * 0.6, R * 0.45, 3, PALETTE.lawn2);
+  for (let x = -R * 0.5; x < R * 0.5; x += R * 0.2) mb.ground(x, -R * 0.45, x + R * 0.1, R * 0.45, 3.02, PALETTE.lawn);
+  // 照明塔
+  for (const [x, z] of [[-R, -R], [R, -R], [-R, R], [R, R]].map(([x, z]) => [x * 0.8, z * 0.8])) {
+    mb.box(x - 0.4, 0, z - 0.4, x + 0.4, 30, z + 0.4, PALETTE.steel);
+    mb.box(x - 2, 30, z - 0.6, x + 2, 32, z + 0.6, PALETTE.white);
+  }
+  void rng;
 }

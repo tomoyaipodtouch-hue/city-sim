@@ -3,6 +3,7 @@ import type { GameClient } from '../game';
 import type { CityRenderer } from '../render/renderer';
 import { DATA_VIEWS, DataView } from '../render/overlay';
 import { ToolController, TOOL_GROUPS, PreviewInfo } from './tools';
+import { ADVISORS, AdvisorId, LOAN_AMOUNTS, MAX_LOANS, ordinanceCost, ORDINANCES } from '../sim/governance';
 import { CIVIC, CivicId, DENSITY_NAMES, DEPTS, DEPT_NAMES, DIFFICULTY, isHighway, LINES, GROW, GROW_KINDS, GrowKind, ROADS, TAX_LABELS, ZONE_NAMES } from '../sim/defs';
 import { BState } from '../sim/world';
 import type { Stats } from '../sim/world';
@@ -187,7 +188,7 @@ export class Hud {
       return s;
     };
     const funds = st('資金', 'funds', '<span class="d" data-v="delta"></span>');
-    const pop = st('人口', 'pop');
+    const pop = st('人口', 'pop', '<span class="d" data-v="rating"></span>');
     const date = st('日付', 'date');
     const speed = el('div', 'speed');
     ['pause', 'play1', 'play2', 'play3'].forEach((k, i) => {
@@ -247,6 +248,12 @@ export class Hud {
       d.className = 'd ' + (net >= 0 ? 'pos' : 'neg');
     }
     set('pop', num(s.population));
+    const rt = this.bar.querySelector<HTMLElement>('[data-v="rating"]')!;
+    const rtext = `市長評価 ${s.rating ?? '-'}`;
+    if (rt.textContent !== rtext) {
+      rt.textContent = rtext;
+      rt.className = 'd ' + ((s.rating ?? 50) >= 50 ? 'pos' : 'neg');
+    }
     set('date', formatDate(s.day));
     for (const b of this.bar.querySelectorAll<HTMLElement>('.speed button')) b.classList.toggle('on', Number(b.dataset.s) === s.speed);
     ['R', 'C', 'I'].forEach((k, i) => {
@@ -528,7 +535,7 @@ export class Hud {
   }
 
   private async renderSheet() {
-    const tabs: [string, string][] = [['budget', '予算'], ['tax', '税金'], ['save', '保存'], ['settings', '設定'], ['city', '街']];
+    const tabs: [string, string][] = [['budget', '予算'], ['tax', '税金'], ['ord', '条例'], ['loan', '借入'], ['advisor', 'アドバイザー'], ['save', '保存'], ['settings', '設定'], ['city', '街']];
     const head = el('div', 'sheet-h');
     for (const [id, name] of tabs) {
       const t = el('button', 'tab' + (id === this.sheetTab ? ' on' : ''), name);
@@ -546,6 +553,9 @@ export class Hud {
     this.sheet.innerHTML = '';
     this.sheet.append(head, body);
     if (this.sheetTab === 'budget' || this.sheetTab === 'tax') this.refreshSheetLive();
+    else if (this.sheetTab === 'ord') this.renderOrdinances(body);
+    else if (this.sheetTab === 'loan') this.renderLoans(body);
+    else if (this.sheetTab === 'advisor') this.renderAdvisors(body);
     else if (this.sheetTab === 'save') await this.renderSave(body);
     else if (this.sheetTab === 'settings') this.renderSettings(body);
     else this.renderCity(body);
@@ -638,6 +648,77 @@ export class Hud {
       input.onpointerdown = () => (this.deptDrag = true);
       input.onpointerup = () => (this.deptDrag = false);
       box.append(row);
+    }
+  }
+
+  private renderOrdinances(body: HTMLElement) {
+    const s = this.stats;
+    if (!s) return;
+    const on = new Set(s.ordinances);
+    body.innerHTML = '<h5>条例</h5><p class="muted" style="margin:0 0 8px">施行すると毎月の費用がかかります（カジノは収入になります）。費用は人口に合わせて変わります。</p>';
+    for (const o of ORDINANCES) {
+      const cost = ordinanceCost(o.id, s.population);
+      const locked = s.population < o.minPop && !on.has(o.id);
+      const row = el('div', 'row', `<div><div>${o.name}</div><div class="desc">${o.desc}　${cost < 0 ? `収入 §${num(-cost)}/月` : `費用 §${num(cost)}/月`}${locked ? `　（人口 ${num(o.minPop)} 人から）` : ''}</div></div>`);
+      const t = el('button', 'toggle' + (on.has(o.id) ? ' on' : ''));
+      t.disabled = locked;
+      t.onclick = async () => {
+        const r = await this.game.exec({ t: 'ordinance', id: o.id, on: !on.has(o.id) });
+        if (!r.ok) this.showToast(r.msg || 'できませんでした', true);
+        else {
+          if (on.has(o.id)) on.delete(o.id);
+          else on.add(o.id);
+          t.classList.toggle('on', on.has(o.id));
+        }
+      };
+      row.append(t);
+      body.append(row);
+    }
+  }
+
+  private renderLoans(body: HTMLElement) {
+    const s = this.stats;
+    if (!s) return;
+    body.innerHTML = `<h5>借入（債券）</h5><p class="muted" style="margin:0 0 8px">10年かけて毎月返済します。今の金利は年 ${s.loanRate.toFixed(1)}% です（財政状態がよいほど低くなります）。最大 ${MAX_LOANS} 件まで。</p>`;
+    const btns = el('div', 'btns');
+    for (const a of LOAN_AMOUNTS) {
+      const b = el('button', 'btn', `§${num(a)} 借りる`);
+      b.disabled = s.loans.length >= MAX_LOANS || this.game.sandbox;
+      b.onclick = async () => {
+        if (!confirm(`§${num(a)} を年利 ${s.loanRate.toFixed(1)}% で借りますか？`)) return;
+        const r = await this.game.exec({ t: 'loan', amount: a });
+        this.showToast(r.msg || '', !r.ok);
+        setTimeout(() => void this.renderSheet(), 300);
+      };
+      btns.append(b);
+    }
+    body.append(btns);
+    body.append(el('h5', '', '借りているお金'));
+    if (!s.loans.length) body.append(el('p', 'muted', 'ありません'));
+    for (const l of s.loans) {
+      const row = el('div', 'row', `<div><div>§${num(l.principal)}（年利 ${l.rate.toFixed(1)}%）</div><div class="desc">残り §${num(l.remaining)}・毎月 §${num(l.payment)}・あと ${l.months} か月</div></div>`);
+      const b = el('button', 'btn', '全額を返す');
+      b.onclick = async () => {
+        const r = await this.game.exec({ t: 'repay', id: l.id });
+        this.showToast(r.msg || '', !r.ok);
+        setTimeout(() => void this.renderSheet(), 300);
+      };
+      row.append(b);
+      body.append(row);
+    }
+  }
+
+  private renderAdvisors(body: HTMLElement) {
+    const s = this.stats;
+    if (!s) return;
+    const color = ['var(--good)', 'var(--warn)', 'var(--bad)'];
+    const parts = s.ratingParts.slice().sort((a, b) => a[1] - b[1]).map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${v}`).join('、');
+    body.innerHTML = `<h5>市長評価 ${s.rating}</h5><p class="muted" style="margin:0 0 10px">${parts || '特に大きな理由はありません'}</p><h5>アドバイザーからの助言</h5>`;
+    const order: AdvisorId[] = ['finance', 'planning', 'traffic', 'safety', 'health', 'utility'];
+    for (const id of order) {
+      for (const a of s.advice.filter((x) => x.advisor === id).sort((p, q) => q.level - p.level)) {
+        body.append(el('div', 'adv', `<i class="dot" style="background:${color[a.level]}"></i><div><b>${ADVISORS[id]}</b>${a.text}</div>`));
+      }
     }
   }
 
