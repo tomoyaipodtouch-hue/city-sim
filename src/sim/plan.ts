@@ -663,6 +663,220 @@ export function applyDiamond(g: Grid, p: DiamondPlan) {
   }
 }
 
+// ---- クローバー型インターチェンジ ----
+// 地上の高速道路と高架の高速道路が交差する場所に置く。8方向の乗り換えを、
+// 右折は外側の直結ランプ、左折は内側のループ（270°）でつなぐ。
+// ランプの道筋は、周りの空いているマスから、45°より急に曲がらない最短の道を探して決める。
+export interface CloverPlan {
+  ok: boolean;
+  reason: string;
+  cost: number;
+  chains: RampChain[];
+  cells: number[];
+  bad: Set<number>;
+}
+
+const CLOVER_R = 11; // 使う範囲（交差点から何マスまで）
+
+interface HwLane {
+  x: number; // 交差点のマス（この車線上）
+  y: number;
+  f: number; // 進む向き
+  o: number; // 外側（反対車線と逆）の向き
+  level: number;
+  lo: number; // 相手の高速道路と重なる位置（f 方向に、x,y からのマス数）
+  hi: number;
+}
+
+export function planCloverleaf(g: Grid, x: number, y: number): CloverPlan {
+  const n = g.n;
+  const bad = new Set<number>();
+  const fail = (reason: string): CloverPlan => ({ ok: false, reason, cost: 0, chains: [], cells: [], bad });
+  if (!g.inb(x, y)) return fail('マップの外です');
+  const c = g.idx(x, y);
+  if (g.road[c] !== RoadType.GroundHighway || g.up[c] !== RoadType.Highway)
+    return fail('地上の高速道路と高架の高速道路が交差している場所をタップしてください');
+  const f0 = laneDir(g, c, 0), f1 = laneDir(g, c, 1);
+  if (f0 < 0 || f1 < 0 || (f0 & 3) === (f1 & 3)) return fail('縦と横にまっすぐ交差している場所に置いてください');
+  // それぞれの高速道路の反対車線
+  const partner = (level: number, f: number): number => {
+    for (const s of [(f + 2) & 7, (f + 6) & 7]) {
+      const ox = x + DX[s], oy = y + DY[s];
+      if (!g.inb(ox, oy)) continue;
+      const o = g.idx(ox, oy);
+      const ok = level ? g.up[o] === RoadType.Highway : g.road[o] === RoadType.GroundHighway;
+      if (ok && laneDir(g, o, level) === opp(f)) return s;
+    }
+    return -1;
+  };
+  const s0 = partner(0, f0), s1 = partner(1, f1);
+  if (s0 < 0 || s1 < 0) return fail('高速道路の向きがわかりません');
+  // 相手の高速道路の2車線と重なる位置（f 方向の位置）
+  const span = (f: number, sOther: number) => {
+    const d = DX[f] * DX[sOther] + DY[f] * DY[sOther];
+    return [Math.min(0, d), Math.max(0, d)];
+  };
+  const lanes: HwLane[] = [];
+  for (const [level, f, s, sOther] of [[0, f0, s0, s1], [1, f1, s1, s0]] as const) {
+    const [lo, hi] = span(f, sOther);
+    lanes.push({ x, y, f, o: opp(s), level, lo, hi });
+    const [lo2, hi2] = span(opp(f), sOther);
+    lanes.push({ x: x + DX[s], y: y + DY[s], f: opp(f), o: s, level, lo: lo2, hi: hi2 });
+  }
+  const R = CLOVER_R;
+  const isLane = (L: HwLane, k: number) => {
+    const px = L.x + DX[L.f] * k, py = L.y + DY[L.f] * k;
+    if (!g.inb(px, py)) return false;
+    const i = g.idx(px, py);
+    const ok = L.level ? g.up[i] === RoadType.Highway : g.road[i] === RoadType.GroundHighway;
+    return ok && laneDir(g, i, L.level) === L.f;
+  };
+  for (const L of lanes) for (let k = -R; k <= R; k++) if (!isLane(L, k)) return fail(`高速道路が交差点の前後 ${R} マスでまっすぐ続いていません`);
+
+  // 空いているマス（ランプに使える）
+  const used = new Set<number>();
+  const free = (px: number, py: number) => {
+    if (!g.inb(px, py) || Math.abs(px - x) > R + 1 || Math.abs(py - y) > R + 1) return false;
+    const i = g.idx(px, py);
+    if (used.has(i) || g.bldg[i] || g.road[i] || g.up[i] || g.isWater(px, py)) return false;
+    return true;
+  };
+  const cellOf = (L: HwLane, k: number, out: number): [number, number] => [L.x + DX[L.f] * k + DX[L.o] * out, L.y + DY[L.f] * k + DY[L.o] * out];
+
+  // 向きつきの最短経路（向きの変化は1回に45°まで）
+  const route = (sx: number, sy: number, sd: number, tx: number, ty: number, td: number): number[] | null => {
+    if (!free(sx, sy) || !free(tx, ty)) return null;
+    const key = (px: number, py: number, d: number) => (py * n + px) * 8 + d;
+    const dist = new Map<number, number>();
+    const prev = new Map<number, number>();
+    const heap: [number, number][] = [];
+    const push = (k: number, v: number) => {
+      heap.push([v, k]);
+      let i = heap.length - 1;
+      while (i > 0) {
+        const p = (i - 1) >> 1;
+        if (heap[p][0] <= heap[i][0]) break;
+        [heap[p], heap[i]] = [heap[i], heap[p]];
+        i = p;
+      }
+    };
+    const pop = () => {
+      const top = heap[0];
+      const last = heap.pop()!;
+      if (heap.length) {
+        heap[0] = last;
+        let i = 0;
+        for (;;) {
+          let m = i;
+          const l = 2 * i + 1, r = l + 1;
+          if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+          if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+          if (m === i) break;
+          [heap[m], heap[i]] = [heap[i], heap[m]];
+          i = m;
+        }
+      }
+      return top;
+    };
+    const k0 = key(sx, sy, sd);
+    dist.set(k0, 0);
+    push(k0, 0);
+    while (heap.length) {
+      const [dcur, k] = pop();
+      if (dcur > (dist.get(k) ?? Infinity)) continue;
+      const d = k & 7, ci = k >> 3, px = ci % n, py = (ci / n) | 0;
+      if (px === tx && py === ty && ((d - td + 8) & 7) <= 1 || (px === tx && py === ty && ((td - d + 8) & 7) <= 1)) {
+        // 道筋を戻る
+        const cells: number[] = [];
+        let cur: number | undefined = k;
+        while (cur !== undefined) {
+          cells.push(cur >> 3);
+          cur = prev.get(cur);
+        }
+        return cells.reverse();
+      }
+      for (const nd of [(d + 7) & 7, d, (d + 1) & 7]) {
+        const nx = px + DX[nd], ny = py + DY[nd];
+        if (!free(nx, ny)) continue;
+        // 斜めに進むときは、隣の2マスの間をすり抜けないようにする
+        if (isDiag(nd) && !free(px + DX[nd], py) && !free(px, py + DY[nd])) continue;
+        const nk = key(nx, ny, nd);
+        const nv = dcur + (isDiag(nd) ? 1.414 : 1) + (nd !== d ? 0.35 : 0);
+        if (nv < (dist.get(nk) ?? Infinity) && nv < 80) {
+          dist.set(nk, nv);
+          prev.set(nk, k);
+          push(nk, nv);
+        }
+      }
+    }
+    return null;
+  };
+
+  const chains: RampChain[] = [];
+  const allCells: number[] = [];
+  // 左折（ループ）を先に、内側に通す。その外側を右折のランプが回る
+  const moves: { X: HwLane; Y: HwLane; left: boolean }[] = [];
+  for (const X of lanes)
+    for (const Y of lanes) {
+      if (X.level === Y.level) continue;
+      if (Y.f === ((X.f + 2) & 7)) moves.push({ X, Y, left: false });
+      if (Y.f === ((X.f + 6) & 7)) moves.push({ X, Y, left: true });
+    }
+  moves.sort((a, b) => Number(b.left) - Number(a.left));
+  for (const { X, Y, left } of moves) {
+    // 右折：交差点の手前で分かれ、交差点の先で合流する。左折：交差点を過ぎてから分かれ、ループして手前で合流する
+    const kx = left ? X.hi + 2 : X.lo - 6;
+    const ky = left ? Y.lo - 2 : Y.hi + 6;
+    const dOut = dirOf(DX[X.f] + DX[X.o], DY[X.f] + DY[X.o]);
+    const dIn = dirOf(DX[Y.f] - DX[Y.o], DY[Y.f] - DY[Y.o]);
+    const [sx, sy] = cellOf(X, kx + 1, 1);
+    const [tx, ty] = cellOf(Y, ky - 1, 1);
+    const path = route(sx, sy, dOut, tx, ty, dIn);
+    if (!path) {
+      for (const [px, py] of [[sx, sy], [tx, ty]]) if (g.inb(px, py)) bad.add(g.idx(px, py));
+      return { ...fail(left ? '左折のループを通す広さがありません' : '右折のランプを通す広さがありません'), bad, cells: allCells };
+    }
+    for (const i of path) used.add(i);
+    // 本線のマス → ランプ → 本線のマス
+    const [ax, ay] = cellOf(X, kx, 0), [bx, by] = cellOf(Y, ky, 0);
+    const cells = [g.idx(ax, ay), ...path, g.idx(bx, by)];
+    const dirs: number[] = [];
+    for (let k = 0; k + 1 < cells.length; k++) {
+      const d = dirOf((cells[k + 1] % n) - (cells[k] % n), ((cells[k + 1] / n) | 0) - ((cells[k] / n) | 0));
+      if (d < 0) return fail('ランプの道筋が作れません');
+      dirs.push(d);
+    }
+    // 高さ：高架の側から地上の側へ少しずつ変える。ランプのマスは上空の階層に置く
+    const hA = X.level ? g.upH[cells[0]] : g.roadH(cells[0]);
+    const hB = Y.level ? g.upH[cells[cells.length - 1]] : g.roadH(cells[cells.length - 1]);
+    const levels = cells.map((_, k) => (k === 0 ? X.level : k === cells.length - 1 ? Y.level : 1));
+    const heights = cells.map((ci, k) => {
+      const t = k / (cells.length - 1);
+      const ground = g.cellH(ci % n, (ci / n) | 0);
+      return Math.max(ground + 0.6, lerpH(hA, hB, t));
+    });
+    chains.push({ cells, dirs, levels, heights });
+    allCells.push(...path);
+  }
+  const cost = allCells.length * RAMP_CELL_COST * 1.5 + 6000;
+  return { ok: true, reason: '', cost: Math.round(cost), chains, cells: allCells, bad };
+}
+
+export function applyCloverleaf(g: Grid, p: CloverPlan) {
+  for (const ch of p.chains) {
+    const last = ch.cells.length - 1;
+    ch.cells.forEach((ci, k) => {
+      if (k === 0 || k === last) return;
+      g.up[ci] = RoadType.Ramp;
+      g.upH[ci] = ch.heights[k];
+      g.zone[ci] = 0;
+      g.zden[ci] = 0;
+      g.tree[ci] = 0;
+    });
+    for (let k = 0; k < ch.dirs.length; k++) link(g, ch.cells[k], ch.levels[k], ch.cells[k + 1], ch.levels[k + 1], ch.dirs[k], true);
+  }
+}
+
 // ---- 範囲指定（ゾーン、取り壊し） ----
 export interface Rect {
   x0: number;

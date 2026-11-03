@@ -1,6 +1,6 @@
 // ツールの定義と、ドラッグ中のプレビュー・確定
 import { CIVIC, CivicId, DENSITY_NAMES, ROADS, RoadType, ZoneType, ZONE_COST, ZONE_NAMES, POWER_LINE_COST, RAMP_COST } from '../sim/defs';
-import { normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone } from '../sim/plan';
+import { normRect, planBulldoze, planCloverleaf, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone } from '../sim/plan';
 import type { Command } from '../sim/world';
 import type { GameClient } from '../game';
 import type { CityRenderer } from '../render/renderer';
@@ -35,7 +35,7 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { tool: 'road:6', name: `${ROADS[RoadType.GroundHighway].name}（2マス幅）`, note: `${yen(ROADS[6].cost * 2)}/マス` },
       { tool: 'ramp', name: 'ランプ（出入口）', note: yen(RAMP_COST) },
       { tool: 'diamond', name: 'ダイヤモンド型インターチェンジ', note: '高速道路をタップ' },
-      { name: 'クローバー型インターチェンジ', note: '今後追加', disabled: true },
+      { tool: 'clover', name: 'クローバー型インターチェンジ', note: '高速道路の交差点をタップ' },
     ],
   },
   {
@@ -189,6 +189,12 @@ export class ToolController {
       pv.setPath(g, plan.ok ? [plan.hb, plan.cell, plan.ha] : []);
       return plan.ok ? { text: `ランプ　${yen(plan.cost)}${plan.roads.length ? '' : '（道路をつないでください）'}`, bad: false } : { text: plan.reason, bad: true };
     }
+    if (t === 'clover') {
+      const plan = planCloverleaf(g, x, y);
+      pv.setTiles(g, plan.cells.length ? plan.cells : [g.idx(x, y)], (i) => (plan.ok ? 0x5cc46a : plan.bad.has(i) || !plan.cells.length ? 0xe5534b : 0xf0b429));
+      pv.setPath(g, []);
+      return plan.ok ? { text: `クローバー型　${yen(plan.cost)}`, bad: false } : { text: plan.reason, bad: true };
+    }
     if (t === 'diamond') {
       const plan = planDiamond(g, x, y);
       pv.setTiles(g, plan.cells.length ? plan.cells : [g.idx(x, y)], (i) => (!plan.ok && (plan.bad.has(i) || !plan.cells.length) ? 0xe5534b : plan.ok ? 0x5cc46a : 0xf0b429));
@@ -224,10 +230,11 @@ export class ToolController {
     else if (t.startsWith('plop:')) cmd = { t: 'plop', id: t.split(':')[1] as CivicId, x: d.x1, y: d.y1 };
     else if (t === 'ramp') cmd = { t: 'ramp', x: d.x1, y: d.y1 };
     else if (t === 'diamond') cmd = { t: 'diamond', x: d.x1, y: d.y1 };
+    else if (t === 'clover') cmd = { t: 'clover', x: d.x1, y: d.y1 };
     if (!cmd) return;
     const res = await this.game.exec(cmd);
     if (res.ok) {
-      if (cmd.t === 'road' || cmd.t === 'pline' || cmd.t === 'ramp' || cmd.t === 'diamond') sfx.road();
+      if (cmd.t === 'road' || cmd.t === 'pline' || cmd.t === 'ramp' || cmd.t === 'diamond' || cmd.t === 'clover') sfx.road();
       else if (cmd.t === 'zone') sfx.zone();
       else if (cmd.t === 'bulldoze') sfx.bulldoze();
       else sfx.plop();

@@ -247,3 +247,33 @@ describe('bulldoze', () => {
     expect(w.g.conn1[w.g.idx(13, 24)] & (1 << 4)).toBe(0);
   });
 });
+
+describe('cloverleaf', () => {
+  it('connects all 8 movements between a ground and an elevated highway', () => {
+    const w = new World(64);
+    w.g.heights.fill(10);
+    w.funds = 1e8;
+    expect(w.exec({ t: 'road', x0: 1, y0: 32, x1: 62, y1: 32, road: RoadType.GroundHighway }).ok).toBe(true);
+    expect(w.exec({ t: 'road', x0: 32, y0: 1, x1: 32, y1: 62, road: RoadType.Highway }).ok).toBe(true);
+    const r = w.exec({ t: 'clover', x: 32, y: 32 });
+    expect(r.ok, r.msg).toBe(true);
+    const g = w.g, N = g.n * g.n;
+    // 4つの端（地上の高速道路は地上、高架は上空）
+    const reach = (from: number) => {
+      const seen = new Set<number>([from]);
+      const q = [from];
+      while (q.length) {
+        const u = q.pop()!;
+        g.forEachOut(u, (v) => { if (!seen.has(v)) { seen.add(v); q.push(v); } });
+      }
+      return seen;
+    };
+    // 東向き車線（y=32）の西の端から、高架の北の端・南の端の両方へ行ける
+    const ewLane = [g.idx(2, 32), g.idx(2, 31)].find((c) => g.flow[c] & 1)!;
+    const ns = [g.idx(32, 2), g.idx(33, 2), g.idx(31, 2)].map((c) => N + c).filter((v) => g.up[v - N]);
+    const ss = [g.idx(32, 61), g.idx(33, 61), g.idx(31, 61)].map((c) => N + c).filter((v) => g.up[v - N]);
+    const seen = reach(ewLane);
+    expect(ns.some((v) => seen.has(v))).toBe(true);
+    expect(ss.some((v) => seen.has(v))).toBe(true);
+  });
+});

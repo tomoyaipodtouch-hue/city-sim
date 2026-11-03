@@ -8,7 +8,7 @@ import {
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
 import {
-  applyDiamond, applyRamp, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
+  applyCloverleaf, applyDiamond, applyRamp, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
 } from './plan';
 import { assignTrips, buildJunctions, congestionFactor, Destination, Origin } from './traffic';
 
@@ -130,6 +130,7 @@ export type Command =
   | { t: 'tax'; kind: GrowKind; rate: number }
   | { t: 'ramp'; x: number; y: number }
   | { t: 'diamond'; x: number; y: number }
+  | { t: 'clover'; x: number; y: number }
   | { t: 'junction'; cell: number; ctl: number; split: number; flags: number };
 
 const emptyKinds = (v: number) => Object.fromEntries(GROW_KINDS.map((k) => [k, v])) as Record<GrowKind, number>;
@@ -374,6 +375,14 @@ export class World {
         if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
         applyDiamond(g, plan);
         this.heightVersion++;
+        this.afterGridChange();
+        return { ok: true, cost: plan.cost };
+      }
+      case 'clover': {
+        const plan = planCloverleaf(g, c.x, c.y);
+        if (!plan.ok) return { ok: false, msg: plan.reason };
+        if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
+        applyCloverleaf(g, plan);
         this.afterGridChange();
         return { ok: true, cost: plan.cost };
       }
