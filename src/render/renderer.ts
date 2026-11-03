@@ -169,7 +169,14 @@ export class CityRenderer {
     if (!g || !this.terrain) return;
     const heights = this.dirty.heights;
     if (heights) this.terrain.updateHeights(g);
-    if (this.dirty.grid) this.roads.rebuild(g);
+    if (this.dirty.grid) {
+      // 建物が建つたびに grid は更新されるので、道路に関係する部分が変わったときだけ作り直す
+      const key = this.roadKey(g);
+      if (key !== this.lastRoadKey || heights) {
+        this.lastRoadKey = key;
+        this.roads.rebuild(g);
+      }
+    }
     if (this.dirty.buildings || heights) {
       if (this.buildings.update(g, this.buildingList, heights)) this.dirty.trees = true;
     }
@@ -179,6 +186,19 @@ export class CityRenderer {
       this.terrain.commitOverlay();
     }
     this.dirty = { heights: false, grid: false, buildings: false, overlay: false, trees: false };
+  }
+
+  private lastRoadKey = -1;
+  private roadKey(g: Grid) {
+    let h = 2166136261;
+    const mix = (v: number) => { h = Math.imul(h ^ v, 16777619); };
+    const N = g.n * g.n;
+    for (let i = 0; i < N; i++) {
+      if (!(g.road[i] | g.up[i] | g.pline[i])) continue;
+      mix(i); mix(g.road[i]); mix(g.conn[i]); mix(g.up[i]); mix(g.conn1[i]); mix(g.pline[i]); mix(Math.round(g.upH[i] * 4)); mix(Math.round(g.deck[i] * 4));
+    }
+    if (this.roads.jctl.length) for (let i = 0; i < N; i++) if (this.roads.jctl[i]) { mix(i); mix(this.roads.jctl[i]); }
+    return h;
   }
 
   private loop = () => {

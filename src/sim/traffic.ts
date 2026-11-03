@@ -106,7 +106,7 @@ export function buildJunctions(g: Grid, traffic: Float32Array): JunctionModel {
   const ctl = new Uint8Array(N), load = new Float32Array(N), deg = new Uint8Array(N);
   for (let i = 0; i < N; i++) {
     const m = g.conn[i];
-    if (!m || isHighway(g.road[i])) continue;
+    if (!m || isHighway(g.road[i]) || g.road[i] === RoadType.Ramp) continue;
     let d = 0;
     for (let k = 0; k < 8; k++) if (m & (1 << k)) d++;
     deg[i] = d;
