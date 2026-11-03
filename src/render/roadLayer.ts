@@ -484,6 +484,28 @@ export class RoadLayer {
           const dx = q.x - p.x, dz = q.z - p.z, l = Math.hypot(dx, dz) || 1;
           return [-dz / l, dx / l];
         };
+        if (t === RoadType.Ramp && k === 2) {
+          // ランプの途中：まっすぐか曲線の帯。高速道路のすぐ横なら、そちら側の壁は省く
+          const [a, b] = arms;
+          const pts: RP[] = [];
+          const ax = cx + a.ux * a.L, az = cz + a.uz * a.L, bx = cx + b.ux * b.L, bz = cz + b.uz * b.L;
+          for (let s2 = 0; s2 <= 10; s2++) {
+            const u = s2 / 10, p0 = (1 - u) * (1 - u), p1 = 2 * u * (1 - u), p2 = u * u;
+            const half = u < 0.5 ? lerp(a.wm, w, u * 2) : lerp(w, b.wm, u * 2 - 1);
+            pts.push({ x: p0 * ax + p1 * cx + p2 * bx, z: p0 * az + p1 * cz + p2 * bz, h: p0 * a.eh + p1 * ch + p2 * b.eh, hw: Math.min(half, w) / 2, sw: 0, t });
+          }
+          const [px, pz] = rightOf(pts);
+          const sides: [boolean, boolean] = [true, true];
+          for (const sd of [0, 2, 4, 6]) {
+            const qx = x + DX[sd], qy = y + DY[sd];
+            if (!g.inb(qx, qy)) continue;
+            const j = qy * n + qx;
+            if (isHighway(level ? g.up[j] : g.road[j])) sides[DX[sd] * px + DY[sd] * pz > 0 ? 1 : 0] = false;
+          }
+          ribbon(pts, t, sides);
+          if (elevated) deckUnder(pts, level ? ground : null);
+          continue;
+        }
         if (t === RoadType.Ramp) {
           // ランプ：高速道路へ向かう2本の腕を曲線でつなぎ、高速道路と反対側にだけ壁を付ける
           const hw = arms.filter((q) => isHighway(q.tn));

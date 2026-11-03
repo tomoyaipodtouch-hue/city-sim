@@ -8,7 +8,7 @@ import {
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
 import {
-  applyRamp, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
+  applyDiamond, applyRamp, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
 } from './plan';
 import { assignTrips, buildJunctions, congestionFactor, Destination, Origin } from './traffic';
 
@@ -372,12 +372,8 @@ export class World {
         const plan = planDiamond(g, c.x, c.y);
         if (!plan.ok || !plan.road) return { ok: false, msg: plan.reason };
         if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
-        applyRoad(g, plan.road);
+        applyDiamond(g, plan);
         this.heightVersion++;
-        for (const [rx, ry] of plan.ramps) {
-          const rp = planRamp(g, rx, ry);
-          if (rp.ok) applyRamp(g, rp);
-        }
         this.afterGridChange();
         return { ok: true, cost: plan.cost };
       }

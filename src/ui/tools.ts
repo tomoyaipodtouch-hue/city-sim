@@ -191,7 +191,7 @@ export class ToolController {
     }
     if (t === 'diamond') {
       const plan = planDiamond(g, x, y);
-      pv.setTiles(g, plan.cells.length ? plan.cells : [g.idx(x, y)], () => (plan.ok ? 0x5cc46a : 0xe5534b));
+      pv.setTiles(g, plan.cells.length ? plan.cells : [g.idx(x, y)], (i) => (!plan.ok && (plan.bad.has(i) || !plan.cells.length) ? 0xe5534b : plan.ok ? 0x5cc46a : 0xf0b429));
       pv.setPath(g, []);
       return plan.ok ? { text: `インターチェンジ　${yen(plan.cost)}`, bad: false } : { text: plan.reason, bad: true };
     }

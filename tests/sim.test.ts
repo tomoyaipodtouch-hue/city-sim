@@ -154,12 +154,13 @@ describe('stage 2b highways', () => {
   };
   // 2つのノード間で、通れる経路があるか
   const reachable = (w: World, from: number, to: number) => {
+    // to が上空のノード番号なら、階層も一致させる
     const seen = new Set<number>([from]);
     const q = [from];
     const N = w.g.n * w.g.n;
     while (q.length) {
       const u = q.pop()!;
-      if (u % N === to) return true;
+      if (to >= N ? u === to : u % N === to) return true;
       w.g.forEachOut(u, (v) => { if (!seen.has(v)) { seen.add(v); q.push(v); } });
     }
     return false;
@@ -211,9 +212,12 @@ describe('stage 2b highways', () => {
     expect(w.g.up[c]).toBe(RoadType.Highway);
     expect(w.g.upH[c]).toBeGreaterThan(15);
     const d = w.exec({ t: 'diamond', x: 30, y: 24 });
-    expect(d.ok).toBe(true);
-    expect(reachable(w, w.g.idx(30, 27), w.g.idx(44, 24))).toBe(true); // 南から高速道路（東向き）へ
-    expect(reachable(w, w.g.n * w.g.n + w.g.idx(4, 24), w.g.idx(30, 20))).toBe(true); // 高架の高速道路から北へ
+    expect(d.ok, d.msg).toBe(true);
+    const N = w.g.n * w.g.n;
+    // 一般道は 30 列目の y=18..29。南の端から東向きの車線（y=24）へ、北の端へも行ける
+    expect(reachable(w, w.g.idx(30, 29), N + w.g.idx(44, 24))).toBe(true);
+    expect(reachable(w, N + w.g.idx(4, 24), w.g.idx(30, 18))).toBe(true);
+    expect(reachable(w, N + w.g.idx(44, 23), w.g.idx(30, 29))).toBe(true);
   });
 
   it('turn restrictions block movements', () => {

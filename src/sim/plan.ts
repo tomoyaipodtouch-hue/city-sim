@@ -503,58 +503,164 @@ export function applyRamp(g: Grid, p: RampPlan) {
 }
 
 // ---- ダイヤモンド型インターチェンジ ----
-// 高速道路のマスをタップすると、その場所で一般道が高速道路と立体交差し、4か所のランプでつながる。
+// 高速道路のマスをタップすると、その場所で一般道が高速道路と立体交差し、4本のランプでつながる。
+// ランプは高速道路から斜めに3マス離れたあと並走し、一般道とのT字路につながる。
+//
+//   出口：本線 c-7f → 斜め → 斜め → 斜め → 並走 3マス → 一般道（c+3o）
+//   入口：一般道（c+3o）→ 並走 3マス → 斜め → 斜め → 本線 c+6f
+//   （f = 車線の進む向き、o = 車線の外側の向き）
+export interface RampChain {
+  cells: number[];
+  dirs: number[];
+  levels: number[];
+  heights: number[]; // 上空のマスの路面の高さ
+}
+
 export interface DiamondPlan {
   ok: boolean;
   reason: string;
   cost: number;
   road: RoadPlan | null;
-  ramps: [number, number][]; // ランプを置くマス（x, y）
+  chains: RampChain[];
   cells: number[];
+  bad: Set<number>;
 }
 
+const DIAMOND_OUT = 3; // ランプが高速道路から離れるマス数
+const DIAMOND_LEN = 7; // 出口ランプが本線から分かれる位置（交差点からのマス数）
+const RAMP_CELL_COST = 80;
+
 export function planDiamond(g: Grid, x: number, y: number): DiamondPlan {
-  const fail = (reason: string): DiamondPlan => ({ ok: false, reason, cost: 0, road: null, ramps: [], cells: [] });
+  const bad = new Set<number>();
+  const fail = (reason: string, cells: number[] = []): DiamondPlan => ({ ok: false, reason, cost: 0, road: null, chains: [], cells, bad });
   if (!g.inb(x, y)) return fail('マップの外です');
+  const n = g.n;
   const c = g.idx(x, y);
   const level = g.up[c] === RoadType.Highway ? 1 : g.road[c] === RoadType.GroundHighway ? 0 : -1;
   if (level < 0) return fail('高速道路の上をタップしてください');
   const f = laneDir(g, c, level);
-  if (f < 0) return fail('まっすぐな高速道路の上に置いてください');
+  if (f < 0) return fail('縦か横にまっすぐな高速道路の上に置いてください');
   // 反対車線を探す
-  let other = -1, side = -1;
+  let side = -1;
   for (const s of [(f + 2) & 7, (f + 6) & 7]) {
     const ox = x + DX[s], oy = y + DY[s];
     if (!g.inb(ox, oy)) continue;
     const o = g.idx(ox, oy);
     const lv = level ? g.up[o] === RoadType.Highway : g.road[o] === RoadType.GroundHighway;
-    if (lv && laneDir(g, o, level) === opp(f)) { other = o; side = s; }
+    if (lv && laneDir(g, o, level) === opp(f)) side = s;
   }
-  if (other < 0) return fail('高速道路の向きがわかりません');
-  // 交差する一般道：両車線の外側に 3 マスずつ
-  const s = side, so = opp(side);
-  const x0 = x + DX[so] * 3, y0 = y + DY[so] * 3;
-  const x1 = x + DX[s] * 4, y1 = y + DY[s] * 4;
+  if (side < 0) return fail('高速道路の向きがわかりません');
+  const isLane = (cx: number, cy: number, dir: number) => {
+    if (!g.inb(cx, cy)) return false;
+    const i = g.idx(cx, cy);
+    const ok = level ? g.up[i] === RoadType.Highway : g.road[i] === RoadType.GroundHighway;
+    return ok && laneDir(g, i, level) === dir;
+  };
+  const D = DIAMOND_OUT, K = DIAMOND_LEN;
+  const lanes: { x: number; y: number; f: number; o: number }[] = [
+    { x, y, f, o: opp(side) },
+    { x: x + DX[side], y: y + DY[side], f: opp(f), o: side },
+  ];
+  // 本線が、インターチェンジの範囲でまっすぐ続いているか
+  for (const L of lanes) {
+    for (let k = -K; k <= K; k++) {
+      if (!isLane(L.x + DX[L.f] * k, L.y + DY[L.f] * k, L.f)) return fail('高速道路がインターチェンジの範囲（前後7マス）でまっすぐ続いていません');
+    }
+  }
+  // 交差する一般道：ランプの並走部分より2マス外まで
+  const so = opp(side);
+  const x0 = x + DX[so] * (D + 2), y0 = y + DY[so] * (D + 2);
+  const x1 = x + DX[side] * (D + 3), y1 = y + DY[side] * (D + 3);
+  if (!g.inb(x0, y0) || !g.inb(x1, y1)) return fail('マップの端に近すぎます');
   const path = planLine(g, x0, y0, x1, y1);
   const road = planRoad(g, path, RoadType.Road);
-  if (!road.ok) return { ...fail(road.reason || '一般道を通せません'), cells: path.cells, road };
-  // ランプの位置：それぞれの車線の外側、交差点の前後
-  const ramps: [number, number][] = [];
-  const ox = x + DX[s], oy = y + DY[s];
-  for (const [lx, ly, out, dir] of [[x, y, so, f], [ox, oy, s, opp(f)]] as const) {
-    for (const k of [-1, 1]) ramps.push([lx + DX[dir] * k + DX[out], ly + DY[dir] * k + DY[out]]);
+  const cells = [...path.cells];
+  if (!road.ok) {
+    for (const b of road.bad) bad.add(b);
+    return { ...fail(road.reason || '一般道を通せません', cells), road };
   }
-  // 仮の盤面で順番に確かめる
-  const tmp = g.clone();
-  applyRoad(tmp, road);
-  let cost = road.cost;
-  for (const [rx, ry] of ramps) {
-    const rp = planRamp(tmp, rx, ry);
-    if (!rp.ok) return { ...fail(`ランプを置けません：${rp.reason}`), cells: path.cells, road };
-    applyRamp(tmp, rp);
-    cost += rp.cost;
+  // ランプの道筋
+  const chains: RampChain[] = [];
+  let rampCells = 0;
+  for (const L of lanes) {
+    const at = (k: number, out: number): [number, number] => [L.x + DX[L.f] * k + DX[L.o] * out, L.y + DY[L.f] * k + DY[L.o] * out];
+    // 出口：本線（-K）→ 斜めに D マス → 並走 → 一般道（0, D）
+    const exitPts: [number, number][] = [at(-K, 0)];
+    for (let k = 1; k <= D; k++) exitPts.push(at(-K + k, k));
+    for (let k = -K + D + 1; k <= 0; k++) exitPts.push(at(k, D));
+    // 入口：一般道（0, D）→ 並走 → 斜めに戻る → 本線
+    const entryPts: [number, number][] = [];
+    const parEnd = K - 1 - D; // 並走の最後
+    for (let k = 0; k <= parEnd; k++) entryPts.push(at(k, D));
+    for (let k = 1; k <= D; k++) entryPts.push(at(parEnd + k, D - k));
+    for (const pts of [exitPts, entryPts]) {
+      const cs = pts.map(([px, py]) => g.idx(px, py));
+      const dirs: number[] = [];
+      for (let k = 0; k + 1 < pts.length; k++) dirs.push(dirOf(pts[k + 1][0] - pts[k][0], pts[k + 1][1] - pts[k][1]));
+      const isExit = pts === exitPts;
+      // 階層：本線のマスは本線の階層、一般道のマスは地上、ランプは高架なら上空
+      const levels = cs.map((ci, k) => {
+        const onLane = isExit ? k === 0 : k === cs.length - 1;
+        const onRoad = isExit ? k === cs.length - 1 : k === 0;
+        if (onLane) return level;
+        if (onRoad) return 0;
+        return level;
+      });
+      // 高架の場合、ランプは本線の高さから地面へ少しずつ下がる
+      const heights = cs.map((ci, k) => {
+        if (!level) return 0;
+        const tFromLane = isExit ? k / (cs.length - 1) : 1 - k / (cs.length - 1);
+        const hw = g.upH[isExit ? cs[0] : cs[cs.length - 1]];
+        const ground = g.cellH(ci % n, (ci / n) | 0);
+        return lerpH(hw, ground + 0.6, tFromLane);
+      });
+      // ランプのマスが空いているか
+      for (let k = 0; k < cs.length; k++) {
+        const ci = cs[k];
+        const onLane = isExit ? k === 0 : k === cs.length - 1;
+        const onRoad = isExit ? k === cs.length - 1 : k === 0;
+        if (onLane) continue;
+        if (onRoad) {
+          if (!path.cells.includes(ci)) { bad.add(ci); }
+          continue;
+        }
+        const cx2 = ci % n, cy2 = (ci / n) | 0;
+        rampCells++;
+        if (g.bldg[ci]) { bad.add(ci); }
+        else if (level === 0 && (g.road[ci] || g.isWater(cx2, cy2))) bad.add(ci);
+        else if (level === 1 && (g.up[ci] || (k > 0 && g.road[ci] && levels[k] === 0))) bad.add(ci);
+        cells.push(ci);
+      }
+      for (let k = 0; k < dirs.length; k++) {
+        if (isDiag(dirs[k]) && crossesDiagonal(g, cs[k], dirs[k], levels[k])) bad.add(cs[k]);
+      }
+      chains.push({ cells: cs, dirs, levels, heights });
+    }
   }
-  return { ok: true, reason: '', cost, road, ramps, cells: [...path.cells, ...ramps.map(([a, b]) => g.idx(a, b))] };
+  if (bad.size) return { ok: false, reason: 'ランプを通す場所に、建物や道路、水があります', cost: 0, road, chains, cells, bad };
+  const cost = road.cost + rampCells * RAMP_CELL_COST + 1500;
+  return { ok: true, reason: '', cost, road, chains, cells, bad };
+}
+
+const lerpH = (a: number, b: number, t: number) => a + (b - a) * t;
+
+export function applyDiamond(g: Grid, p: DiamondPlan) {
+  if (!p.road) return;
+  applyRoad(g, p.road);
+  for (const ch of p.chains) {
+    const last = ch.cells.length - 1;
+    ch.cells.forEach((ci, k) => {
+      if (k === 0 || k === last) return; // 本線と一般道のマスはそのまま
+      if (ch.levels[k]) {
+        g.up[ci] = RoadType.Ramp;
+        g.upH[ci] = ch.heights[k];
+      } else g.road[ci] = RoadType.Ramp;
+      g.zone[ci] = 0;
+      g.zden[ci] = 0;
+      g.tree[ci] = 0;
+    });
+    for (let k = 0; k < ch.dirs.length; k++) link(g, ch.cells[k], ch.levels[k], ch.cells[k + 1], ch.levels[k + 1], ch.dirs[k], true);
+  }
 }
 
 // ---- 範囲指定（ゾーン、取り壊し） ----
