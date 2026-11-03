@@ -1,0 +1,704 @@
+// 画面の UI（左のツール、下のバー、シート、タイトル画面）
+import type { GameClient } from '../game';
+import type { CityRenderer } from '../render/renderer';
+import { DATA_VIEWS, DataView } from '../render/overlay';
+import { ToolController, TOOL_GROUPS, PreviewInfo } from './tools';
+import { CIVIC, CivicId, DIFFICULTY, GROW, GROW_KINDS, GrowKind, ROADS, TAX_LABELS, ZONE_NAMES } from '../sim/defs';
+import { BState } from '../sim/world';
+import type { Stats } from '../sim/world';
+import { sfx, soundSettings } from '../sound';
+import type { SaveMeta } from '../save';
+import type { MapStyle } from '../sim/terrain';
+import type { NewCityOpts } from '../sim/protocol';
+
+const ICONS: Record<string, string> = {
+  road: '<path d="M8 21 10.5 3M16 21 13.5 3M12 6v2M12 11v2M12 16v2"/>',
+  zone: '<rect x="3.5" y="3.5" width="7" height="7" rx="1"/><rect x="13.5" y="3.5" width="7" height="7" rx="1"/><rect x="3.5" y="13.5" width="7" height="7" rx="1"/><rect x="13.5" y="13.5" width="7" height="7" rx="1"/>',
+  power: '<path d="M13 2 5 13h6l-1 9 8-11h-6z"/>',
+  water: '<path d="M12 3s6 7 6 11a6 6 0 0 1-12 0c0-4 6-11 6-11z"/>',
+  civic: '<path d="M3 9 12 4l9 5M5 9v9M19 9v9M9.5 9v9M14.5 9v9M3 20h18"/>',
+  transit: '<rect x="5" y="3" width="14" height="14" rx="3"/><path d="M5 11h14M8 21l1.5-4M16 21l-1.5-4"/><circle cx="8.5" cy="14" r=".6"/><circle cx="15.5" cy="14" r=".6"/>',
+  terrain: '<path d="M2 20 9 8l4 6 3-4 6 10z"/>',
+  bulldoze: '<path d="M3 17h11v-5H7l-2 5M14 14h3l3-6M14 12V8h-4"/><circle cx="6" cy="19" r="1.5"/><circle cx="12" cy="19" r="1.5"/>',
+  query: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>',
+  hide: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/><path d="M3 3l18 18"/>',
+  show: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  pause: '<rect x="5" y="4" width="4.5" height="16" rx="1"/><rect x="14.5" y="4" width="4.5" height="16" rx="1"/>',
+  play1: '<path d="M7 4v16l12-8z"/>',
+  play2: '<path d="M3 5v14l9-7zM12 5v14l9-7z"/>',
+  play3: '<path d="M1 5v14l7-7zM8 5v14l7-7zM15 5v14l7-7z"/>',
+};
+const svg = (k: string, filled = false) =>
+  `<svg viewBox="0 0 24 24" ${filled ? 'style="fill:currentColor;stroke:none"' : ''}>${ICONS[k]}</svg>`;
+
+const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, html?: string) => {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (html !== undefined) e.innerHTML = html;
+  return e;
+};
+
+const yen = (v: number) => `§${Math.round(v).toLocaleString()}`;
+const num = (v: number) => Math.round(v).toLocaleString();
+
+export function formatDate(day: number) {
+  const y = Math.floor(day / 360) + 1;
+  const m = Math.floor((day % 360) / 30) + 1;
+  return `${y}年 ${m}月`;
+}
+
+export interface Settings {
+  shadows: boolean;
+  lowRes: boolean;
+  cars: boolean;
+  sound: boolean;
+  fps: boolean;
+}
+
+export interface HudActions {
+  saveSlot: (slot: string) => Promise<void>;
+  loadSlot: (slot: string) => Promise<void>;
+  exportFile: () => Promise<void>;
+  importFile: (f: File) => Promise<void>;
+  listSaves: () => Promise<SaveMeta[]>;
+  toTitle: () => void;
+  applySettings: (s: Settings) => void;
+  startNew: (o: NewCityOpts) => void;
+  continueAuto: () => Promise<void>;
+}
+
+export class Hud {
+  root: HTMLElement;
+  private toolbar = el('div', 'toolbar');
+  private sub = el('div', 'sub hidden');
+  private bar = el('div', 'bar');
+  private news = el('div', 'news');
+  private info = el('div', 'info hidden');
+  private toast = el('div', 'toast hidden');
+  private cost = el('div', 'cost hidden');
+  private cancelZone = el('div', 'cancel hidden', '✕　ここで指を離すとキャンセル');
+  private chips = el('div', 'chips hidden');
+  private restore = el('button', 'restore hidden', svg('show'));
+  private fpsEl = el('div', 'fps hidden');
+  private sheetBg = el('div', 'sheet-bg hidden');
+  private sheet = el('div', 'sheet hidden');
+  private title = el('div', 'title hidden');
+  private group = '';
+  private toastTimer = 0;
+  private newsQueue: string[] = [];
+  private newsTimer = 0;
+  private stats: Stats | null = null;
+  private sheetTab = 'budget';
+  private infoCell: { x: number; y: number } | null = null;
+  private hidden = false;
+  private barEls: Record<string, HTMLElement> = {};
+  settings: Settings = { shadows: true, lowRes: false, cars: true, sound: true, fps: false };
+
+  constructor(private game: GameClient, private r: CityRenderer, private tools: ToolController, private act: HudActions) {
+    this.root = document.getElementById('ui')!;
+    this.buildToolbar();
+    this.buildBar();
+    this.root.append(this.toolbar, this.sub, this.bar, this.news, this.info, this.chips, this.cancelZone, this.cost, this.toast, this.restore, this.fpsEl, this.sheetBg, this.sheet, this.title);
+    this.restore.onclick = () => this.setHidden(false);
+    this.sheetBg.onclick = () => this.closeSheet();
+    this.setInGame(false);
+    setInterval(() => {
+      if (this.settings.fps) this.fpsEl.textContent = `${this.r.fps} fps`;
+      if (this.infoCell && !this.info.classList.contains('hidden')) this.renderInfo();
+    }, 1000);
+  }
+
+  setInGame(on: boolean) {
+    for (const e of [this.toolbar, this.bar, this.news]) e.classList.toggle('hidden', !on || this.hidden);
+    if (!on) {
+      this.sub.classList.add('hidden');
+      this.info.classList.add('hidden');
+      this.chips.classList.add('hidden');
+      this.closeSheet();
+    }
+    this.restore.classList.toggle('hidden', !on || !this.hidden);
+  }
+
+  // ---------------- 左のツール ----------------
+  private buildToolbar() {
+    for (const g of TOOL_GROUPS) {
+      const b = el('button', 'tbtn', `${svg(g.icon)}<span>${g.name}</span>`);
+      b.dataset.g = g.id;
+      b.onclick = () => {
+        sfx.click();
+        if (g.tool) {
+          this.closeSub();
+          const on = this.tools.tool !== g.tool;
+          this.selectTool(on ? g.tool : '', g.id);
+        } else if (this.group === g.id && !this.sub.classList.contains('hidden')) {
+          this.closeSub();
+        } else this.openSub(g.id);
+      };
+      this.toolbar.append(b);
+    }
+  }
+
+  private openSub(id: string) {
+    const g = TOOL_GROUPS.find((x) => x.id === id)!;
+    this.group = id;
+    this.sub.innerHTML = '';
+    this.sub.append(el('h3', '', g.name));
+    for (const it of g.items || []) {
+      const b = el('button', 'sitem' + (it.tool && it.tool === this.tools.tool ? ' on' : ''));
+      b.innerHTML = `<span class="l">${it.swatch ? `<i class="sw" style="background:${it.swatch}"></i>` : ''}<span class="nm">${it.name}</span></span><span class="nt">${it.note || ''}</span>`;
+      b.disabled = !!it.disabled;
+      b.onclick = () => {
+        sfx.click();
+        this.selectTool(it.tool!, id);
+        this.closeSub();
+        const desc = it.tool?.startsWith('plop:') ? CIVIC[it.tool.split(':')[1] as CivicId].desc : '';
+        this.showToast(`${it.name}${desc ? '：' + desc : ''}`);
+      };
+      this.sub.append(b);
+    }
+    this.sub.classList.remove('hidden');
+    this.highlightToolbar();
+  }
+
+  private closeSub() {
+    this.sub.classList.add('hidden');
+    this.highlightToolbar();
+  }
+
+  selectTool(t: string, group = '') {
+    this.tools.setTool(t);
+    this.group = t ? group : '';
+    if (t !== 'query') this.info.classList.add('hidden');
+    this.highlightToolbar();
+  }
+
+  private highlightToolbar() {
+    const subOpen = !this.sub.classList.contains('hidden');
+    for (const b of this.toolbar.querySelectorAll<HTMLElement>('.tbtn')) {
+      const active = (this.tools.tool && b.dataset.g === this.group) || (subOpen && b.dataset.g === this.group);
+      b.classList.toggle('on', !!active);
+    }
+  }
+
+  // ---------------- 下のバー ----------------
+  private buildBar() {
+    const st = (k: string, key: string, extra = '') => {
+      const s = el('div', 'stat', `<span class="k">${k}</span><span class="v" data-v="${key}">-</span>${extra}`);
+      return s;
+    };
+    const funds = st('資金', 'funds', '<span class="d" data-v="delta"></span>');
+    const pop = st('人口', 'pop');
+    const date = st('日付', 'date');
+    const speed = el('div', 'speed');
+    ['pause', 'play1', 'play2', 'play3'].forEach((k, i) => {
+      const b = el('button', '', svg(k, true));
+      b.dataset.s = String(i);
+      b.title = ['停止', '遅い', '普通', '速い'][i];
+      b.onclick = () => {
+        sfx.click();
+        this.game.setSpeed(i);
+      };
+      speed.append(b);
+    });
+    const rci = el('div', 'rci');
+    rci.title = '需要';
+    for (const [k, c] of [['R', 'var(--r)'], ['C', 'var(--c)'], ['I', 'var(--i)']]) {
+      rci.append(el('div', 'col', `<div class="track"><i class="fill" data-v="d${k}" style="background:${c}"></i></div><span class="lb" style="color:${c}">${k}</span>`));
+    }
+    const data = el('button', 'bbtn', 'データ表示');
+    data.onclick = () => {
+      sfx.click();
+      this.toggleChips();
+    };
+    const budget = el('button', 'bbtn', '予算');
+    budget.onclick = () => this.openSheet('budget');
+    const menu = el('button', 'bbtn', 'メニュー');
+    menu.onclick = () => this.openSheet('save');
+    const hide = el('button', 'bbtn icon', svg('hide'));
+    hide.title = 'UIを隠す';
+    hide.onclick = () => this.setHidden(true);
+    this.barEls.data = data;
+    this.bar.append(funds, el('div', 'sep'), pop, el('div', 'sep'), date, speed, el('div', 'sep'), rci, el('div', 'grow'), data, budget, menu, hide);
+  }
+
+  setHidden(h: boolean) {
+    this.hidden = h;
+    for (const e of [this.toolbar, this.bar, this.news]) e.classList.toggle('hidden', h);
+    if (h) {
+      this.sub.classList.add('hidden');
+      this.info.classList.add('hidden');
+      this.chips.classList.add('hidden');
+    }
+    this.restore.classList.toggle('hidden', !h);
+  }
+
+  updateStats(s: Stats) {
+    this.stats = s;
+    const set = (k: string, v: string) => {
+      const e = this.bar.querySelector<HTMLElement>(`[data-v="${k}"]`);
+      if (e && e.textContent !== v) e.textContent = v;
+    };
+    set('funds', this.game.sandbox ? '∞' : yen(s.funds));
+    const net = s.lastIncome - s.lastExpense;
+    const d = this.bar.querySelector<HTMLElement>('[data-v="delta"]')!;
+    const dt = s.lastIncome || s.lastExpense ? `${net >= 0 ? '+' : ''}${num(net)}/月` : '';
+    if (d.textContent !== dt) {
+      d.textContent = dt;
+      d.className = 'd ' + (net >= 0 ? 'pos' : 'neg');
+    }
+    set('pop', num(s.population));
+    set('date', formatDate(s.day));
+    for (const b of this.bar.querySelectorAll<HTMLElement>('.speed button')) b.classList.toggle('on', Number(b.dataset.s) === s.speed);
+    ['R', 'C', 'I'].forEach((k, i) => {
+      const f = this.bar.querySelector<HTMLElement>(`[data-v="d${k}"]`)!;
+      const v = Math.max(-1, Math.min(1, s.demandRCI[i]));
+      const h = Math.abs(v) * 50;
+      f.style.height = `${h}%`;
+      f.style.top = v >= 0 ? `${50 - h}%` : '50%';
+      f.style.opacity = v >= 0 ? '1' : '0.55';
+    });
+    if (!this.sheet.classList.contains('hidden') && (this.sheetTab === 'budget' || this.sheetTab === 'tax')) this.refreshSheetLive();
+  }
+
+  // ---------------- ニュース ----------------
+  pushNews(items: string[]) {
+    this.newsQueue.push(...items);
+    if (!this.newsTimer) this.nextNews();
+  }
+  private nextNews() {
+    const m = this.newsQueue.shift();
+    if (!m) {
+      this.newsTimer = 0;
+      return;
+    }
+    sfx.news();
+    this.news.innerHTML = `<b>ニュース</b>${m}`;
+    this.newsTimer = window.setTimeout(() => this.nextNews(), this.newsQueue.length ? 4000 : 9000);
+  }
+
+  // ---------------- トーストと費用 ----------------
+  showToast(msg: string, err = false) {
+    this.toast.textContent = msg;
+    this.toast.classList.toggle('err', err);
+    this.toast.classList.remove('hidden');
+    this.toast.style.opacity = '1';
+    clearTimeout(this.toastTimer);
+    this.toastTimer = window.setTimeout(() => {
+      this.toast.style.opacity = '0';
+      setTimeout(() => this.toast.classList.add('hidden'), 300);
+    }, 2600);
+  }
+
+  showDragUI(on: boolean) {
+    this.cancelZone.classList.toggle('hidden', !on);
+    this.cancelZone.classList.remove('over');
+    if (!on) this.cost.classList.add('hidden');
+  }
+
+  showPreview(info: PreviewInfo | null | undefined, x: number, y: number, over: boolean) {
+    this.cancelZone.classList.toggle('over', over);
+    if (info === null) {
+      this.cost.classList.add('hidden');
+      return;
+    }
+    if (info) {
+      this.cost.textContent = over ? 'キャンセル' : info.text;
+      this.cost.classList.toggle('bad', info.bad || over);
+    } else if (over) {
+      this.cost.textContent = 'キャンセル';
+      this.cost.classList.add('bad');
+    }
+    this.cost.style.left = `${x}px`;
+    this.cost.style.top = `${y - 30}px`;
+    this.cost.classList.remove('hidden');
+  }
+
+  isOverCancel(x: number, y: number) {
+    if (this.cancelZone.classList.contains('hidden')) return false;
+    const r = this.cancelZone.getBoundingClientRect();
+    return x >= r.left - 10 && x <= r.right + 10 && y >= r.top - 10 && y <= r.bottom + 14;
+  }
+
+  // ---------------- データ表示 ----------------
+  private toggleChips() {
+    if (!this.chips.classList.contains('hidden')) {
+      this.chips.classList.add('hidden');
+      return;
+    }
+    this.renderChips();
+    this.chips.classList.remove('hidden');
+  }
+
+  private renderChips() {
+    this.chips.innerHTML = '';
+    for (const v of DATA_VIEWS) {
+      const c = el('button', 'chip' + (this.r.dataView === v.id ? ' on' : ''), v.name);
+      c.onclick = () => {
+        sfx.click();
+        this.r.setDataView(v.id);
+        this.barEls.data.classList.toggle('on', v.id !== 'none');
+        this.renderChips();
+      };
+      this.chips.append(c);
+    }
+    const legend = LEGENDS[this.r.dataView];
+    if (legend) this.chips.append(el('div', 'legend', legend));
+  }
+
+  // ---------------- 情報 ----------------
+  showInfo(x: number, y: number) {
+    this.infoCell = { x, y };
+    this.renderInfo();
+    this.info.classList.remove('hidden');
+  }
+
+  private renderInfo() {
+    const g = this.game.grid, m = this.game.maps;
+    const c = this.infoCell;
+    if (!g || !c) return;
+    const i = g.idx(c.x, c.y);
+    const rows: [string, string][] = [];
+    let title = '空き地';
+    const bid = g.bldg[i];
+    const meter = (v: number, color: string) => `<div class="meter"><i style="width:${Math.round(Math.max(0, Math.min(1, v)) * 100)}%;background:${color}"></i></div>`;
+    if (bid) {
+      const b = this.game.buildings.get(bid);
+      if (b) {
+        if (b.civic) {
+          const def = CIVIC[b.type as CivicId];
+          title = def.name;
+          if (def.power) rows.push(['発電量', `${def.power} MW`]);
+          if (def.water) rows.push(['給水量', `${def.water}`], ['電力', b.powered ? 'あり' : '<span class="neg">なし</span>']);
+          if (def.pollution) rows.push(['大気汚染', def.pollution > 20 ? 'ひどい' : 'ややある']);
+          rows.push(['維持費', `${yen(def.upkeep)}/月`]);
+        } else {
+          const def = GROW[b.type as GrowKind];
+          const isR = def.zone === 1;
+          title = def.name;
+          if (b.state === BState.Building) rows.push(['状態', '建設中']);
+          else if (b.state === BState.Abandoned) rows.push(['状態', '<span class="neg">空き家</span>']);
+          rows.push([isR ? '住人' : '働く人', `${num(b.occ)} / ${num(b.cap)}`]);
+          rows.push(['電力', b.powered ? 'あり' : '<span class="neg">なし</span>'], ['水道', b.watered ? 'あり' : '<span class="neg">なし</span>']);
+          if (isR && b.state === BState.Normal) {
+            rows.push(['職のある人', `${Math.round(b.employed * 100)}%`]);
+            rows.push(['通勤時間', b.commute ? `${b.commute.toFixed(0)} 分` : '-']);
+          }
+        }
+      }
+    } else if (g.road[i]) {
+      const def = ROADS[g.road[i]];
+      title = def.name;
+      const vol = m ? m.traffic[i] : 0;
+      const ratio = vol / def.capacity;
+      rows.push(['交通量', `${num(vol)} 台/日`], ['容量', `${num(def.capacity)} 台/日`]);
+      rows.push(['混雑度', `${Math.round(ratio * 100)}%${meter(ratio, ratio > 1 ? 'var(--bad)' : ratio > 0.7 ? 'var(--warn)' : 'var(--good)')}`]);
+      rows.push(['制限速度', `${def.speedKmh} km/h`]);
+    } else if (g.isWater(c.x, c.y)) {
+      title = '水域';
+    } else if (g.zone[i]) {
+      title = `${ZONE_NAMES[g.zone[i]]}ゾーン（空き地）`;
+    }
+    if (m && !g.isWater(c.x, c.y)) {
+      const lv = m.landValue[i] / 255;
+      rows.push(['地価', `${Math.round(lv * 100)}${meter(lv, 'var(--accent)')}`]);
+      const p = Math.min(1, m.pollution[i] / 140);
+      rows.push(['大気汚染', `${Math.round(p * 100)}${meter(p, '#b07a3a')}`]);
+      if (!bid && g.zone[i]) rows.push(['電力', m.power[i] ? 'あり' : '<span class="neg">なし</span>'], ['水道', m.water[i] ? 'あり' : 'なし']);
+    }
+    rows.push(['場所', `${c.x}, ${c.y}`]);
+    this.info.innerHTML = `<h4><span>${title}</span><button class="x">✕</button></h4><table>${rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('')}</table>`;
+    this.info.querySelector<HTMLElement>('.x')!.onclick = () => this.info.classList.add('hidden');
+  }
+
+  // ---------------- シート ----------------
+  openSheet(tab: string) {
+    sfx.click();
+    this.sheetTab = tab;
+    this.sheetBg.classList.remove('hidden');
+    this.sheet.classList.remove('hidden');
+    void this.renderSheet();
+  }
+
+  closeSheet() {
+    this.sheet.classList.add('hidden');
+    this.sheetBg.classList.add('hidden');
+  }
+
+  private async renderSheet() {
+    const tabs: [string, string][] = [['budget', '予算'], ['tax', '税金'], ['save', '保存'], ['settings', '設定'], ['city', '街']];
+    const head = el('div', 'sheet-h');
+    for (const [id, name] of tabs) {
+      const t = el('button', 'tab' + (id === this.sheetTab ? ' on' : ''), name);
+      t.onclick = () => {
+        this.sheetTab = id;
+        void this.renderSheet();
+      };
+      head.append(t);
+    }
+    head.append(el('div', 'grow'));
+    const close = el('button', 'close', '✕');
+    close.onclick = () => this.closeSheet();
+    head.append(close);
+    const body = el('div', 'sheet-b');
+    this.sheet.innerHTML = '';
+    this.sheet.append(head, body);
+    if (this.sheetTab === 'budget' || this.sheetTab === 'tax') this.refreshSheetLive();
+    else if (this.sheetTab === 'save') await this.renderSave(body);
+    else if (this.sheetTab === 'settings') this.renderSettings(body);
+    else this.renderCity(body);
+  }
+
+  private refreshSheetLive() {
+    const body = this.sheet.querySelector<HTMLElement>('.sheet-b');
+    const s = this.stats;
+    if (!body || !s) return;
+    if (this.sheetTab === 'budget') {
+      const inc = s.incomeBreakdown, exp = s.expenseBreakdown;
+      const rows = (o: Record<string, number>) => Object.entries(o).map(([k, v]) => `<tr><td>${k}</td><td>${yen(v)}</td></tr>`).join('');
+      const unemp = s.workers > 0 ? Math.max(0, 1 - s.employed / s.workers) : 0;
+      body.innerHTML = `
+        <div class="cols">
+          <div><h5>収入（先月）</h5><table class="tbl">${rows(inc) || '<tr><td>まだありません</td><td></td></tr>'}<tr class="total"><td>合計</td><td>${yen(s.lastIncome)}</td></tr></table>
+          <h5 style="margin-top:14px">支出（先月）</h5><table class="tbl">${rows(exp) || '<tr><td>まだありません</td><td></td></tr>'}<tr class="total"><td>合計</td><td>${yen(s.lastExpense)}</td></tr></table></div>
+          <div><h5>街の状況</h5><table class="tbl">
+            <tr><td>資金</td><td>${this.game.sandbox ? '∞（サンドボックス）' : yen(s.funds)}</td></tr>
+            <tr><td>収支</td><td class="${s.lastIncome - s.lastExpense >= 0 ? 'pos' : 'neg'}">${yen(s.lastIncome - s.lastExpense)}/月</td></tr>
+            <tr><td>人口</td><td>${num(s.population)} 人</td></tr>
+            <tr><td>雇用</td><td>${num(s.jobs)} 人分</td></tr>
+            <tr><td>失業率</td><td>${Math.round(unemp * 100)}%</td></tr>
+            <tr><td>平均通勤時間</td><td>${s.avgCommute ? s.avgCommute.toFixed(1) + ' 分' : '-'}</td></tr>
+            <tr><td>電力（使用 / 発電）</td><td class="${s.powerDemand > s.powerSupply ? 'neg' : ''}">${num(s.powerDemand)} / ${num(s.powerSupply)} MW</td></tr>
+            <tr><td>水道（使用 / 給水）</td><td class="${s.waterDemand > s.waterSupply ? 'neg' : ''}">${num(s.waterDemand)} / ${num(s.waterSupply)}</td></tr>
+            <tr><td>隣の都市との道路</td><td>${s.neighborConnected ? 'つながっている' : '<span class="neg">つながっていない</span>'}</td></tr>
+          </table>
+          <p class="muted">部門ごとの予算の調整は、警察・消防・学校などを追加するときに入れます。</p></div>
+        </div>`;
+    } else {
+      // 税金のスライダーは作り直すと操作中に途切れるので、値だけ更新する
+      if (!body.querySelector('.tax')) {
+        body.innerHTML = '<h5>税率（ゾーンの種類と所得層ごと）</h5><p class="muted" style="margin:0 0 8px">税率を上げると収入が増えますが、その種類の需要が下がります。標準は 9% です。</p>';
+        for (const k of GROW_KINDS) {
+          const row = el('div', 'tax');
+          row.innerHTML = `<span>${TAX_LABELS[k]}</span><input type="range" min="0" max="20" step="0.5" value="9"><span class="v"></span><span class="dm" data-k="${k}"></span>`;
+          const input = row.querySelector('input')!;
+          const v = row.querySelector<HTMLElement>('.v')!;
+          input.dataset.k = k;
+          input.oninput = () => {
+            v.textContent = `${Number(input.value).toFixed(1)}%`;
+            void this.game.exec({ t: 'tax', kind: k, rate: Number(input.value) });
+            this.taxCache[k] = Number(input.value);
+          };
+          const rate = this.taxCache[k] ?? 9;
+          input.value = String(rate);
+          v.textContent = `${rate.toFixed(1)}%`;
+          body.append(row);
+        }
+      }
+      for (const k of GROW_KINDS) {
+        const d = body.querySelector<HTMLElement>(`.dm[data-k="${k}"]`);
+        const v = s.demand[k];
+        if (d) {
+          d.textContent = `需要 ${v >= 0 ? '+' : ''}${Math.round(v * 100)}`;
+          d.className = 'dm ' + (v >= 0 ? 'pos' : 'neg');
+        }
+      }
+    }
+  }
+  taxCache: Partial<Record<GrowKind, number>> = {};
+
+  private async renderSave(body: HTMLElement) {
+    const saves = await this.act.listSaves();
+    const by = new Map(saves.map((s) => [s.slot, s]));
+    body.innerHTML = '<h5>保存スロット</h5>';
+    for (const slot of ['slot1', 'slot2', 'slot3', 'auto']) {
+      const m = by.get(slot);
+      const label = slot === 'auto' ? '自動保存' : `スロット ${slot.slice(-1)}`;
+      const row = el('div', 'row');
+      row.innerHTML = `<div><div>${label}</div><div class="desc">${m ? `${m.name}・人口 ${num(m.population)}・${formatDate(m.day)}・${new Date(m.savedAt).toLocaleString('ja-JP')}` : '空き'}</div></div>`;
+      const btns = el('div', 'btns');
+      if (slot !== 'auto') {
+        const sb = el('button', 'btn pri', '保存');
+        sb.onclick = async () => {
+          await this.act.saveSlot(slot);
+          this.showToast(`${label}に保存しました`);
+          void this.renderSheet();
+        };
+        btns.append(sb);
+      }
+      if (m) {
+        const lb = el('button', 'btn', '読み込む');
+        lb.onclick = async () => {
+          if (!confirm(`${label}を読み込みますか？\n今の街の保存していない変更は失われます。`)) return;
+          await this.act.loadSlot(slot);
+          this.closeSheet();
+        };
+        btns.append(lb);
+      }
+      row.append(btns);
+      body.append(row);
+    }
+    body.append(el('h5', '', 'ファイル'));
+    const fr = el('div', 'row');
+    fr.innerHTML = '<div><div>ファイルに書き出す・読み込む</div><div class="desc">機種変更やバックアップに使えます</div></div>';
+    const fb = el('div', 'btns');
+    const ex = el('button', 'btn', '書き出す');
+    ex.onclick = () => void this.act.exportFile();
+    const im = el('button', 'btn', '読み込む');
+    const input = el('input');
+    input.type = 'file';
+    input.accept = '.pmcity,application/gzip,application/json';
+    input.style.display = 'none';
+    input.onchange = async () => {
+      const f = input.files?.[0];
+      if (!f) return;
+      try {
+        await this.act.importFile(f);
+        this.closeSheet();
+      } catch (e) {
+        this.showToast(String((e as Error).message || e), true);
+      }
+    };
+    im.onclick = () => input.click();
+    fb.append(ex, im, input);
+    fr.append(fb);
+    body.append(fr);
+  }
+
+  private renderSettings(body: HTMLElement) {
+    body.innerHTML = '';
+    const items: [keyof Settings, string, string][] = [
+      ['shadows', '影', '建物や木の影を表示します。オフにすると動作が軽くなります'],
+      ['lowRes', '解像度を下げる', '画面の細かさを下げて、動作を軽くします'],
+      ['cars', '車の表示', '道路を走る車を表示します'],
+      ['sound', '効果音', ''],
+      ['fps', 'フレームレートの表示', '動作の重さを確認するときに使います'],
+    ];
+    for (const [k, name, desc] of items) {
+      const row = el('div', 'row', `<div><div>${name}</div>${desc ? `<div class="desc">${desc}</div>` : ''}</div>`);
+      const t = el('button', 'toggle' + (this.settings[k] ? ' on' : ''));
+      t.onclick = () => {
+        this.settings[k] = !this.settings[k];
+        t.classList.toggle('on', this.settings[k]);
+        this.applySettings();
+      };
+      row.append(t);
+      body.append(row);
+    }
+    body.append(el('p', 'muted', '操作：1本指でドラッグ＝地図を動かす（ツールを選んでいるときは道路を引くなど）、2本指でドラッグ＝地図を動かす、ピンチ＝ズーム、2本指でひねる＝回転、タップ＝情報'));
+  }
+
+  applySettings() {
+    soundSettings.enabled = this.settings.sound;
+    this.fpsEl.classList.toggle('hidden', !this.settings.fps);
+    this.act.applySettings(this.settings);
+  }
+
+  private renderCity(body: HTMLElement) {
+    body.innerHTML = `<h5>${this.game.name}</h5>`;
+    const r1 = el('div', 'row', '<div><div>タイトル画面に戻る</div><div class="desc">今の街は自動保存されます</div></div>');
+    const b1 = el('button', 'btn', '戻る');
+    b1.onclick = () => this.act.toTitle();
+    r1.append(b1);
+    body.append(r1);
+  }
+
+  // ---------------- タイトル画面 ----------------
+  async showTitle() {
+    this.setInGame(false);
+    const saves = await this.act.listSaves();
+    const auto = saves.find((s) => s.slot === 'auto');
+    this.title.innerHTML = '';
+    const inner = el('div', 'title-in');
+    const left = el('div', '', `<div class="logo">Pocket<span> Metro</span></div><div class="tag">道路を引き、ゾーンを指定して、街を育てる都市開発シミュレーション。<br>交通、電力、水道、税金をやりくりしましょう。</div>
+      <div class="hint">ホーム画面に追加すると、全画面でオフラインでも遊べます。</div>`);
+    const right = el('div', 'menu');
+    if (auto) {
+      const c = el('button', 'btn pri', `続きから（${auto.name}・${formatDate(auto.day)}）`);
+      c.onclick = () => void this.act.continueAuto();
+      right.append(c);
+    }
+    const nb = el('button', 'btn' + (auto ? '' : ' pri'), '新しい街を作る');
+    nb.onclick = () => this.showNewForm();
+    right.append(nb);
+    const others = saves.filter((s) => s.slot !== 'auto');
+    for (const s of others) {
+      const b = el('button', 'btn', `読み込む：${s.name}（スロット ${s.slot.slice(-1)}）`);
+      b.onclick = () => void this.act.loadSlot(s.slot);
+      right.append(b);
+    }
+    const input = el('input');
+    input.type = 'file';
+    input.style.display = 'none';
+    input.onchange = async () => {
+      const f = input.files?.[0];
+      if (!f) return;
+      try {
+        await this.act.importFile(f);
+      } catch (e) {
+        this.showToast(String((e as Error).message || e), true);
+      }
+    };
+    const fb = el('button', 'btn', 'ファイルから読み込む');
+    fb.onclick = () => input.click();
+    right.append(fb, input);
+    inner.append(left, right);
+    this.title.append(inner);
+    this.title.classList.remove('hidden');
+  }
+
+  hideTitle() {
+    this.title.classList.add('hidden');
+  }
+
+  private showNewForm() {
+    const right = this.title.querySelector('.menu')!;
+    const state = { style: 'river' as MapStyle, difficulty: 1, sandbox: false };
+    const form = el('div', 'form');
+    const seg = (items: [string, string][], cur: string, on: (v: string) => void) => {
+      const s = el('div', 'seg');
+      for (const [v, name] of items) {
+        const b = el('button', v === cur ? 'on' : '', name);
+        b.onclick = () => {
+          s.querySelectorAll('button').forEach((x) => x.classList.remove('on'));
+          b.classList.add('on');
+          on(v);
+        };
+        s.append(b);
+      }
+      return s;
+    };
+    const nameWrap = el('div', '', '<label>街の名前</label>');
+    const name = el('input');
+    name.type = 'text';
+    name.value = '新しい街';
+    name.maxLength = 20;
+    nameWrap.append(name);
+    const terr = el('div', '', '<label>地形</label>');
+    terr.append(seg([['river', '川'], ['coast', '海岸'], ['lakes', '湖']], 'river', (v) => (state.style = v as MapStyle)));
+    const diff = el('div', '', '<label>難易度</label>');
+    diff.append(seg(DIFFICULTY.map((d, i) => [String(i), d.name] as [string, string]).concat([['sb', 'サンドボックス']]), '1', (v) => {
+      state.sandbox = v === 'sb';
+      state.difficulty = v === 'sb' ? 1 : Number(v);
+    }));
+    const btns = el('div', 'btns');
+    const back = el('button', 'btn', '戻る');
+    back.onclick = () => void this.showTitle();
+    const go = el('button', 'btn pri', 'この設定で始める');
+    go.onclick = () => {
+      this.act.startNew({ name: name.value.trim() || '新しい街', seed: Math.floor(Math.random() * 1e9), style: state.style, difficulty: state.difficulty, sandbox: state.sandbox });
+    };
+    btns.append(back, go);
+    form.append(nameWrap, terr, diff, btns);
+    right.innerHTML = '';
+    right.append(form);
+  }
+}
+
+const LEGENDS: Partial<Record<DataView, string>> = {
+  traffic: '少ない<i class="grad" style="background:linear-gradient(90deg,#3cc85a,#f0dc3c,#f07828,#c81e28)"></i>渋滞',
+  landValue: '低い<i class="grad" style="background:linear-gradient(90deg,#5a3c8c,#3c78c8,#46be78,#f0dc50,#fa8c3c)"></i>高い',
+  pollution: 'きれい<i class="grad" style="background:linear-gradient(90deg,rgba(200,190,120,.2),#aa783c,#783c28)"></i>汚い',
+  power: '<span style="color:#fadc3c">■</span> 電力あり　<span style="color:#dc3232">■</span> 電力なし',
+  water: '<span style="color:#3c96f0">■</span> 水あり　<span style="color:#dc463c">■</span> 水なし',
+  zones: '<span style="color:var(--r)">■</span> 住宅　<span style="color:var(--c)">■</span> 商業　<span style="color:var(--i)">■</span> 工業',
+};
