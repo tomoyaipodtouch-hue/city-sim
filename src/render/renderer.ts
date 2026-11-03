@@ -206,7 +206,8 @@ export class CityRenderer {
     const t = this.rig.target;
     const d = this.rig.dist;
     const span = Math.min(1600, Math.max(120, d * 1.3));
-    const dir = new THREE.Vector3(-0.55, 0.75, 0.38).normalize();
+    // 太陽はやや低めにして、影を長く出す（立体感のため）
+    const dir = new THREE.Vector3(-0.62, 0.52, 0.42).normalize();
     this.sun.position.copy(t).addScaledVector(dir, span * 2);
     this.sun.target.position.copy(t);
     const cam = this.sun.shadow.camera;

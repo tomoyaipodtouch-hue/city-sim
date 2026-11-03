@@ -65,8 +65,14 @@ export function setupLot(mb: MeshBuilder, b: Building, groundAt: (x: number, y: 
   return { W, D, base };
 }
 
+// 平らな屋上の色（建物ごとに選ぶ。真っ黒だと形がつぶれて見えるので明るめにする）
+const FLAT_ROOFS = [0x9b9891, 0x8a8a86, 0xb5b2aa, 0xcfcfc8, 0x7d7f80, 0xa59d8c].map((h) => new THREE.Color(h));
+let curRoof = FLAT_ROOFS[0];
+const flatRoof = () => curRoof;
+
 export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, trees: TreeSpot[]) {
   const rng = new Rng(b.seed);
+  curRoof = FLAT_ROOFS[b.seed % FLAT_ROOFS.length];
   mb.abandoned = b.state === BState.Abandoned;
   const tf = (lx: number, lz: number, s = 1, kind = 0) => {
     // ローカル座標から世界座標へ（MeshBuilder と同じ変換）
@@ -148,7 +154,7 @@ function houseLow(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, b: Building) {
     // 低層の集合住宅（ウォークアップ）
     const floors = 2 + rng.int(2);
     const w = f.W - 5, d = f.D - 7;
-    mb.box(-w / 2, 0, -d / 2 - 1, w / 2, floors * 3 + 0.5, d / 2 - 1, wall, PAT.apartment, PALETTE.dark);
+    mb.box(-w / 2, 0, -d / 2 - 1, w / 2, floors * 3 + 0.5, d / 2 - 1, wall, PAT.apartment, flatRoof());
     mb.box(-w / 2, floors * 3 + 0.5, -d / 2 - 1, w / 2, floors * 3 + 1.0, -d / 2 - 0.7, wall);
     // 駐車場
     mb.ground(-f.W / 2 + 1, d / 2 - 0.5, f.W / 2 - 1, f.D / 2 - 0.3, 0.1, PALETTE.asphalt);
@@ -251,7 +257,7 @@ function shop(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, tier: number) {
     mb.box(-6, 5.0, 5.8, 4, 5.6, 6.05, accent);
     for (const px of [-5, 3]) for (const pz of [0, 5]) mb.box(px - 0.2, 0, pz - 0.2, px + 0.2, 5, pz + 0.2, PALETTE.steel);
     for (const px of [-3, 1]) mb.box(px - 0.4, 0, 2.2, px + 0.4, 1.5, 2.8, PALETTE.white);
-    mb.box(-7, 0, -7, 2, 3.6, -2.5, PALETTE.shopWall[4], PAT.shop, PALETTE.dark);
+    mb.box(-7, 0, -7, 2, 3.6, -2.5, PALETTE.shopWall[4], PAT.shop, flatRoof());
     mb.box(5.6, 0, 6, 6.2, 7, 6.6, PALETTE.steel);
     mb.box(4.9, 6, 6, 6.9, 7.6, 6.65, accent);
     return;
@@ -263,9 +269,9 @@ function shop(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, tier: number) {
   const wall = tier === 3 ? rng.pick([PALETTE.shopWall[2], PALETTE.shopWall[4], PALETTE.concrete]) : rng.pick(PALETTE.shopWall);
   const h = floors * fh;
   if (tier === 3 && rng.next() < 0.5) {
-    mb.box(-w / 2, 0, z0, w / 2, h, z1, PALETTE.glass, PAT.office, PALETTE.dark);
+    mb.box(-w / 2, 0, z0, w / 2, h, z1, PALETTE.glass, PAT.office, flatRoof());
   } else {
-    mb.box(-w / 2, 0, z0, w / 2, h, z1, wall, PAT.shop, PALETTE.dark);
+    mb.box(-w / 2, 0, z0, w / 2, h, z1, wall, PAT.shop, flatRoof());
   }
   // パラペット
   mb.box(-w / 2, h, z1 - 0.3, w / 2, h + 0.9, z1, wall);
@@ -333,7 +339,7 @@ function factory(mb: MeshBuilder, f: LotFrame, rng: Rng, dirty: boolean, den = 0
     mb.hip(x0 + 1, z1 + 2, x0 + 7, z1 + 6, 0, 2, PALETTE.dirt, 0);
   } else {
     // 事務所棟と搬入口
-    mb.box(x0, 0, z1, x0 + Math.min(12, w / 2), 7, z1 + 5, PALETTE.white, PAT.office, PALETTE.dark);
+    mb.box(x0, 0, z1, x0 + Math.min(12, w / 2), 7, z1 + 5, PALETTE.white, PAT.office, flatRoof());
     roofUnits(mb, x0, z0, x1, z1, h, rng, 3 + rng.int(3));
     for (let x = x0 + 14; x < x1 - 3; x += 3) mb.ground(x, z1 + 1, x + 0.15, z1 + 5.5, 0.12, PALETTE.white);
   }
@@ -470,7 +476,7 @@ function apartments(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: numb
     blocks.push([-W / 2, zf - Math.min(D, 14 + rng.next() * 6), W / 2, zf]);
   }
   for (const [x0, z0, x1, z1] of blocks) {
-    mb.box(x0, 0, z0, x1, h, z1, wall, PAT.apartment, PALETTE.dark);
+    mb.box(x0, 0, z0, x1, h, z1, wall, PAT.apartment, flatRoof());
     mb.box(x0, h, z0, x1, h + 0.8, z0 + 0.3, wall);
     mb.box(x0, h, z1 - 0.3, x1, h + 0.8, z1, wall);
     roofUnits(mb, x0, z0, x1, z1, h, rng, 1 + rng.int(2));
@@ -496,7 +502,7 @@ function shopMid(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number,
   const z1 = f.D / 2 - 2, z0 = z1 - D;
   const g = 4.4, fh = 3.4;
   const h = g + (floors - 1) * fh;
-  mb.box(-W / 2, 0, z0, W / 2, g, z1, wall, PAT.shop, PALETTE.dark);
+  mb.box(-W / 2, 0, z0, W / 2, g, z1, wall, PAT.shop, flatRoof());
   mb.box(-W / 2 + 0.3, g, z0 + 0.3, W / 2 - 0.3, h, z1 - 0.3, wall, upscale ? PAT.office : PAT.apartment, PALETTE.dark);
   mb.box(-W / 2 + 0.3, h, z1 - 0.6, W / 2 - 0.3, h + 1.0, z1 - 0.3, wall);
   // 看板の帯と日よけ
@@ -522,7 +528,7 @@ function tower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, o
   let y = 0;
   if (podium) {
     const ph = 4.5 + (podium - 1) * 4;
-    mb.box(-PW / 2, 0, pz1 - PD, PW / 2, ph, pz1, frame, PAT.shop, PALETTE.dark);
+    mb.box(-PW / 2, 0, pz1 - PD, PW / 2, ph, pz1, frame, PAT.shop, flatRoof());
     y = ph;
   }
   // 塔の部分。高いほど段々に細くする
@@ -537,7 +543,7 @@ function tower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, o
     const fl = t === tiers - 1 ? remaining : Math.round(remaining * (0.55 + rng.next() * 0.15));
     remaining -= fl;
     const h = fl * fh;
-    if (round) mb.cylinder(0, cz, y, y + h, Math.min(tw, td) / 2, 16, wall, PALETTE.dark);
+    if (round) mb.cylinder(0, cz, y, y + h, Math.min(tw, td) / 2, 16, wall, flatRoof());
     else mb.box(-tw / 2, y, cz - td / 2, tw / 2, y + h, cz + td / 2, wall, pat, PALETTE.dark);
     // 階ごとの帯（オフィスは縦の柱）
     if (office && !round) {
