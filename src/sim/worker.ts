@@ -36,7 +36,7 @@ function sync(force = false) {
       t: 'maps',
       maps: {
         power: m.power.slice(), water: m.water.slice(), landValue: m.landValue.slice(), pollution: m.pollution.slice(),
-        traffic: m.traffic.slice(), freight: m.freight.slice(), jctl: m.jctl.slice(), congestion: m.congestion.slice(),
+        traffic: m.traffic.slice(), freight: m.freight.slice(), jctl: m.jctl.slice(), riders: m.riders.slice(), congestion: m.congestion.slice(),
       },
     });
     sent.mv = w.mapsVersion;

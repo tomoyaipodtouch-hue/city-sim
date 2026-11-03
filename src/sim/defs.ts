@@ -132,7 +132,28 @@ export function maxFloorsFor(pop: number) {
 }
 
 // ---- 公共施設 ----
-export type CivicId = 'coal' | 'gas' | 'pump' | 'tower' | 'park_s' | 'park_l' | 'plaza';
+// ---- 公共交通の線路 ----
+export type LineKind = 'rail' | 'erail' | 'mono' | 'sub';
+export const LINE_KINDS: LineKind[] = ['rail', 'erail', 'mono', 'sub'];
+export interface LineDef {
+  kind: LineKind;
+  name: string;
+  speedKmh: number; // 駅の停車も含めた平均の速さ
+  cost: number; // 1マスの建設費
+  upkeep: number; // 1マスの月額維持費
+  lift: number; // 地面からの高さ（地下鉄はマイナス）
+  wait: number; // 乗るときの平均の待ち時間（分）
+}
+export const LINES: Record<LineKind, LineDef> = {
+  rail: { kind: 'rail', name: '鉄道', speedKmh: 60, cost: 40, upkeep: 0.4, lift: 0, wait: 4 },
+  erail: { kind: 'erail', name: '高架鉄道', speedKmh: 55, cost: 120, upkeep: 0.8, lift: 8, wait: 3.5 },
+  mono: { kind: 'mono', name: 'モノレール', speedKmh: 75, cost: 160, upkeep: 1.0, lift: 11, wait: 3 },
+  sub: { kind: 'sub', name: '地下鉄', speedKmh: 55, cost: 200, upkeep: 1.2, lift: -9, wait: 3 },
+};
+export const BUS_WAIT = 5; // バスの平均の待ち時間（分）
+export const FARE = 1.0; // 1日の乗客1人あたりの、月の運賃収入
+
+export type CivicId = 'coal' | 'gas' | 'pump' | 'tower' | 'park_s' | 'park_l' | 'plaza' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station';
 
 export interface CivicDef {
   id: CivicId;
@@ -146,6 +167,7 @@ export interface CivicDef {
   pollution?: number; // 大気汚染（施設全体）
   park?: number; // 地価への効果
   needsPower?: boolean;
+  transit?: 'bus' | LineKind; // 公共交通の駅・停留所
   desc: string;
 }
 
@@ -157,6 +179,11 @@ export const CIVIC: Record<CivicId, CivicDef> = {
   park_s: { id: 'park_s', name: '小さな公園', w: 1, h: 1, cost: 150, upkeep: 6, park: 0.12, desc: '周りの地価が少し上がる' },
   park_l: { id: 'park_l', name: '大きな公園', w: 3, h: 3, cost: 1200, upkeep: 30, park: 0.3, desc: '周りの地価が上がる' },
   plaza: { id: 'plaza', name: '広場', w: 2, h: 2, cost: 500, upkeep: 12, park: 0.18, desc: '商業地の地価が上がる' },
+  busstop: { id: 'busstop', name: 'バス停', w: 1, h: 1, cost: 150, upkeep: 15, transit: 'bus', desc: '道路沿いに置くと、近くの住人がバスを使う。路線は自動で決まる' },
+  station: { id: 'station', name: '鉄道の駅', w: 2, h: 2, cost: 3000, upkeep: 60, transit: 'rail', desc: '線路と道路の両方に接するように置く' },
+  el_station: { id: 'el_station', name: '高架鉄道の駅', w: 2, h: 2, cost: 4000, upkeep: 70, transit: 'erail', desc: '高架鉄道の線路と道路の両方に接するように置く' },
+  mono_station: { id: 'mono_station', name: 'モノレールの駅', w: 2, h: 2, cost: 5000, upkeep: 80, transit: 'mono', desc: 'モノレールの線路と道路の両方に接するように置く' },
+  sub_station: { id: 'sub_station', name: '地下鉄の駅', w: 1, h: 1, cost: 3500, upkeep: 70, transit: 'sub', desc: '地下鉄の線路の上か隣に、道路に接するように置く' },
 };
 
 export const DIFFICULTY = [

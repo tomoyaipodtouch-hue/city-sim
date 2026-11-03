@@ -3,8 +3,8 @@
 // 住人は建物単位、さらに出発する道路マス単位にまとめて計算する。
 // 経路探索のノードは「階層 × マス」（地上と上空）。最後の番号は「隣の都市」。
 import { Grid, Ctl, JF } from './grid';
-import { CELL, isDiag } from './constants';
-import { ROADS, RoadType, isHighway } from './defs';
+import { CELL, DX, DY, isDiag } from './constants';
+import { BUS_WAIT, LINES, LineKind, ROADS, RoadType, isHighway } from './defs';
 
 const START_OVERHEAD_MIN = 2; // 家を出て駐車場まで等
 
@@ -62,6 +62,7 @@ class MinHeap {
 export interface Origin {
   cell: number; // 出発する道路マス（地上）
   trips: number;
+  carPenalty?: number; // 車を使う場合に加える時間（分）。車を持たない人の割合を表す
   buildings: { id: number; trips: number }[];
 }
 
@@ -175,8 +176,61 @@ export function edgeMinutes(g: Grid, from: number, d: number, congestion: Float3
 export interface TripOptions {
   externalCap: number; // 隣の都市で受け入れられる数
   externalOnly?: boolean; // 目的地は隣の都市だけ（貨物）
+  carOnly?: boolean; // 車だけ（貨物）
   maxMinutes: number;
   weight: number; // 交通量に加えるときの重み（トラックは大きい）
+}
+
+// ---------------- 公共交通 ----------------
+// ノード番号の並び：
+//   0..N-1 車（地上）, N..2N-1 車（上空）, 2N 徒歩, 3N バス, 4N 鉄道, 5N 高架鉄道, 6N モノレール, 7N 地下鉄
+export const LAYER = { walk: 2, bus: 3, rail: 4, erail: 5, mono: 6, sub: 7 } as const;
+export const LINE_LAYER: Record<LineKind, number> = { rail: 4, erail: 5, mono: 6, sub: 7 };
+export const LAYERS = 8;
+const WALK_MPM = 80; // 歩く速さ（m/分）
+
+export interface TransitModel {
+  walkable: Uint8Array; // 歩ける道路のマス（地上の一般の道路）
+  busStop: Uint8Array; // バスに乗り降りできる道路のマス
+  // 駅：道路のマス（徒歩）⇔ 線路のマス（各線）
+  walkToLine: Map<number, number[]>; // 徒歩のノード → 線のノード
+  lineToWalk: Map<number, number[]>; // 線のノード → 徒歩のノード
+  any: boolean; // 公共交通が1つでもあるか
+}
+
+export function buildTransitModel(
+  g: Grid,
+  stations: { kind: 'bus' | LineKind; roadCells: number[]; lineCells: number[] }[],
+): TransitModel {
+  const N = g.n * g.n;
+  const walkable = new Uint8Array(N), busStop = new Uint8Array(N);
+  for (let i = 0; i < N; i++) {
+    const t = g.road[i];
+    if (t && !isHighway(t) && t !== RoadType.Ramp) walkable[i] = 1;
+  }
+  const walkToLine = new Map<number, number[]>(), lineToWalk = new Map<number, number[]>();
+  for (const st of stations) {
+    if (st.kind === 'bus') {
+      for (const c of st.roadCells) busStop[c] = 1;
+      continue;
+    }
+    const L = LINE_LAYER[st.kind];
+    for (const r of st.roadCells) {
+      const wn = LAYER.walk * N + r;
+      for (const c of st.lineCells) {
+        const ln = L * N + c;
+        (walkToLine.get(wn) ?? walkToLine.set(wn, []).get(wn)!).push(ln);
+        (lineToWalk.get(ln) ?? lineToWalk.set(ln, []).get(ln)!).push(wn);
+      }
+    }
+  }
+  return { walkable, busStop, walkToLine, lineToWalk, any: stations.length > 0 };
+}
+
+export interface ModeStats {
+  car: number;
+  transit: number;
+  walk: number;
 }
 
 export function assignTrips(
@@ -187,8 +241,9 @@ export function assignTrips(
   junctions: JunctionModel,
   random: () => number,
   opt: TripOptions,
-): TripResult {
-  const n = g.n, N = n * n, NN = 2 * N;
+  transit?: TransitModel,
+): TripResult & { modes: ModeStats } {
+  const n = g.n, N = n * n, NN = LAYERS * N;
   const EXT = NN;
   const volume = new Float32Array(NN);
   const served = new Map<number, number>();
@@ -200,6 +255,8 @@ export function assignTrips(
   const stamp = new Int32Array(NN + 1);
   const done = new Int32Array(NN + 1);
   const heap = new MinHeap();
+  const modes: ModeStats = { car: 0, transit: 0, walk: 0 };
+  const useWalk = !opt.carOnly && !!transit;
   let gen = 0;
   let extFree = opt.externalCap;
   let external = 0;
@@ -221,8 +278,20 @@ export function assignTrips(
     return x === 0 || y === 0 || x === n - 1 || y === n - 1;
   };
   const extPenalty = (node: number) => (isHighway(g.nodeType(node)) ? 6 : 14);
+  const lineMask = [null, null, null, null, g.rail, g.erail, g.mono, g.sub] as (Uint8Array | null)[];
+  const lineMin = [0, 0, 0, 0, LINES.rail, LINES.erail, LINES.mono, LINES.sub].map((d) => (typeof d === 'number' ? 0 : CELL / ((d.speedKmh * 1000) / 60)));
+  const lineWait = [0, 0, 0, 0, LINES.rail.wait, LINES.erail.wait, LINES.mono.wait, LINES.sub.wait];
 
   let sumTime = 0, sumTrips = 0;
+  const relax = (v: number, nt: number, u: number, d: number) => {
+    if (stamp[v] !== gen || nt < dist[v]) {
+      stamp[v] = gen;
+      dist[v] = nt;
+      prev[v] = u;
+      inDir[v] = d;
+      heap.push(nt, v);
+    }
+  };
 
   for (const o of order) {
     let remaining = o.trips;
@@ -237,26 +306,26 @@ export function assignTrips(
     }
     gen++;
     heap.clear();
-    dist[o.cell] = START_OVERHEAD_MIN;
-    prev[o.cell] = -1;
-    inDir[o.cell] = -1;
-    stamp[o.cell] = gen;
-    heap.push(START_OVERHEAD_MIN, o.cell);
+    // 出発：車（車を持たない人が多いほど、車のコストが高い）と徒歩
+    relax(o.cell, START_OVERHEAD_MIN + (o.carPenalty ?? 0), -1, -1);
+    if (useWalk && transit!.walkable[o.cell]) relax(LAYER.walk * N + o.cell, 0.5, -1, -1);
     while (heap.size && remaining > 0) {
       const t = heap.topKey();
       const u = heap.pop();
       if (done[u] === gen) continue;
       done[u] = gen;
       if (t > opt.maxMinutes) break;
+      const layer = u === EXT ? -1 : Math.floor(u / N);
+      const cell = u - layer * N;
 
-      // 目的地の判定
+      // 目的地の判定（車で着く、または歩いて着く）
       let take = 0;
       if (u === EXT) {
         take = Math.min(remaining, extFree);
         extFree -= take;
         external += take;
-      } else if (u < N && !opt.externalOnly) {
-        const list = destAt.get(u);
+      } else if ((layer === 0 || layer === LAYER.walk) && !opt.externalOnly) {
+        const list = destAt.get(cell);
         if (list) {
           for (const d of list) {
             const dd = freeById.get(d.id)!;
@@ -274,44 +343,73 @@ export function assignTrips(
         totalFree -= take;
         got += take;
         timeAcc += take * t;
-        // 経路に交通量を加える
+        // 経路に人数を加え、交通手段を数える
         let c = u === EXT ? prev[EXT] : u;
         const w = take * opt.weight;
+        let usedCar = false, usedTransit = false;
         while (c >= 0) {
           volume[c] += w;
+          const l = Math.floor(c / N);
+          if (l <= 1) usedCar = true;
+          else if (l >= LAYER.bus) usedTransit = true;
           c = prev[c];
         }
+        if (usedTransit) modes.transit += take;
+        else if (usedCar) modes.car += take;
+        else modes.walk += take;
         if (totalFree <= 0) break;
       }
       if (u === EXT) continue;
 
-      // 隣へ広げる
-      const cell = u >= N ? u - N : u;
-      const din = inDir[u];
-      g.forEachOut(u, (v, d) => {
-        let jd = 0;
-        if (u < N && din >= 0 && junctions.ctl[cell]) {
-          jd = junctionDelay(g, junctions, cell, din, d);
-          if (jd < 0) return;
-        } else if (din >= 0 && ((d - din + 8) & 7) === 4) return; // Uターンはしない
-        const nt = t + edgeMinutes(g, u, d, congestion) + jd;
-        if (stamp[v] !== gen || nt < dist[v]) {
-          stamp[v] = gen;
-          dist[v] = nt;
-          prev[v] = u;
-          inDir[v] = d;
-          heap.push(nt, v);
-        }
-      });
-      if (extFree > 0 && isEdge(cell)) {
-        const nt = t + extPenalty(u);
-        if (stamp[EXT] !== gen || nt < dist[EXT]) {
-          stamp[EXT] = gen;
-          dist[EXT] = nt;
-          prev[EXT] = u;
-          heap.push(nt, EXT);
-        }
+      if (layer <= 1) {
+        // 車
+        const din = inDir[u];
+        g.forEachOut(u, (v, d) => {
+          let jd = 0;
+          if (u < N && din >= 0 && junctions.ctl[cell]) {
+            jd = junctionDelay(g, junctions, cell, din, d);
+            if (jd < 0) return;
+          } else if (din >= 0 && ((d - din + 8) & 7) === 4) return; // Uターンはしない
+          relax(v, t + edgeMinutes(g, u, d, congestion) + jd, u, d);
+        });
+        if (extFree > 0 && isEdge(cell)) relax(EXT, t + extPenalty(u), u, -1);
+        continue;
       }
+      const T = transit!;
+      const x = cell % n, y = (cell / n) | 0;
+      if (layer === LAYER.walk) {
+        // 歩く（地上の一般の道路の歩道）
+        for (let d = 0; d < 8; d++) {
+          const nx = x + DX[d], ny = y + DY[d];
+          if (nx < 0 || ny < 0 || nx >= n || ny >= n) continue;
+          const j = ny * n + nx;
+          if (!T.walkable[j] || !(g.conn[cell] & (1 << d))) continue;
+          relax(LAYER.walk * N + j, t + (isDiag(d) ? CELL * 1.414 : CELL) / WALK_MPM, u, d);
+        }
+        if (T.busStop[cell]) relax(LAYER.bus * N + cell, t + BUS_WAIT, u, -1);
+        const lines = T.walkToLine.get(u);
+        if (lines) for (const ln of lines) relax(ln, t + lineWait[Math.floor(ln / N)], u, -1);
+        continue;
+      }
+      if (layer === LAYER.bus) {
+        // バスは車と同じ道路を、少し遅く走る（停留所に止まるため）
+        g.forEachOut(cell, (v, d) => {
+          if (v >= N) return;
+          relax(LAYER.bus * N + v, t + edgeMinutes(g, cell, d, congestion) * 1.35, u, d);
+        });
+        if (T.busStop[cell]) relax(LAYER.walk * N + cell, t + 0.3, u, -1);
+        continue;
+      }
+      // 鉄道・高架鉄道・モノレール・地下鉄
+      const mask = lineMask[layer]![cell];
+      for (let d = 0; d < 8; d++) {
+        if (!(mask & (1 << d))) continue;
+        const nx = x + DX[d], ny = y + DY[d];
+        if (nx < 0 || ny < 0 || nx >= n || ny >= n) continue;
+        relax(layer * N + ny * n + nx, t + lineMin[layer] * (isDiag(d) ? 1.414 : 1), u, d);
+      }
+      const exits = T.lineToWalk.get(u);
+      if (exits) for (const wn of exits) relax(wn, t + 0.5, u, -1);
     }
     // 建物ごとに配分
     const ratio = o.trips > 0 ? got / o.trips : 0;
@@ -323,7 +421,7 @@ export function assignTrips(
     sumTime += timeAcc;
     sumTrips += got;
   }
-  return { volume, served, time, filled, external, avgTime: sumTrips ? sumTime / sumTrips : 0 };
+  return { volume, served, time, filled, external, avgTime: sumTrips ? sumTime / sumTrips : 0, modes };
 }
 
 // 混雑度（BPR 関数）

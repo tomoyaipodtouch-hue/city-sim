@@ -9,7 +9,7 @@
 import { CELL, DX, DY, WATER_LEVEL, opp } from './constants';
 
 // 同期・保存の対象になる配列の名前
-export const GRID_U8 = ['road', 'conn', 'flow', 'pline', 'zone', 'zden', 'tree', 'up', 'conn1', 'flow1', 'ictl', 'isplit', 'iflags'] as const;
+export const GRID_U8 = ['road', 'conn', 'flow', 'pline', 'zone', 'zden', 'tree', 'up', 'conn1', 'flow1', 'ictl', 'isplit', 'iflags', 'rail', 'erail', 'mono', 'sub'] as const;
 export const GRID_F32 = ['deck', 'upH', 'lift'] as const;
 export const GRID_I32 = ['bldg'] as const;
 export type GridU8Key = (typeof GRID_U8)[number];
@@ -48,6 +48,11 @@ export class Grid {
   isplit: Uint8Array; // 信号の時間配分（東西方向の青の割合、0..100。50 = 半々）
   iflags: Uint8Array; // 交差点のフラグ（JF）
   pline: Uint8Array; // 送電線
+  // 公共交通の線路（8方向の接続ビット。両方向に通れる）
+  rail: Uint8Array; // 地上の鉄道
+  erail: Uint8Array; // 高架鉄道
+  mono: Uint8Array; // モノレール
+  sub: Uint8Array; // 地下鉄
   zone: Uint8Array; // ゾーンの種類
   zden: Uint8Array; // ゾーンの密度
   bldg: Int32Array; // 建物ID（0 = なし）
@@ -70,6 +75,10 @@ export class Grid {
     this.isplit = new Uint8Array(c).fill(50);
     this.iflags = new Uint8Array(c);
     this.pline = new Uint8Array(c);
+    this.rail = new Uint8Array(c);
+    this.erail = new Uint8Array(c);
+    this.mono = new Uint8Array(c);
+    this.sub = new Uint8Array(c);
     this.zone = new Uint8Array(c);
     this.zden = new Uint8Array(c);
     this.bldg = new Int32Array(c);

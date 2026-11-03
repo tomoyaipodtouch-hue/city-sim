@@ -277,3 +277,41 @@ describe('cloverleaf', () => {
     expect(ss.some((v) => seen.has(v))).toBe(true);
   });
 });
+
+describe('stage 3a transit', () => {
+  it('residents ride the train between distant areas', { timeout: 60000 }, () => {
+    const w = new World(96);
+    w.g.heights.fill(10);
+    w.funds = 1e8;
+    w.sandbox = true;
+    const ok = (c: Parameters<World['exec']>[0]) => {
+      const r = w.exec(c);
+      if (!r.ok) throw new Error(`${c.t}: ${r.msg}`);
+    };
+    // 西の住宅地と東の工業地を、遠回りの道路と、まっすぐな鉄道で結ぶ
+    for (const [x0, x1] of [[4, 20], [70, 86]]) {
+      for (let k = 0; k <= 16; k += 4) ok({ t: 'road', x0, y0: 40 + k, x1, y1: 40 + k, road: RoadType.Street });
+      for (let k = 0; k <= 16; k += 4) ok({ t: 'road', x0: x0 + k, y0: 40, x1: x0 + k, y1: 56, road: RoadType.Street });
+    }
+    ok({ t: 'road', x0: 4, y0: 56, x1: 4, y1: 90, road: RoadType.Street });
+    ok({ t: 'road', x0: 4, y0: 90, x1: 86, y1: 90, road: RoadType.Street });
+    ok({ t: 'road', x0: 86, y0: 90, x1: 86, y1: 56, road: RoadType.Street });
+    ok({ t: 'zone', x0: 5, y0: 41, x1: 19, y1: 55, zone: ZoneType.R, den: 1 });
+    ok({ t: 'zone', x0: 71, y0: 41, x1: 85, y1: 55, zone: ZoneType.I, den: 1 });
+    ok({ t: 'transit', x0: 22, y0: 38, x1: 68, y1: 38, kind: 'rail' });
+    ok({ t: 'road', x0: 20, y0: 36, x1: 20, y1: 40, road: RoadType.Street });
+    ok({ t: 'road', x0: 70, y0: 36, x1: 70, y1: 40, road: RoadType.Street });
+    ok({ t: 'plop', id: 'station', x: 21, y: 36 });
+    ok({ t: 'plop', id: 'station', x: 68, y: 36 });
+    ok({ t: 'plop', id: 'coal', x: 12, y: 70 });
+    ok({ t: 'pline', x0: 10, y0: 70, x1: 5, y1: 70 });
+    ok({ t: 'plop', id: 'pump', x: 6, y: 60 });
+    const t0 = performance.now();
+    for (let m = 0; m < 48; m++) for (let d = 0; d < 30; d++) w.stepDay();
+    const ms = (performance.now() - t0) / 48;
+    const s = w.stats;
+    console.log(`transit: pop=${s.population} riders=${s.transitRiders} share=${JSON.stringify(s.modeShare)} ${ms.toFixed(1)} ms/month`);
+    expect(s.population).toBeGreaterThan(500);
+    expect(s.transitRiders).toBeGreaterThan(50);
+  });
+});

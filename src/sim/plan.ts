@@ -1,7 +1,7 @@
 // ツールの計画（プレビューと実行の両方で使う）
 import { Grid } from './grid';
 import { DX, DY, MAX_ROAD_GRADE, CELL, WATER_LEVEL, dirOf, isDiag, opp } from './constants';
-import { ROADS, RoadType, ZoneType, ZONE_COST, POWER_LINE_COST, CIVIC, CivicId, BRIDGE_COST_MUL, MAX_BRIDGE, OVERPASS_LIFT, RAMP_COST, isHighway } from './defs';
+import { ROADS, RoadType, ZoneType, ZONE_COST, POWER_LINE_COST, CIVIC, CivicId, BRIDGE_COST_MUL, MAX_BRIDGE, OVERPASS_LIFT, RAMP_COST, isHighway, LINES, LineKind } from './defs';
 
 export interface LinePath {
   cells: number[]; // マスの番号
@@ -268,6 +268,13 @@ function planLane(
     } else if (isHighway(g.road[i])) {
       bad.add(i);
       why('高速道路には直接つなげません。ランプを使ってください');
+    }
+    if (L === 0 && g.rail[i]) {
+      // 踏切：まっすぐな線路と直角に交わる場合だけ
+      const ra = axisOf(g.rail[i]);
+      const myAxis = axisOfDir(dirAt(k));
+      const ok = ra.deg === 2 && ra.dg === 0 && ((myAxis === 0 && ra.ns === 2) || (myAxis === 1 && ra.ew === 2)) && !def.highway;
+      if (!ok) { bad.add(i); why('線路とは、まっすぐな場所で直角にしか交差できません（踏切）'); }
     }
   }
   for (let k = 0; k < dirs.length; k++) {
@@ -912,7 +919,7 @@ export function planZone(g: Grid, r: Rect, zone: ZoneType, den: number): ZonePla
         continue;
       }
       const steep = g.cellMaxH(x, y) - g.cellMinH(x, y) > 7;
-      if (g.road[i] || g.bldg[i] || g.isWater(x, y) || steep) {
+      if (g.road[i] || g.bldg[i] || g.isWater(x, y) || steep || hasSurfaceLine(g, i)) {
         skipped.push(i);
         continue;
       }
@@ -932,6 +939,7 @@ export function applyZone(g: Grid, p: ZonePlan) {
 }
 
 export interface BulldozePlan {
+  transit: number[];
   roads: number[];
   lines: number[];
   buildings: number[];
@@ -945,7 +953,7 @@ export function planBulldoze(
   r: Rect,
   bInfo: (id: number) => { civic: boolean; w: number; h: number } | undefined,
 ): BulldozePlan {
-  const roads: number[] = [], lines: number[] = [], trees: number[] = [], cells: number[] = [];
+  const roads: number[] = [], lines: number[] = [], trees: number[] = [], cells: number[] = [], transit: number[] = [];
   const bset = new Set<number>();
   let cost = 0;
   for (let y = r.y0; y <= r.y1; y++) {
@@ -954,6 +962,7 @@ export function planBulldoze(
       cells.push(i);
       if (g.road[i] || g.up[i]) { roads.push(i); cost += g.up[i] && isHighway(g.up[i]) ? 20 : 5; }
       if (g.pline[i]) { lines.push(i); cost += 1; }
+      if (g.rail[i] || g.erail[i] || g.mono[i] || g.sub[i]) { transit.push(i); cost += 10; }
       if (g.bldg[i]) bset.add(g.bldg[i]);
       else if (g.tree[i]) { trees.push(i); cost += 1; }
     }
@@ -962,7 +971,7 @@ export function planBulldoze(
     const b = bInfo(id);
     if (b) cost += b.civic ? 50 * b.w * b.h : 15 * b.w * b.h;
   }
-  return { roads, lines, buildings: [...bset], trees, cost, cells };
+  return { roads, lines, buildings: [...bset], trees, cost, cells, transit };
 }
 
 // 送電線
@@ -1008,6 +1017,7 @@ export function planPlop(g: Grid, id: CivicId, cx: number, cy: number): PlopPlan
       cells.push(i);
       if (g.road[i]) reason = reason || '道路があります';
       if (g.bldg[i]) reason = reason || '建物があります';
+      if (hasSurfaceLine(g, i)) reason = reason || '線路があります';
       if (g.isWater(xx, yy)) reason = reason || '水の上には置けません';
       lo = Math.min(lo, g.cellMinH(xx, yy));
       hi = Math.max(hi, g.cellMaxH(xx, yy));
@@ -1015,6 +1025,19 @@ export function planPlop(g: Grid, id: CivicId, cx: number, cy: number): PlopPlan
     }
   }
   if (hi - lo > 10) reason = reason || '地面の傾きが大きすぎます';
+  // 駅・停留所は、線路と道路に接している必要がある
+  if (!reason && def.transit) {
+    const around: number[] = [];
+    for (let yy = y - 1; yy <= y + def.h; yy++)
+      for (let xx = x - 1; xx <= x + def.w; xx++) if (g.inb(xx, yy) && !(xx >= x && xx < x + def.w && yy >= y && yy < y + def.h)) around.push(g.idx(xx, yy));
+    const localRoad = (i: number) => g.road[i] !== 0 && !isHighway(g.road[i]) && g.road[i] !== RoadType.Ramp;
+    if (!around.some(localRoad)) reason = '道路に接するように置いてください';
+    else if (def.transit !== 'bus') {
+      const mask = g[def.transit];
+      const near = def.transit === 'sub' ? [...around, ...cells] : around;
+      if (!near.some((i) => mask[i])) reason = `${LINES[def.transit].name}の線路に接するように置いてください`;
+    }
+  }
   const flatH = sum / cells.length;
   const cost = def.cost + Math.round((hi - lo) * def.w * def.h * 2);
   return { ok: !reason, id, x, y, cells, cost, reason, flatH };
@@ -1062,5 +1085,94 @@ export function regradeApproaches(g: Grid) {
         if (rise > g.lift[a]) g.lift[a] = rise;
       });
     }
+  }
+}
+
+// ---- 公共交通の線路 ----
+// 地上を通る線路（地上の鉄道・高架鉄道・モノレール）があるか。地下鉄は地上に影響しない
+export function hasSurfaceLine(g: Grid, i: number) {
+  return g.rail[i] !== 0 || g.erail[i] !== 0 || g.mono[i] !== 0;
+}
+
+export interface TransitPlan {
+  ok: boolean;
+  kind: LineKind;
+  path: LinePath;
+  cost: number;
+  bad: Set<number>;
+  reason: string;
+}
+
+export function planTransitLine(g: Grid, path: LinePath, kind: LineKind): TransitPlan {
+  const def = LINES[kind];
+  const n = g.n;
+  const bad = new Set<number>();
+  let reason = '';
+  const why = (r: string) => { reason = reason || r; };
+  const mask = g[kind];
+  let cost = 0;
+  const { cells, dirs } = path;
+  for (let k = 0; k < cells.length; k++) {
+    const i = cells[k];
+    const x = i % n, y = (i / n) | 0;
+    const d = dirs[Math.min(k, dirs.length - 1)] ?? 0;
+    const len = k > 0 && isDiag(dirs[k - 1]) ? 1.41 : 1;
+    if (!mask[i]) cost += def.cost * len;
+    if (kind === 'sub') continue;
+    if (g.bldg[i]) { bad.add(i); why('建物があります。先に取り壊してください'); }
+    if (kind === 'rail') {
+      if (g.isWater(x, y)) { bad.add(i); why('地上の線路は水の上に引けません（高架鉄道を使ってください）'); }
+      if (g.up[i] && !isHighway(g.up[i])) { bad.add(i); why('立体交差の道路があります'); }
+      const r = g.road[i];
+      if (r) {
+        // 踏切：まっすぐな道路と直角に交わる場合だけ
+        const ax = axisOf(g.conn[i]);
+        const ok = !isHighway(r) && r !== RoadType.Ramp && ax.deg === 2 && ax.dg === 0 && !isDiag(d) && ((d === 0 || d === 4) ? ax.ns === 2 : ax.ew === 2);
+        if (!ok) { bad.add(i); why('道路とは、まっすぐな場所で直角にしか交差できません（踏切）'); }
+      }
+    } else {
+      // 高架：上空の道路とは重ねられない
+      if (g.up[i]) { bad.add(i); why('高架の道路と重なっています'); }
+      const other = kind === 'erail' ? g.mono : g.erail;
+      if (other[i]) { bad.add(i); why('ほかの高架の線路と重なっています'); }
+    }
+  }
+  for (let k = 0; k < dirs.length; k++) {
+    const d = dirs[k];
+    if (!isDiag(d)) continue;
+    const i = cells[k];
+    const x = i % n, y = (i / n) | 0;
+    const ax = x + DX[d], ay = y, bx = x, by = y + DY[d];
+    if (!g.inb(ax, ay) || !g.inb(bx, by)) continue;
+    const dd = dirOf(bx - ax, by - ay);
+    if (mask[ay * n + ax] & (1 << dd)) { bad.add(i); why('斜めの線路どうしは交差できません'); }
+  }
+  return { ok: bad.size === 0 && cells.length > 1, kind, path, cost: Math.round(cost), bad, reason };
+}
+
+export function applyTransitLine(g: Grid, p: TransitPlan) {
+  const mask = g[p.kind];
+  const { cells, dirs } = p.path;
+  for (let k = 0; k < dirs.length; k++) {
+    mask[cells[k]] |= 1 << dirs[k];
+    mask[cells[k + 1]] |= 1 << opp(dirs[k]);
+  }
+  if (p.kind !== 'sub') for (const i of cells) {
+    g.tree[i] = 0;
+    if (!g.road[i]) { g.zone[i] = 0; g.zden[i] = 0; }
+  }
+}
+
+export function removeTransitAt(g: Grid, i: number) {
+  const n = g.n;
+  const x = i % n, y = (i / n) | 0;
+  for (const kind of ['rail', 'erail', 'mono', 'sub'] as const) {
+    const mask = g[kind];
+    for (let d = 0; d < 8; d++) {
+      if (!(mask[i] & (1 << d))) continue;
+      const nx = x + DX[d], ny = y + DY[d];
+      if (g.inb(nx, ny)) mask[ny * n + nx] &= ~(1 << opp(d));
+    }
+    mask[i] = 0;
   }
 }
