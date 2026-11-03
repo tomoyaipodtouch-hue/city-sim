@@ -3,7 +3,7 @@ import { Grid, GRID_U8, GRID_F32, Ctl } from './grid';
 import { Rng } from './rng';
 import { DAYS_PER_MONTH, DX, DY } from './constants';
 import {
-  CIVIC, CivicId, DEFAULT_TAX, DIFFICULTY, isHighway, LineKind, LINES, FARE, BUS_STOP_UPKEEP, GROW, GROW_KINDS, GrowKind, IND_DENSITY_MUL, maxFloorsFor, POWER_LINE_UPKEEP, ROADS, RoadType,
+  CIVIC, CivicId, DEFAULT_TAX, DEPT_NAMES, Dept, DIFFICULTY, isHighway, SERVICE_DEPT, LineKind, LINES, FARE, BUS_STOP_UPKEEP, GROW, GROW_KINDS, GrowKind, IND_DENSITY_MUL, maxFloorsFor, POWER_LINE_UPKEEP, ROADS, RoadType,
   ZONE_KINDS, ZoneType,
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
@@ -11,6 +11,7 @@ import {
   applyCloverleaf, applyDiamond, applyRamp, applyTransitLine, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
 } from './plan';
 import { CELL } from './constants';
+import { defaultServiceState, makeServiceMaps, ServiceMaps, ServiceState, updateServices } from './services';
 import { assignTrips, buildJunctions, buildTransitModel, congestionFactor, Destination, LAYER, Origin } from './traffic';
 
 export enum BState {
@@ -42,6 +43,7 @@ export interface Building {
   freight?: number; // 貨物を運べた割合（工業）
   freightTime?: number; // 貨物の輸送時間（分）
   note?: string; // 公共施設の状態（情報の画面に出す）
+  fund?: number; // 施設ごとの予算（%、公共サービス）
   employed: number; // 職のある住人の割合（住宅）
   badMonths: number;
 }
@@ -68,9 +70,10 @@ export interface Stats {
   neighborConnected: boolean;
   transitRiders: number;
   modeShare: { car: number; transit: number; walk: number };
+  services: { funding: Record<Dept, number>; strike: Record<Dept, number>; eq: { child: number; adult: number; elderly: number }; hq: number; lifeExp: number; crime: number; garbage: { produced: number; handled: number; excess: number } };
 }
 
-export interface Maps {
+export interface Maps extends ServiceMaps {
   power: Uint8Array;
   water: Uint8Array;
   landValue: Uint8Array;
@@ -118,6 +121,7 @@ export interface SaveData {
   traffic: Float32Array;
   history: { pop: number; funds: number }[];
   milestones: number[];
+  services?: ServiceState;
 }
 
 export interface CmdResult {
@@ -138,7 +142,9 @@ export type Command =
   | { t: 'clover'; x: number; y: number }
   | { t: 'transit'; x0: number; y0: number; x1: number; y1: number; kind: LineKind }
   | { t: 'busstop'; x: number; y: number }
-  | { t: 'junction'; cell: number; ctl: number; split: number; flags: number };
+  | { t: 'junction'; cell: number; ctl: number; split: number; flags: number }
+  | { t: 'funding'; dept: Dept; value: number }
+  | { t: 'facilityFund'; id: number; value: number };
 
 const emptyKinds = (v: number) => Object.fromEntries(GROW_KINDS.map((k) => [k, v])) as Record<GrowKind, number>;
 
@@ -212,6 +218,7 @@ export class World {
       freight: new Float32Array(c * 2),
       jctl: new Uint8Array(c),
       riders: new Float32Array(c * 5),
+      ...makeServiceMaps(c),
       congestion,
     };
   }
@@ -256,6 +263,7 @@ export class World {
       traffic: this.maps.traffic.slice(),
       history: this.history.slice(),
       milestones: this.milestones.slice(),
+      services: JSON.parse(JSON.stringify(this.services)),
     };
   }
 
@@ -287,6 +295,7 @@ export class World {
     if (d.traffic && d.traffic.length === w.maps.traffic.length) w.maps.traffic.set(d.traffic);
     w.history = d.history || [];
     w.milestones = d.milestones || [];
+    if (d.services) w.services = { ...defaultServiceState(), ...d.services };
     w.recomputeAll();
     return w;
   }
@@ -425,6 +434,18 @@ export class World {
         this.maps.jctl.set(buildJunctions(g, this.maps.traffic).ctl);
         this.mapsVersion++;
         this.gridVersion++;
+        return { ok: true };
+      }
+      case 'funding': {
+        this.services.funding[c.dept] = Math.max(0, Math.min(150, Math.round(c.value)));
+        this.updateStats();
+        return { ok: true };
+      }
+      case 'facilityFund': {
+        const b = this.buildings.get(c.id);
+        if (!b || !b.civic) return { ok: false, msg: '施設が見つかりません' };
+        b.fund = Math.max(0, Math.min(150, Math.round(c.value)));
+        this.buildingVersion++;
         return { ok: true };
       }
       case 'tax': {
@@ -634,6 +655,19 @@ export class World {
     const res = Math.min(1, this.resDensity[i] / 40);
     const traffic = Math.min(1, this.maps.traffic[i] / 1200);
     const water = this.maps.water[i] ? 0 : 0.15;
+    // 公共サービス：犯罪・火災の危険・ゴミは魅力を下げ、医療と教育は上げる
+    const crime = this.maps.crime[i] / 255, fire = this.maps.fireRisk[i] / 255;
+    const hlt = this.maps.health[i] / 255, edu = this.maps.edu[i] / 255;
+    const garbage = this.svc.garbageLevel;
+    const eq = this.services.eq.adult;
+    const svcR = -0.45 * crime - 0.25 * fire - 0.35 * garbage + 0.15 * hlt + 0.1 * edu;
+    const svcC = -0.3 * crime - 0.2 * fire - 0.25 * garbage;
+    const base = this.desirabilityBase(kind, lv, pol, commutePen, res, traffic, water, eq);
+    const zone = GROW[kind].zone;
+    return base + (zone === ZoneType.R ? svcR * (kind === 'R1' ? 0.6 : kind === 'R3' ? 1.4 : 1) : zone === ZoneType.C ? svcC : -0.15 * fire - 0.2 * garbage);
+  }
+
+  private desirabilityBase(kind: GrowKind, lv: number, pol: number, commutePen: number, res: number, traffic: number, water: number, eq: number): number {
     switch (kind) {
       case 'R1': return 0.7 + 0.1 * lv - 0.4 * pol - commutePen - water * 0.5;
       case 'R2': return 0.3 + 0.7 * lv - 0.9 * pol - commutePen * 1.2 - water;
@@ -646,6 +680,7 @@ export class World {
       case 'IA': return 0.75 - 0.6 * lv - 0.5 * res;
       case 'ID': return 0.7 - 0.2 * lv - water * 0.5;
       case 'IM': return 0.5 + 0.1 * lv - 0.3 * pol - water;
+      case 'IH': return 0.1 + 0.6 * lv - 1.0 * pol - water * 1.5 + Math.max(0, (eq - 70) / 80);
     }
   }
 
@@ -995,6 +1030,8 @@ export class World {
         v += Math.min(0.35, parkFx[i] * 6);
         v += g.tree[i] ? 0.04 : 0;
         v -= Math.min(0.6, pol[i] * 0.9);
+        v -= (this.maps.crime[i] / 255) * 0.25 + this.svc.garbageLevel * 0.15;
+        v += (this.maps.health[i] / 255) * 0.05 + (this.maps.edu[i] / 255) * 0.06;
         const cm = this.commuteAtCell[i];
         if (cm > 25) v -= Math.min(0.25, (cm - 25) / 120);
         lv[i] = Math.max(0, Math.min(1, v));
@@ -1209,6 +1246,8 @@ export class World {
   }
   junctionCtl: Uint8Array = new Uint8Array(0);
   transitRiders = 0; // 1日の公共交通の乗客数
+  services: ServiceState = defaultServiceState();
+  private svc = { lifeExp: 72, crimeAvg: 0, garbageLevel: 0 };
   private airportBoost = 0;
   private seaportBoost = 0;
   modeShare = { car: 0, transit: 0, walk: 0 };
@@ -1229,7 +1268,7 @@ export class World {
         else popR3 += b.occ;
       } else capK[k] += b.cap;
     }
-    const jobs = capK.CS1 + capK.CS2 + capK.CS3 + capK.CO2 + capK.CO3 + capK.IA + capK.ID + capK.IM;
+    const jobs = capK.CS1 + capK.CS2 + capK.CS3 + capK.CO2 + capK.CO3 + capK.IA + capK.ID + capK.IM + capK.IH;
     const ext = this.neighborConnected ? 200 + pop * 0.25 : 0;
     const workers = pop * 0.5;
     const unemployment = workers > 50 ? Math.max(0, (workers - this.employedTotal) / workers) : 0;
@@ -1250,6 +1289,12 @@ export class World {
     for (const k of ['CO2', 'CO3'] as const) {
       raw[k] = wantCO[k] > 0 ? (wantCO[k] - capK[k]) / Math.max(60, wantCO[k] * 0.5) : -0.3;
     }
+    const eqA = this.services.eq.adult;
+    const wantIH = pop > 1500 && eqA > 70 ? pop * 0.07 * Math.min(1.5, (eqA - 70) / 50) : 0;
+    raw.IH = wantIH > 0 ? (wantIH - capK.IH) / Math.max(60, wantIH * 0.5) + unemployment * 0.6 : -0.3;
+    // オフィスは教育水準が高いほど来やすい
+    raw.CO2 += (eqA - 70) / 200;
+    raw.CO3 += (eqA - 90) / 150;
     const want = { IA: 180 + pop * 0.02, ID: 260 + pop * 0.12 + ext * 0.15, IM: pop > 1200 ? pop * 0.09 : 0 };
     for (const k of ['IA', 'ID', 'IM'] as const) {
       raw[k] = want[k] > 0 ? (want[k] - capK[k]) / Math.max(60, want[k] * 0.5) : -0.3;
@@ -1313,8 +1358,14 @@ export class World {
     for (const b of this.buildings.values()) {
       if (b.civic) {
         const def = CIVIC[b.type as CivicId];
+        if (def.service) {
+          const dept = SERVICE_DEPT[def.service];
+          const k = DEPT_NAMES[dept];
+          exp[k] = (exp[k] || 0) + def.upkeep * (this.services.funding[dept] / 100) * ((b.fund ?? 100) / 100);
+          continue;
+        }
         const cat = def.power ? '電力' : def.water ? '水道' : def.transit ? '公共交通' : '公園';
-        exp[cat] += def.upkeep;
+        exp[cat] += def.upkeep * (def.transit ? this.services.funding.transit / 100 : 1);
         continue;
       }
       if (b.state !== BState.Normal) continue;
@@ -1368,12 +1419,21 @@ export class World {
     return p;
   }
 
+  private updateServicesMonthly() {
+    const r = updateServices(this.g, this.buildings.values(), this.services, this.maps, {
+      pollution: this.maps.pollution, landValue: this.maps.landValue, resDensity: this.resDensity,
+    });
+    for (const msg of r.news) this.pushNews(msg);
+    this.svc = { lifeExp: r.lifeExp, crimeAvg: r.crimeAvg, garbageLevel: r.garbageLevel };
+  }
+
   private monthly() {
     this.checkNeighbor();
     this.updatePower();
     this.updateWater();
     this.updateTraffic();
     this.updatePollutionAndLandValue();
+    this.updateServicesMonthly();
     this.updateDemand();
     this.updateOccupancy();
     this.updateBudget();
@@ -1425,7 +1485,7 @@ export class World {
       workers: Math.round(pop * 0.5),
       employed: Math.round(this.employedTotal),
       demand: { ...d },
-      demandRCI: [Math.max(d.R1, d.R2, d.R3), Math.max(d.CS1, d.CS2, d.CS3, d.CO2, d.CO3), Math.max(d.IA, d.ID, d.IM)],
+      demandRCI: [Math.max(d.R1, d.R2, d.R3), Math.max(d.CS1, d.CS2, d.CS3, d.CO2, d.CO3), Math.max(d.IA, d.ID, d.IM, d.IH)],
       powerSupply: this.powerSupply,
       powerDemand: Math.round(this.powerDemand),
       waterSupply: this.waterSupply,
@@ -1439,6 +1499,10 @@ export class World {
       neighborConnected: this.neighborConnected,
       transitRiders: this.transitRiders,
       modeShare: this.modeShare,
+      services: {
+        funding: { ...this.services.funding }, strike: { ...this.services.strike }, eq: { ...this.services.eq }, hq: this.services.hq,
+        lifeExp: this.svc.lifeExp, crime: this.svc.crimeAvg, garbage: { ...this.services.garbage },
+      },
     };
   }
 }

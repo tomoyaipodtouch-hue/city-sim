@@ -66,8 +66,8 @@ export const ZONE_COST = [
 ];
 
 // ---- 成長する建物の種類（SC4 と同じ区分） ----
-export type GrowKind = 'R1' | 'R2' | 'R3' | 'CS1' | 'CS2' | 'CS3' | 'CO2' | 'CO3' | 'IA' | 'ID' | 'IM';
-export const GROW_KINDS: GrowKind[] = ['R1', 'R2', 'R3', 'CS1', 'CS2', 'CS3', 'CO2', 'CO3', 'IA', 'ID', 'IM'];
+export type GrowKind = 'R1' | 'R2' | 'R3' | 'CS1' | 'CS2' | 'CS3' | 'CO2' | 'CO3' | 'IA' | 'ID' | 'IM' | 'IH';
+export const GROW_KINDS: GrowKind[] = ['R1', 'R2', 'R3', 'CS1', 'CS2', 'CS3', 'CO2', 'CO3', 'IA', 'ID', 'IM', 'IH'];
 
 type Size = [number, number];
 export interface GrowDef {
@@ -103,6 +103,7 @@ export const GROW: Record<GrowKind, GrowDef> = {
   IA: { kind: 'IA', zone: ZoneType.I, name: '農業', capPerCell: 1.5, floorCap: 0, wealth: 0.5, dens: [0], sizes: [[[3, 3], [2, 3], [3, 2], [4, 4], [2, 2]]], floors: [[1, 1]], pollution: 0.05, powerPer: 0.05, waterPer: 0.3 },
   ID: { kind: 'ID', zone: ZoneType.I, name: '汚染型工業', capPerCell: 18, floorCap: 0, wealth: 0.8, dens: [0, 1, 2], sizes: [[[2, 2], [3, 2], [2, 3], [3, 3], [1, 2]], S_IND_MID, S_IND_HIGH], floors: [[1, 1], [1, 1], [1, 1]], pollution: 1.0, powerPer: 0.12, waterPer: 0.1 },
   IM: { kind: 'IM', zone: ZoneType.I, name: '製造業', capPerCell: 14, floorCap: 0, wealth: 1.1, dens: [0, 1, 2], sizes: [[[2, 2], [3, 2], [2, 3], [3, 3]], S_IND_MID, S_IND_HIGH], floors: [[1, 1], [1, 1], [1, 1]], pollution: 0.45, powerPer: 0.1, waterPer: 0.1 },
+  IH: { kind: 'IH', zone: ZoneType.I, name: 'ハイテク産業', capPerCell: 10, floorCap: 0, wealth: 1.7, dens: [1, 2], sizes: [[], S_IND_MID, S_IND_HIGH], floors: [[1, 1], [1, 1], [1, 1]], pollution: 0.05, powerPer: 0.14, waterPer: 0.06 },
 };
 
 // 工業は密度で1マスあたりの雇用数が増える
@@ -111,14 +112,14 @@ export const IND_DENSITY_MUL = [1, 1.7, 2.6];
 export const ZONE_KINDS: Record<number, GrowKind[]> = {
   [ZoneType.R]: ['R1', 'R2', 'R3'],
   [ZoneType.C]: ['CS1', 'CS2', 'CS3', 'CO2', 'CO3'],
-  [ZoneType.I]: ['IA', 'ID', 'IM'],
+  [ZoneType.I]: ['IA', 'ID', 'IM', 'IH'],
 };
 
 export const TAX_LABELS: Record<GrowKind, string> = {
   R1: '住宅 $', R2: '住宅 $$', R3: '住宅 $$$',
   CS1: '商業 $', CS2: '商業 $$', CS3: '商業 $$$',
   CO2: 'オフィス $$', CO3: 'オフィス $$$',
-  IA: '農業', ID: '汚染型工業', IM: '製造業',
+  IA: '農業', ID: '汚染型工業', IM: '製造業', IH: 'ハイテク産業',
 };
 
 // 人口に応じた最大の階数（小さな街に超高層ビルは建たない）
@@ -155,8 +156,24 @@ export const BUS_STOP_COST = 150;
 export const BUS_STOP_UPKEEP = 15;
 export const FARE = 1.0; // 1日の乗客1人あたりの、月の運賃収入
 
+// ---- 公共サービス ----
+export type ServiceKind = 'police' | 'fire' | 'health' | 'school' | 'high' | 'college' | 'library' | 'landfill' | 'incinerator' | 'recycling';
+// 予算の部門
+export type Dept = 'police' | 'fire' | 'health' | 'education' | 'transit' | 'garbage';
+export const DEPTS: Dept[] = ['police', 'fire', 'health', 'education', 'transit', 'garbage'];
+export const DEPT_NAMES: Record<Dept, string> = { police: '警察', fire: '消防', health: '医療', education: '教育', transit: '公共交通', garbage: 'ゴミ処理' };
+export const SERVICE_DEPT: Record<ServiceKind, Dept> = {
+  police: 'police', fire: 'fire', health: 'health', school: 'education', high: 'education', college: 'education', library: 'education',
+  landfill: 'garbage', incinerator: 'garbage', recycling: 'garbage',
+};
+// ゴミ（1人・1雇用あたり、月）
+export const GARBAGE_PER_RES = 0.9;
+export const GARBAGE_PER_JOB = 0.6;
+
 export type CivicId = 'coal' | 'gas' | 'pump' | 'tower' | 'park_s' | 'park_l' | 'plaza' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station'
-  | 'ferry_p' | 'ferry_c' | 'seaport' | 'airport_s' | 'airport_l' | 'freight_st';
+  | 'ferry_p' | 'ferry_c' | 'seaport' | 'airport_s' | 'airport_l' | 'freight_st'
+  | 'police_s' | 'police_l' | 'fire_s' | 'fire_l' | 'clinic' | 'hospital' | 'school_e' | 'school_h' | 'college' | 'library'
+  | 'landfill' | 'incinerator' | 'recycling';
 
 export interface CivicDef {
   id: CivicId;
@@ -176,6 +193,9 @@ export interface CivicDef {
   seaport?: boolean;
   airport?: number; // 空港の規模（1 = 小, 2 = 大）
   freightRail?: boolean; // 貨物駅
+  service?: ServiceKind; // 公共サービス
+  radius?: number; // 効果が届く範囲（マス）
+  capacity?: number; // 受け入れ人数（学校の席、病院のベッドなど）／ゴミの処理量（月）
   desc: string;
 }
 
@@ -197,6 +217,19 @@ export const CIVIC: Record<CivicId, CivicDef> = {
   seaport: { id: 'seaport', name: '港', w: 4, h: 4, cost: 25000, upkeep: 300, seaport: true, waterfront: true, pollution: 6, desc: '工業の需要が上がり、トラックが荷物を運べる。水域がマップの端まで続いている必要がある' },
   airport_s: { id: 'airport_s', name: '空港（小）', w: 4, h: 10, cost: 30000, upkeep: 350, airport: 1, pollution: 4, desc: '商業とオフィスの需要が上がる。周りは騒音で地価が下がる' },
   airport_l: { id: 'airport_l', name: '空港（大）', w: 7, h: 16, cost: 90000, upkeep: 900, airport: 2, pollution: 10, desc: '商業とオフィスの需要が大きく上がる。周りは騒音で地価が下がる' },
+  police_s: { id: 'police_s', name: '交番', w: 1, h: 1, cost: 800, upkeep: 60, service: 'police', radius: 9, desc: '周りの犯罪を減らす（小さな範囲）' },
+  police_l: { id: 'police_l', name: '警察署', w: 3, h: 2, cost: 5000, upkeep: 260, service: 'police', radius: 20, desc: '広い範囲の犯罪を減らす' },
+  fire_s: { id: 'fire_s', name: '消防分署', w: 2, h: 2, cost: 2500, upkeep: 120, service: 'fire', radius: 14, desc: '周りの火災の危険を減らす' },
+  fire_l: { id: 'fire_l', name: '消防署', w: 3, h: 3, cost: 7000, upkeep: 300, service: 'fire', radius: 24, desc: '広い範囲の火災の危険を減らす' },
+  clinic: { id: 'clinic', name: '診療所', w: 2, h: 2, cost: 3000, upkeep: 150, service: 'health', radius: 14, capacity: 2500, desc: '周りの住人の健康を守る（2,500人まで）' },
+  hospital: { id: 'hospital', name: '病院', w: 3, h: 4, cost: 15000, upkeep: 600, service: 'health', radius: 28, capacity: 12000, desc: '広い範囲の住人の健康を守る（12,000人まで）' },
+  school_e: { id: 'school_e', name: '小中学校', w: 3, h: 2, cost: 4000, upkeep: 220, service: 'school', radius: 18, capacity: 1200, desc: '子どもの教育水準を上げる（1,200人分の席）' },
+  school_h: { id: 'school_h', name: '高校', w: 3, h: 3, cost: 8000, upkeep: 380, service: 'high', radius: 26, capacity: 1500, desc: '子どもの教育水準をさらに上げる（1,500人分の席）' },
+  college: { id: 'college', name: '大学', w: 4, h: 4, cost: 30000, upkeep: 900, service: 'college', capacity: 5000, desc: '大人の教育水準を上げる。街全体に効く' },
+  library: { id: 'library', name: '図書館', w: 2, h: 2, cost: 2500, upkeep: 100, service: 'library', radius: 16, desc: '周りの住人の教育水準を少し上げる' },
+  landfill: { id: 'landfill', name: '埋立地', w: 4, h: 4, cost: 2000, upkeep: 80, service: 'landfill', capacity: 6000, pollution: 4, desc: '月 6,000 のゴミを処理する。周りの地価が下がる' },
+  incinerator: { id: 'incinerator', name: '焼却場', w: 3, h: 3, cost: 9000, upkeep: 260, service: 'incinerator', capacity: 9000, pollution: 14, desc: '月 9,000 のゴミを処理する。大気汚染がある' },
+  recycling: { id: 'recycling', name: 'リサイクルセンター', w: 3, h: 2, cost: 6000, upkeep: 200, service: 'recycling', capacity: 4000, desc: 'ゴミを月 4,000 減らす' },
   freight_st: { id: 'freight_st', name: '貨物駅', w: 3, h: 2, cost: 8000, upkeep: 120, freightRail: true, desc: '線路と道路に接するように置く。線路がマップの端まで続いていれば、トラックの荷物を鉄道で運ぶ' },
 };
 

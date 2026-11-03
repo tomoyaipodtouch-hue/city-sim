@@ -189,6 +189,7 @@ export const LINE_LAYER: Record<LineKind, number> = { rail: 4, erail: 5, mono: 6
 export const LAYERS = 8;
 // 歩く速さ（m/分）。実際は 80m/分 くらいだが、人は長く歩くのを嫌うので、半分の速さとして扱う
 const WALK_MPM = 40;
+const WALK_MAX_MIN = 15; // 1回に歩く時間の上限（体感、分）。600m くらい
 
 export interface TransitModel {
   walkable: Uint8Array; // 歩ける道路のマス（地上の一般の道路）
@@ -257,6 +258,7 @@ export function assignTrips(
   const dist = new Float32Array(NN + 1);
   const prev = new Int32Array(NN + 1);
   const inDir = new Int8Array(NN + 1);
+  const walkFrom = new Float32Array(NN + 1); // 歩き始めた時刻（1回に歩く時間の上限に使う）
   const stamp = new Int32Array(NN + 1);
   const done = new Int32Array(NN + 1);
   const heap = new MinHeap();
@@ -288,12 +290,13 @@ export function assignTrips(
   const lineWait = [0, 0, 0, 0, LINES.rail.wait, LINES.erail.wait, LINES.mono.wait, LINES.sub.wait];
 
   let sumTime = 0, sumTrips = 0;
-  const relax = (v: number, nt: number, u: number, d: number) => {
+  const relax = (v: number, nt: number, u: number, d: number, wf = 0) => {
     if (stamp[v] !== gen || nt < dist[v]) {
       stamp[v] = gen;
       dist[v] = nt;
       prev[v] = u;
       inDir[v] = d;
+      walkFrom[v] = wf;
       heap.push(nt, v);
     }
   };
@@ -311,15 +314,17 @@ export function assignTrips(
     }
     gen++;
     heap.clear();
+    // 車を持たない人は、公共交通がない街では歩いて行ける範囲（30分）だけを探す（計算を軽くするため）
+    const maxMin = (o.carPenalty ?? 0) >= 999 && !(transit?.any || transit?.walkLinks.size) ? Math.min(30, opt.maxMinutes) : opt.maxMinutes;
     // 出発：車（車を持たない人が多いほど、車のコストが高い）と徒歩
     relax(o.cell, START_OVERHEAD_MIN + (o.carPenalty ?? 0), -1, -1);
-    if (useWalk && transit!.walkable[o.cell]) relax(LAYER.walk * N + o.cell, 0.5, -1, -1);
+    if (useWalk && transit!.walkable[o.cell]) relax(LAYER.walk * N + o.cell, 0.5, -1, -1, 0);
     while (heap.size && remaining > 0) {
       const t = heap.topKey();
       const u = heap.pop();
       if (done[u] === gen) continue;
       done[u] = gen;
-      if (t > opt.maxMinutes) break;
+      if (t > maxMin) break;
       const layer = u === EXT ? -1 : Math.floor(u / N);
       const cell = u - layer * N;
 
@@ -390,17 +395,18 @@ export function assignTrips(
       const T = transit!;
       const x = cell % n, y = (cell / n) | 0;
       if (layer === LAYER.walk) {
-        // 歩く（地上の一般の道路の歩道）
-        for (let d = 0; d < 8; d++) {
+        // 歩く（地上の一般の道路の歩道）。1回に歩くのは体感で15分まで
+        const wf = walkFrom[u];
+        for (let d = 0; d < 8 && t - wf < WALK_MAX_MIN; d++) {
           const nx = x + DX[d], ny = y + DY[d];
           if (nx < 0 || ny < 0 || nx >= n || ny >= n) continue;
           const j = ny * n + nx;
           if (!T.walkable[j] || !(g.conn[cell] & (1 << d))) continue;
-          relax(LAYER.walk * N + j, t + (isDiag(d) ? CELL * 1.414 : CELL) / WALK_MPM, u, d);
+          relax(LAYER.walk * N + j, t + (isDiag(d) ? CELL * 1.414 : CELL) / WALK_MPM, u, d, wf);
         }
         if (T.busStop[cell]) relax(LAYER.bus * N + cell, t + BUS_WAIT, u, -1);
         const ferries = T.walkLinks.get(u);
-        if (ferries) for (const [v, m] of ferries) relax(v, t + m, u, -1);
+        if (ferries) for (const [v, m] of ferries) relax(v, t + m, u, -1, t + m);
         const lines = T.walkToLine.get(u);
         if (lines) for (const ln of lines) relax(ln, t + lineWait[Math.floor(ln / N)], u, -1);
         continue;
@@ -411,7 +417,7 @@ export function assignTrips(
           if (v >= N) return;
           relax(LAYER.bus * N + v, t + edgeMinutes(g, cell, d, congestion) * 1.35, u, d);
         });
-        if (T.busStop[cell]) relax(LAYER.walk * N + cell, t + 0.3, u, -1);
+        if (T.busStop[cell]) relax(LAYER.walk * N + cell, t + 0.3, u, -1, t + 0.3);
         continue;
       }
       // 鉄道・高架鉄道・モノレール・地下鉄
@@ -423,7 +429,7 @@ export function assignTrips(
         relax(layer * N + ny * n + nx, t + lineMin[layer] * (isDiag(d) ? 1.414 : 1), u, d);
       }
       const exits = T.lineToWalk.get(u);
-      if (exits) for (const wn of exits) relax(wn, t + 0.5, u, -1);
+      if (exits) for (const wn of exits) relax(wn, t + 0.5, u, -1, t + 0.5);
       // 鉄道・高架鉄道は、マップの端から隣の都市へ行ける
       if (T.railToExt && (layer === LAYER.rail || layer === LAYER.erail) && extFree > 0 && isEdge(cell)) relax(EXT, t + 10, u, -1);
     }

@@ -60,6 +60,12 @@ describe('simulation', () => {
   it('grows a city over several years', { timeout: 60000 }, () => {
     const w = World.create({ name: 'テスト', seed: 12345, style: 'river', difficulty: 1, sandbox: false });
     const log = buildTestCity(w);
+    const times: Record<string, number> = {};
+    const proto = Object.getPrototypeOf(w);
+    for (const k of ['updateTraffic', 'updatePollutionAndLandValue', 'updateServicesMonthly', 'growthStep', 'updatePower', 'updateWater']) {
+      const f = proto[k];
+      (w as unknown as Record<string, unknown>)[k] = function (this: World, ...a: unknown[]) { const t = performance.now(); const r = f.apply(this, a); times[k] = (times[k] || 0) + performance.now() - t; return r; };
+    }
     const t0 = performance.now();
     const rows: string[] = [];
     for (let m = 1; m <= 120; m++) {
@@ -76,10 +82,17 @@ describe('simulation', () => {
     const ms = performance.now() - t0;
     console.log(log.join('\n'));
     console.log(rows.join('\n'));
-    console.log(`10 years: ${ms.toFixed(0)} ms (${(ms / 120).toFixed(1)} ms/month)`);
+    console.log(`10 years: ${ms.toFixed(0)} ms (${(ms / 120).toFixed(1)} ms/month)`, JSON.stringify(Object.fromEntries(Object.entries(times).map(([k, v]) => [k, Math.round(v)]))));
     const kinds: Record<string, number> = {};
     for (const b of w.buildings.values()) kinds[b.type] = (kinds[b.type] || 0) + 1;
     console.log(kinds);
+    const st: Record<string, number> = {};
+    for (const b of w.buildings.values()) if (!b.civic) st[`${b.type}:${b.state}`] = (st[`${b.type}:${b.state}`] || 0) + 1;
+    console.log('states', JSON.stringify(st));
+    const g = w.g;
+    const des: Record<string, number[]> = {};
+    for (let i = 0; i < g.n * g.n; i++) if (g.zone[i] && !g.bldg[i]) for (const k of ['CS1', 'ID', 'R1'] as const) (des[k] ??= []).push(w.desirability(k, i));
+    console.log('desirability', JSON.stringify(Object.fromEntries(Object.entries(des).map(([k, v]) => [k, (v.reduce((a, b) => a + b, 0) / v.length).toFixed(2)]))), 'crime', w.stats.services.crime.toFixed(2), 'garbage', JSON.stringify(w.stats.services.garbage));
     expect(w.stats.population).toBeGreaterThan(500);
     expect(w.stats.waterSupply).toBeGreaterThan(0);
   });
