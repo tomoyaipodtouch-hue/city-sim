@@ -24,10 +24,12 @@ export interface ServiceMaps {
   edu: Uint8Array; // 教育施設（学校・図書館）の範囲
   crime: Uint8Array; // 犯罪（0..255）
   fireRisk: Uint8Array; // 火災の危険
+  garbage: Uint8Array; // ゴミが出る量（0..255）
+  garbageLeft: Uint8Array; // 処理しきれずに残るゴミ（0..255）
 }
 
 export function makeServiceMaps(N: number): ServiceMaps {
-  return { police: new Uint8Array(N), fire: new Uint8Array(N), health: new Uint8Array(N), edu: new Uint8Array(N), crime: new Uint8Array(N), fireRisk: new Uint8Array(N) };
+  return { police: new Uint8Array(N), fire: new Uint8Array(N), health: new Uint8Array(N), edu: new Uint8Array(N), crime: new Uint8Array(N), fireRisk: new Uint8Array(N), garbage: new Uint8Array(N), garbageLeft: new Uint8Array(N) };
 }
 
 // 部門の効き目（予算の多さとストライキ）
@@ -169,6 +171,23 @@ export function updateServices(
   const excess = Math.max(0, afterRecycle - dispose);
   const prevExcess = s.garbage.excess;
   s.garbage = { produced: Math.round(produced), handled: Math.round(Math.min(afterRecycle, dispose) + Math.min(produced, recycle)), excess: Math.round(excess) };
+  // ゴミの地図：建物ごとの量。処理しきれない割合だけ街に残る
+  const leftShare = produced > 0 ? excess / produced : 0;
+  m.garbage.fill(0);
+  m.garbageLeft.fill(0);
+  const gm = ctx.garbageMul ?? 1;
+  for (const b of all) {
+    if (b.civic || b.state !== 1 || !b.occ) continue;
+    const per = GROW[b.type as GrowKind].zone === ZoneType.R ? GARBAGE_PER_RES : GARBAGE_PER_JOB;
+    const v = Math.min(1, Math.sqrt((b.occ * per * gm) / (b.w * b.h) / 40));
+    for (let y = b.y; y < b.y + b.h; y++)
+      for (let x = b.x; x < b.x + b.w; x++) {
+        if (!g.inb(x, y)) continue;
+        const i = y * n + x;
+        m.garbage[i] = Math.round(v * 255);
+        m.garbageLeft[i] = Math.round(v * leftShare * 255);
+      }
+  }
   if (excess > 50 && prevExcess <= 50) news.push('ゴミが処理しきれず、街が汚れています。埋立地や焼却場を作りましょう。');
   const cov = () => {
     let p = 0, f = 0, h = 0;

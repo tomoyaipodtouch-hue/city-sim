@@ -3,7 +3,7 @@ import { Grid } from '../sim/grid';
 import { ROADS } from '../sim/defs';
 import type { Maps } from '../sim/world';
 
-export type DataView = 'none' | 'zones' | 'traffic' | 'transit' | 'landValue' | 'pollution' | 'power' | 'water' | 'crime' | 'fireRisk' | 'health' | 'edu';
+export type DataView = 'none' | 'zones' | 'traffic' | 'transit' | 'landValue' | 'pollution' | 'power' | 'water' | 'crime' | 'fireRisk' | 'health' | 'edu' | 'garbage';
 
 export const DATA_VIEWS: { id: DataView; name: string }[] = [
   { id: 'none', name: '通常' },
@@ -18,6 +18,7 @@ export const DATA_VIEWS: { id: DataView; name: string }[] = [
   { id: 'fireRisk', name: '火災の危険' },
   { id: 'health', name: '医療' },
   { id: 'edu', name: '教育' },
+  { id: 'garbage', name: 'ゴミ' },
 ];
 
 const ZONE_RGB: [number, number, number][] = [
@@ -88,6 +89,14 @@ export function buildOverlay(out: Uint8Array, g: Grid, maps: Maps | null, view: 
         if (z || g.bldg[i]) {
           [r, gg, b] = v > 0.02 ? ramp(v, view === 'health' ? [[180, 230, 200], [60, 190, 120], [20, 130, 80]] : [[200, 210, 255], [100, 140, 240], [60, 60, 200]]) : [200, 70, 60];
           a = 150;
+        }
+      } else if (view === 'garbage' && !water) {
+        // 出るゴミの量。処理しきれない分が多いほど赤くなる
+        const v = maps.garbage[i] / 255, left = maps.garbageLeft[i] / 255;
+        if (v > 0.01) {
+          const share = left / v;
+          [r, gg, b] = share > 0.02 ? ramp(share, [[240, 200, 70], [225, 110, 40], [160, 40, 30]]) : [90, 185, 110];
+          a = Math.min(215, 70 + v * 150);
         }
       } else if (view === 'landValue' && !water) {
         [r, gg, b] = ramp(maps.landValue[i] / 255, LV_RAMP);

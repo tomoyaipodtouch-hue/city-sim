@@ -920,6 +920,7 @@ const LEGENDS: Partial<Record<DataView, string>> = {
   power: '<span style="color:#fadc3c">■</span> 電力あり　<span style="color:#dc3232">■</span> 電力なし',
   water: '<span style="color:#3c96f0">■</span> 水あり　<span style="color:#dc463c">■</span> 水なし',
   crime: '少ない<i class="grad" style="background:linear-gradient(90deg,#f0dc78,#e6783c,#aa1e3c)"></i>多い',
+  garbage: '<span style="color:#5ab96e">■</span> 処理できている　残る割合 低<i class="grad" style="background:linear-gradient(90deg,#f0c846,#e16e28,#a0281e)"></i>高（濃いほど量が多い）',
   fireRisk: '低い<i class="grad" style="background:linear-gradient(90deg,#fae678,#f08c28,#c82814)"></i>高い',
   health: '<span style="color:#c84638">■</span> 範囲外　弱い<i class="grad" style="background:linear-gradient(90deg,#b4e6c8,#3cbe78,#148250)"></i>強い',
   edu: '<span style="color:#c84638">■</span> 範囲外　弱い<i class="grad" style="background:linear-gradient(90deg,#c8d2ff,#648cf0,#3c3cc8)"></i>強い',
