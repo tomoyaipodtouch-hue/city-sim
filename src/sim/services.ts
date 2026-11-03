@@ -173,20 +173,37 @@ export function updateServices(
   s.garbage = { produced: Math.round(produced), handled: Math.round(Math.min(afterRecycle, dispose) + Math.min(produced, recycle)), excess: Math.round(excess) };
   // ゴミの地図：建物ごとの量。処理しきれない割合だけ街に残る
   const leftShare = produced > 0 ? excess / produced : 0;
-  m.garbage.fill(0);
-  m.garbageLeft.fill(0);
+  // 建物の上は建物で隠れてしまうので、まわりの土地へなじませて（半径 3 マス）表す
+  const raw = new Float32Array(N);
   const gm = ctx.garbageMul ?? 1;
   for (const b of all) {
     if (b.civic || b.state !== 1 || !b.occ) continue;
     const per = GROW[b.type as GrowKind].zone === ZoneType.R ? GARBAGE_PER_RES : GARBAGE_PER_JOB;
-    const v = Math.min(1, Math.sqrt((b.occ * per * gm) / (b.w * b.h) / 40));
+    const v = (b.occ * per * gm) / (b.w * b.h);
     for (let y = b.y; y < b.y + b.h; y++)
-      for (let x = b.x; x < b.x + b.w; x++) {
-        if (!g.inb(x, y)) continue;
-        const i = y * n + x;
-        m.garbage[i] = Math.round(v * 255);
-        m.garbageLeft[i] = Math.round(v * leftShare * 255);
-      }
+      for (let x = b.x; x < b.x + b.w; x++) if (g.inb(x, y)) raw[y * n + x] += v;
+  }
+  const R = 3, tmp = new Float32Array(N), sm = new Float32Array(N);
+  for (let y = 0; y < n; y++) {
+    let acc = 0;
+    for (let x = -R; x < n + R; x++) {
+      if (x + R < n) acc += raw[y * n + x + R];
+      if (x - R - 1 >= 0) acc -= raw[y * n + x - R - 1];
+      if (x >= 0 && x < n) tmp[y * n + x] = acc;
+    }
+  }
+  for (let x = 0; x < n; x++) {
+    let acc = 0;
+    for (let y = -R; y < n + R; y++) {
+      if (y + R < n) acc += tmp[(y + R) * n + x];
+      if (y - R - 1 >= 0) acc -= tmp[(y - R - 1) * n + x];
+      if (y >= 0 && y < n) sm[y * n + x] = acc / ((2 * R + 1) * (2 * R + 1));
+    }
+  }
+  for (let i = 0; i < N; i++) {
+    const v = sm[i] > 0.05 ? Math.min(1, Math.sqrt(sm[i] / 12)) : 0;
+    m.garbage[i] = Math.round(v * 255);
+    m.garbageLeft[i] = Math.round(v * leftShare * 255);
   }
   if (excess > 50 && prevExcess <= 50) news.push('ゴミが処理しきれず、街が汚れています。埋立地や焼却場を作りましょう。');
   const cov = () => {

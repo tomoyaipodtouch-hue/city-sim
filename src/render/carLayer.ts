@@ -21,6 +21,7 @@ interface Car {
   hA: number; // 入ってきたところの高さ
   alive: boolean;
   lane: number;
+  col: number; // 車体の色（パレットの番号）。車ごとに決めて変えない
 }
 
 function vc(geo: THREE.BufferGeometry, hex: number) {
@@ -43,7 +44,9 @@ class Fleet {
   nodes = new Int32Array(0);
   target = 0;
   vol: Float32Array = new Float32Array(0); // 次の行き先を選ぶときの重み
+  colors: THREE.Color[];
   constructor(geo: THREE.BufferGeometry, max: number, palette: number[], public track: Track = 'road') {
+    this.colors = palette.map((h) => new THREE.Color(h));
     this.mesh = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }), max);
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.mesh.count = 0;
@@ -159,7 +162,7 @@ export class CarLayer {
     const from = f.nodes[lo];
     const nx = this.pickNext(f, from, -1);
     if (!nx) return null;
-    return { from, to: nx[0], din: nx[1], d: nx[1], t: Math.random(), hA: this.trackH(f, from), alive: true, lane: Math.random() < 0.5 ? 0 : 1 };
+    return { from, to: nx[0], din: nx[1], d: nx[1], t: Math.random(), hA: this.trackH(f, from), alive: true, lane: Math.random() < 0.5 ? 0 : 1, col: (Math.random() * f.colors.length) | 0 };
   }
 
   // 次のノードを、交通量の多い方を選びやすくして決める（Uターンはしない）
@@ -262,12 +265,14 @@ export class CarLayer {
         this.v.set(x - tz * lane, h, z + tx * lane);
         this.q.setFromAxisAngle(this.up, Math.atan2(tx, tz));
         this.mtx.compose(this.v, this.q, this.s);
+        f.mesh.setColorAt(k, f.colors[c.col]);
         f.mesh.setMatrixAt(k++, this.mtx);
         if (k >= f.mesh.instanceMatrix.count) break;
       }
       f.cars = f.cars.filter((c) => c.alive);
       f.mesh.count = k;
       f.mesh.instanceMatrix.needsUpdate = true;
+      if (f.mesh.instanceColor) f.mesh.instanceColor.needsUpdate = true;
     }
   }
 }
