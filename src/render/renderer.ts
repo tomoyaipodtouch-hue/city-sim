@@ -51,12 +51,16 @@ export class CityRenderer {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // コントラストを上げて、立体感を出す
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.15;
     this.rig = new CameraRig(1);
     const sky = new THREE.Color(0xa9cbe6);
     this.scene.background = sky;
     this.scene.fog = new THREE.Fog(sky, 1500, 7000);
-    this.scene.add(new THREE.HemisphereLight(0xdfeaf5, 0x5b5a48, 1.25));
-    this.sun = new THREE.DirectionalLight(0xfff2dc, 2.1);
+    // 環境光は弱め、太陽を強めにして、日なたと日かげの差をはっきりさせる
+    this.scene.add(new THREE.HemisphereLight(0xcfe0f2, 0x4f4a3e, 0.85));
+    this.sun = new THREE.DirectionalLight(0xffeed6, 3.2);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
     this.sun.shadow.bias = -0.0006;
