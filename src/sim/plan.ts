@@ -1,7 +1,7 @@
 // ツールの計画（プレビューと実行の両方で使う）
 import { Grid } from './grid';
 import { DX, DY, MAX_ROAD_GRADE, CELL, WATER_LEVEL, dirOf, isDiag, opp } from './constants';
-import { ROADS, RoadType, ZoneType, ZONE_COST, POWER_LINE_COST, CIVIC, CivicId, BRIDGE_COST_MUL, MAX_BRIDGE } from './defs';
+import { ROADS, RoadType, ZoneType, ZONE_COST, POWER_LINE_COST, CIVIC, CivicId, BRIDGE_COST_MUL, MAX_BRIDGE, OVERPASS_LIFT, RAMP_COST, isHighway } from './defs';
 
 export interface LinePath {
   cells: number[]; // マスの番号
@@ -50,6 +50,7 @@ export interface Lane {
   cells: number[];
   dirs: number[];
   oneWay: boolean;
+  levels: number[]; // マスごとの階層（0 = 地上, 1 = 上空）
 }
 
 export interface RoadPlan {
@@ -61,20 +62,23 @@ export interface RoadPlan {
   bad: Set<number>;
   vertexH: Map<number, number>; // 頂点番号 → 新しい高さ
   deck: Map<number, number>; // 橋のマス → 路面の高さ
+  upH: Map<number, number>; // 上空のマス → 路面の高さ
+  converts: number[]; // 上空（立体交差）へ移す既存の道路のマス
   uturns: [number, number][]; // 大通りの端で折り返すための接続（from → to）
   reason: string;
   bridgeCells: number;
 }
 
 // 斜めの接続が、既存の逆向きの斜めの接続と交差するか
-function crossesDiagonal(g: Grid, i: number, d: number) {
+function crossesDiagonal(g: Grid, i: number, d: number, level = 0) {
   const n = g.n;
   const x = i % n, y = (i / n) | 0;
   const ax = x + DX[d], ay = y; // 横の隣
   const bx = x, by = y + DY[d]; // 縦の隣
   if (!g.inb(ax, ay) || !g.inb(bx, by)) return false;
   const dd = dirOf(bx - ax, by - ay);
-  return (g.conn[ay * n + ax] & (1 << dd)) !== 0;
+  const c = level ? g.conn1 : g.conn;
+  return (c[ay * n + ax] & (1 << dd)) !== 0;
 }
 
 // 進行方向の左側にある、並行するマスへのずれ（大通りの反対車線）
@@ -84,7 +88,7 @@ function leftOffset(d: number): [number, number] {
 }
 
 // 大通り：引いた線を右側の車線とし、左側に反対車線を作る
-function avenueLanes(g: Grid, path: LinePath): { lanes: Lane[]; ok: boolean } {
+function avenueLanes(g: Grid, path: LinePath): { lanes: { cells: number[]; dirs: number[] }[]; ok: boolean } {
   const { cells, dirs } = path;
   const n = g.n;
   const other: number[] = [];
@@ -92,7 +96,7 @@ function avenueLanes(g: Grid, path: LinePath): { lanes: Lane[]; ok: boolean } {
     const d = dirs[Math.min(k, dirs.length - 1)] ?? 0;
     const [ox, oy] = leftOffset(d);
     const x = (cells[k] % n) + ox, y = ((cells[k] / n) | 0) + oy;
-    if (!g.inb(x, y)) return { lanes: [{ cells, dirs, oneWay: true }], ok: false };
+    if (!g.inb(x, y)) return { lanes: [{ cells, dirs }], ok: false };
     const c = y * n + x;
     if (other[other.length - 1] !== c) other.push(c);
   }
@@ -107,7 +111,19 @@ function avenueLanes(g: Grid, path: LinePath): { lanes: Lane[]; ok: boolean } {
     if (d < 0) ok = false;
     odirs.push(d < 0 ? 0 : d);
   }
-  return { lanes: [{ cells, dirs, oneWay: true }, { cells: other, dirs: odirs, oneWay: true }], ok };
+  return { lanes: [{ cells, dirs }, { cells: other, dirs: odirs }], ok };
+}
+
+// 道路の向き（そのマスで使っている方向の軸）。0 = 東西, 1 = 南北, 2 = 斜め
+function axisOf(mask: number) {
+  let ew = 0, ns = 0, dg = 0;
+  for (let d = 0; d < 8; d++) {
+    if (!(mask & (1 << d))) continue;
+    if (d === 0 || d === 4) ew++;
+    else if (d === 2 || d === 6) ns++;
+    else dg++;
+  }
+  return { ew, ns, dg, deg: ew + ns + dg };
 }
 
 export function planRoad(g: Grid, path: LinePath, type: RoadType): RoadPlan {
@@ -115,25 +131,28 @@ export function planRoad(g: Grid, path: LinePath, type: RoadType): RoadPlan {
   const bad = new Set<number>();
   const reasons: string[] = [];
   const why = (r: string) => reasons.push(r);
-  let lanes: Lane[] = [{ cells: path.cells, dirs: path.dirs, oneWay: !!def.oneWay }];
+  let raw: { cells: number[]; dirs: number[] }[] = [{ cells: path.cells, dirs: path.dirs }];
   const uturns: [number, number][] = [];
   if (def.wide && path.cells.length > 1) {
     const av = avenueLanes(g, path);
-    lanes = av.lanes;
+    raw = av.lanes;
     if (!av.ok) {
       for (const i of path.cells) bad.add(i);
-      why('大通りは、この形には引けません（マップの端や急な曲がり）');
-    } else {
-      const a = lanes[0].cells, b = lanes[1].cells;
+      why(`${def.name}は、この形には引けません（マップの端や急な曲がり）`);
+    } else if (!def.highway) {
+      const a = raw[0].cells, b = raw[1].cells;
       uturns.push([a[a.length - 1], b[0]], [b[b.length - 1], a[0]]);
     }
   }
+  const lanes: Lane[] = raw.map((l) => ({ ...l, oneWay: !!def.oneWay, levels: [] }));
   let cost = 0;
   let bridgeCells = 0;
   const vacc = new Map<number, [number, number]>();
   const deck = new Map<number, number>();
+  const upH = new Map<number, number>();
+  const converts = new Set<number>();
   for (const lane of lanes) {
-    const r = planLane(g, lane, type, bad, why, vacc, deck);
+    const r = planLane(g, lane, type, bad, why, vacc, deck, upH, converts);
     cost += r.cost;
     bridgeCells += r.bridge;
   }
@@ -141,8 +160,10 @@ export function planRoad(g: Grid, path: LinePath, type: RoadType): RoadPlan {
   // 既存の道路の頂点は動かさない
   const locked = new Set<number>();
   for (const lane of lanes)
-    for (const i of lane.cells) {
-      if (!g.road[i]) continue;
+    for (let k = 0; k < lane.cells.length; k++) {
+      const i = lane.cells[k];
+      if (!g.road[i] && lane.levels[k] === 0) continue;
+      if (lane.levels[k] === 1 && !g.road[i]) continue;
       const x = i % n, y = (i / n) | 0;
       for (const [vx, vy] of [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]]) locked.add(vy * V + vx);
     }
@@ -173,40 +194,117 @@ export function planRoad(g: Grid, path: LinePath, type: RoadType): RoadPlan {
   }
   cost = Math.round(cost);
   return {
-    ok: bad.size === 0 && path.cells.length > 1, path, lanes, type, cost, bad, vertexH, deck, uturns,
-    reason: reasons[0] || '', bridgeCells,
+    ok: bad.size === 0 && path.cells.length > 1, path, lanes, type, cost, bad, vertexH, deck, upH,
+    converts: [...converts], uturns, reason: reasons[0] || '', bridgeCells,
   };
 }
 
 function planLane(
   g: Grid, lane: Lane, type: RoadType, bad: Set<number>, why: (r: string) => void,
-  vacc: Map<number, [number, number]>, deck: Map<number, number>,
+  vacc: Map<number, [number, number]>, deck: Map<number, number>, upHs: Map<number, number>, converts: Set<number>,
 ): { cost: number; bridge: number } {
   const def = ROADS[type];
   const n = g.n, V = n + 1;
   const { cells, dirs } = lane;
-  const water = cells.map((i) => g.isWater(i % n, (i / n) | 0) || g.deck[i] > 0);
+  const last = cells.length - 1;
+  const dirAt = (k: number) => dirs[Math.min(k, dirs.length - 1)] ?? 0;
+  const axisOfDir = (d: number) => (d === 0 || d === 4 ? 0 : d === 2 || d === 6 ? 1 : 2);
+
+  // 階層を決める
+  const levels = cells.map((i, k) => {
+    const end = k === 0 || k === last;
+    if (def.elevated) {
+      // 高架の端が地上の高速道路に重なる場合は、地上に降りてつながる
+      if (end && g.road[i] === RoadType.GroundHighway && !g.up[i]) return 0;
+      return 1;
+    }
+    if (type === RoadType.GroundHighway) {
+      if (end && g.up[i] === RoadType.Highway && !g.road[i]) return 1;
+      return 0;
+    }
+    // 一般の道路
+    if (g.road[i] === RoadType.GroundHighway) return 1; // 立体交差でまたぐ
+    if (g.up[i] === RoadType.Ramp && !g.road[i]) return 1;
+    return 0;
+  });
+  lane.levels = levels;
+
   let cost = 0, bridge = 0;
   for (let k = 0; k < cells.length; k++) {
     const i = cells[k];
+    const L = levels[k];
     if (g.bldg[i]) { bad.add(i); why('建物があります。先に取り壊してください'); }
-    const cur = g.road[i];
+    const cur = L ? g.up[i] : g.road[i];
     const len = k > 0 && isDiag(dirs[k - 1]) ? 1.41 : 1;
-    const mul = water[k] ? BRIDGE_COST_MUL : 1;
+    const isW = g.isWater(i % n, (i / n) | 0) || g.deck[i] > 0;
+    const mul = isW && L === 0 ? BRIDGE_COST_MUL : 1;
     if (cur === 0) cost += def.cost * len * mul;
     else if (ROADS[cur].rank < def.rank) cost += Math.max(0, def.cost - ROADS[cur].cost) * len * mul;
+
+    if (def.highway) {
+      if (L === 0) {
+        const r = g.road[i];
+        if (r && !isHighway(r) && r !== RoadType.Ramp) {
+          // 既存の道路は、高速道路の上を通る立体交差にする
+          const ax = axisOf(g.conn[i]);
+          const myAxis = axisOfDir(dirAt(k));
+          const parallel = (myAxis === 0 && ax.ew > 0) || (myAxis === 1 && ax.ns > 0) || (myAxis === 2 && ax.dg > 0);
+          if (ax.deg > 2 || ax.dg > 0 || parallel || g.up[i] || g.deck[i] > 0) {
+            bad.add(i);
+            why('交差点や斜めの道路、橋の上には高速道路を通せません');
+          } else converts.add(i);
+        }
+        if (r === RoadType.Ramp) { bad.add(i); why('ランプの上には引けません'); }
+      } else {
+        const u = g.up[i];
+        if (u && !isHighway(u)) { bad.add(i); why('高架の道路やランプと重なっています'); }
+      }
+    } else if (L === 1) {
+      if (g.up[i] && g.up[i] !== RoadType.Ramp && !(g.up[i] === type)) { bad.add(i); why('ここには立体交差を作れません'); }
+      if (k === 0 || k === last) { bad.add(i); why('高速道路の上で道路を止めることはできません'); }
+      const ax = axisOf(g.conn[i]);
+      const myAxis = axisOfDir(dirAt(k));
+      if ((myAxis === 0 && ax.ew > 0) || (myAxis === 1 && ax.ns > 0)) { bad.add(i); why('高速道路には直接つなげません。ランプを使ってください'); }
+    } else if (isHighway(g.road[i])) {
+      bad.add(i);
+      why('高速道路には直接つなげません。ランプを使ってください');
+    }
   }
   for (let k = 0; k < dirs.length; k++) {
-    if (isDiag(dirs[k]) && crossesDiagonal(g, cells[k], dirs[k])) {
+    if (isDiag(dirs[k]) && levels[k] === levels[k + 1] && crossesDiagonal(g, cells[k], dirs[k], levels[k])) {
       bad.add(cells[k]);
       bad.add(cells[k + 1]);
       why('斜めの道路どうしは交差点なしで交差できません');
     }
   }
 
-  // 橋（水の上の連続したマス）
+  // 上空の高さ
+  const lift = def.elevated ? def.lift! : OVERPASS_LIFT;
+  const grade1 = def.elevated ? 0.07 : 0.5;
+  const u: number[] = cells.map((i, k) => {
+    if (levels[k] !== 1) return 0;
+    if (g.up[i] && g.upH[i] > 0) return g.upH[i];
+    return Math.max(g.cellH(i % n, (i / n) | 0), WATER_LEVEL) + lift;
+  });
+  const ufix = cells.map((i, k) => levels[k] === 1 && g.up[i] !== 0);
+  for (let pass = 0; pass < 2; pass++) {
+    const ks = pass === 0 ? [...cells.keys()].slice(1) : [...cells.keys()].reverse().slice(1);
+    for (const k of ks) {
+      const p = pass === 0 ? k - 1 : k + 1;
+      if (levels[k] !== 1 || levels[p] !== 1 || ufix[k]) continue;
+      const m = grade1 * CELL * 1.42;
+      // 高架は地面より低くならないようにする
+      const floor = Math.max(g.cellH(cells[k] % n, (cells[k] / n) | 0), WATER_LEVEL) + lift * 0.7;
+      u[k] = Math.max(floor, Math.max(u[p] - m, Math.min(u[p] + m, u[k])));
+    }
+  }
+  for (let k = 0; k < cells.length; k++) if (levels[k] === 1) upHs.set(cells[k], u[k]);
+  for (const c of converts) if (!upHs.has(c)) upHs.set(c, g.cellH(c % n, (c / n) | 0) + OVERPASS_LIFT);
+
+  // 地上の部分：橋（水の上の連続したマス）
+  const water = cells.map((i, k) => levels[k] === 0 && (g.isWater(i % n, (i / n) | 0) || g.deck[i] > 0));
   const t = cells.map((i) => g.roadH(i));
-  const fixed = cells.map((i) => g.road[i] !== 0);
+  const fixed = cells.map((i, k) => levels[k] === 1 || g.road[i] !== 0);
   for (let k = 0; k < cells.length; k++) {
     if (!water[k]) continue;
     let e = k;
@@ -219,7 +317,6 @@ function planLane(
       const d0 = dirs[k - 1];
       for (let j = k - 1; j <= e; j++) if (dirs[j] !== d0) { markBad('橋はまっすぐに架けてください'); break; }
       if (run.length > MAX_BRIDGE) markBad(`橋が長すぎます（最大 ${MAX_BRIDGE} マス）`);
-      // 既存の橋とは、同じ向きでしかつなげない
       for (const c of run) {
         const m = g.conn[c];
         if (m && (m & ~((1 << d0) | (1 << opp(d0))))) markBad('橋の上に交差点は作れません');
@@ -237,19 +334,20 @@ function planLane(
     k = e;
   }
 
-  // 勾配の調整
+  // 地上の部分：勾配の調整
   const segLen = (k: number) => (isDiag(dirs[k]) ? CELL * 1.414 : CELL);
   for (let k = 1; k < t.length; k++) {
-    if (fixed[k]) continue;
+    if (fixed[k] || levels[k - 1] === 1) continue;
     const m = MAX_ROAD_GRADE * segLen(k - 1);
     t[k] = Math.max(t[k - 1] - m, Math.min(t[k - 1] + m, t[k]));
   }
   for (let k = t.length - 2; k >= 0; k--) {
-    if (fixed[k]) continue;
+    if (fixed[k] || levels[k + 1] === 1) continue;
     const m = MAX_ROAD_GRADE * segLen(k);
     t[k] = Math.max(t[k + 1] - m, Math.min(t[k + 1] + m, t[k]));
   }
   for (let k = 1; k < t.length; k++) {
+    if (levels[k] === 1 || levels[k - 1] === 1) continue;
     const m = MAX_ROAD_GRADE * segLen(k - 1) * 1.6;
     if (Math.abs(t[k] - t[k - 1]) > m + 0.01) {
       bad.add(cells[k]);
@@ -271,28 +369,50 @@ function planLane(
   return { cost, bridge };
 }
 
+// 2つのマスを、それぞれの階層でつなぐ
+function link(g: Grid, a: number, la: number, b: number, lb: number, d: number, oneWay: boolean) {
+  const ca = la ? g.conn1 : g.conn, fa = la ? g.flow1 : g.flow;
+  const cb = lb ? g.conn1 : g.conn, fb = lb ? g.flow1 : g.flow;
+  ca[a] |= 1 << d;
+  cb[b] |= 1 << opp(d);
+  fa[a] |= 1 << d;
+  if (oneWay) fb[b] &= ~(1 << opp(d));
+  else fb[b] |= 1 << opp(d);
+}
+
 export function applyRoad(g: Grid, plan: RoadPlan) {
   const def = ROADS[plan.type];
   for (const [vi, h] of plan.vertexH) g.heights[vi] = h;
   for (const [c, h] of plan.deck) g.deck[c] = h;
+  // 既存の道路を上空へ移す（地上の高速道路をまたぐ立体交差）
+  for (const c of plan.converts) {
+    g.up[c] = g.road[c];
+    g.conn1[c] = g.conn[c];
+    g.flow1[c] = g.flow[c];
+    g.upH[c] = plan.upH.get(c)!;
+    g.road[c] = 0;
+    g.conn[c] = 0;
+    g.flow[c] = 0;
+  }
   for (const lane of plan.lanes) {
-    const { cells, dirs } = lane;
-    for (const i of cells) {
-      const cur = g.road[i];
-      if (!cur || ROADS[cur].rank < def.rank) g.road[i] = plan.type;
-      g.zone[i] = 0;
-      g.zden[i] = 0;
+    const { cells, dirs, levels } = lane;
+    for (let k = 0; k < cells.length; k++) {
+      const i = cells[k];
+      if (levels[k] === 1) {
+        const cur = g.up[i];
+        if (!cur || ROADS[cur].rank < def.rank) g.up[i] = plan.type;
+        g.upH[i] = plan.upH.get(i) ?? g.upH[i];
+      } else {
+        const cur = g.road[i];
+        if (!cur || ROADS[cur].rank < def.rank) g.road[i] = plan.type;
+      }
+      if (!def.elevated || levels[k] === 0) {
+        g.zone[i] = 0;
+        g.zden[i] = 0;
+      }
       g.tree[i] = 0;
     }
-    for (let k = 0; k < dirs.length; k++) {
-      const d = dirs[k];
-      const a = cells[k], b = cells[k + 1];
-      g.conn[a] |= 1 << d;
-      g.conn[b] |= 1 << opp(d);
-      g.flow[a] |= 1 << d;
-      if (lane.oneWay) g.flow[b] &= ~(1 << opp(d));
-      else g.flow[b] |= 1 << opp(d);
-    }
+    for (let k = 0; k < dirs.length; k++) link(g, cells[k], levels[k], cells[k + 1], levels[k + 1], dirs[k], lane.oneWay);
   }
   // 大通りの端の折り返し
   const n = g.n;
@@ -303,6 +423,138 @@ export function applyRoad(g: Grid, plan: RoadPlan) {
     g.conn[b] |= 1 << opp(d);
     g.flow[a] |= 1 << d;
   }
+}
+
+// ---- ランプ（高速道路の出入口） ----
+export interface RampPlan {
+  ok: boolean;
+  reason: string;
+  cell: number;
+  level: number;
+  hb: number; // ランプへ降りる高速道路のマス
+  ha: number; // ランプから合流する高速道路のマス
+  dOut: number; // hb → ランプ
+  dIn: number; // ランプ → ha
+  roads: number[]; // ランプとつなぐ一般の道路（地上）
+  cost: number;
+  h: number;
+}
+
+// 高速道路のマスの、そのマスでの進行方向
+function laneDir(g: Grid, c: number, level: number): number {
+  const f = level ? g.flow1[c] : g.flow[c];
+  for (const d of [0, 2, 4, 6]) if (f & (1 << d)) return d;
+  return -1;
+}
+
+export function planRamp(g: Grid, x: number, y: number): RampPlan {
+  const fail = (reason: string): RampPlan => ({ ok: false, reason, cell: -1, level: 0, hb: -1, ha: -1, dOut: 0, dIn: 0, roads: [], cost: RAMP_COST, h: 0 });
+  if (!g.inb(x, y)) return fail('マップの外です');
+  const r = g.idx(x, y);
+  if (g.road[r] || g.up[r] || g.bldg[r]) return fail('空いているマスに置いてください');
+  if (g.isWater(x, y)) return fail('水の上には置けません');
+  for (const s of [0, 2, 4, 6]) {
+    const hx = x + DX[s], hy = y + DY[s];
+    if (!g.inb(hx, hy)) continue;
+    const h = g.idx(hx, hy);
+    const level = g.up[h] === RoadType.Highway ? 1 : g.road[h] === RoadType.GroundHighway ? 0 : -1;
+    if (level < 0) continue;
+    const f = laneDir(g, h, level);
+    if (f < 0 || f === s || f === opp(s)) continue;
+    const bx = hx - DX[f], by = hy - DY[f], ax = hx + DX[f], ay = hy + DY[f];
+    if (!g.inb(bx, by) || !g.inb(ax, ay)) continue;
+    const hb = g.idx(bx, by), ha = g.idx(ax, ay);
+    const same = (c: number) => (level ? g.up[c] === RoadType.Highway : g.road[c] === RoadType.GroundHighway);
+    if (!same(hb) || !same(ha)) continue;
+    const dOut = dirOf(x - bx, y - by), dIn = dirOf(ax - x, ay - y);
+    if (dOut < 0 || dIn < 0) continue;
+    if (crossesDiagonal(g, hb, dOut, level) || crossesDiagonal(g, r, dIn, level)) return fail('近くの斜めの道路と交差します');
+    const roads: number[] = [];
+    for (const d of [0, 2, 4, 6]) {
+      if (d === s) continue;
+      const nx = x + DX[d], ny = y + DY[d];
+      if (!g.inb(nx, ny)) continue;
+      const j = g.idx(nx, ny);
+      const t = g.road[j];
+      if (t && !isHighway(t) && t !== RoadType.Ramp) roads.push(j);
+    }
+    const hh = level ? (g.upH[h] + g.cellH(x, y)) / 2 : g.cellH(x, y);
+    return { ok: true, reason: '', cell: r, level, hb, ha, dOut, dIn, roads, cost: RAMP_COST, h: hh };
+  }
+  return fail('高速道路の横に置いてください');
+}
+
+export function applyRamp(g: Grid, p: RampPlan) {
+  const n = g.n;
+  const r = p.cell;
+  if (p.level) {
+    g.up[r] = RoadType.Ramp;
+    g.upH[r] = p.h;
+  } else g.road[r] = RoadType.Ramp;
+  g.zone[r] = 0;
+  g.zden[r] = 0;
+  g.tree[r] = 0;
+  link(g, p.hb, p.level, r, p.level, p.dOut, true);
+  link(g, r, p.level, p.ha, p.level, p.dIn, true);
+  for (const j of p.roads) {
+    const d = dirOf((j % n) - (r % n), ((j / n) | 0) - ((r / n) | 0));
+    link(g, r, p.level, j, 0, d, false);
+  }
+}
+
+// ---- ダイヤモンド型インターチェンジ ----
+// 高速道路のマスをタップすると、その場所で一般道が高速道路と立体交差し、4か所のランプでつながる。
+export interface DiamondPlan {
+  ok: boolean;
+  reason: string;
+  cost: number;
+  road: RoadPlan | null;
+  ramps: [number, number][]; // ランプを置くマス（x, y）
+  cells: number[];
+}
+
+export function planDiamond(g: Grid, x: number, y: number): DiamondPlan {
+  const fail = (reason: string): DiamondPlan => ({ ok: false, reason, cost: 0, road: null, ramps: [], cells: [] });
+  if (!g.inb(x, y)) return fail('マップの外です');
+  const c = g.idx(x, y);
+  const level = g.up[c] === RoadType.Highway ? 1 : g.road[c] === RoadType.GroundHighway ? 0 : -1;
+  if (level < 0) return fail('高速道路の上をタップしてください');
+  const f = laneDir(g, c, level);
+  if (f < 0) return fail('まっすぐな高速道路の上に置いてください');
+  // 反対車線を探す
+  let other = -1, side = -1;
+  for (const s of [(f + 2) & 7, (f + 6) & 7]) {
+    const ox = x + DX[s], oy = y + DY[s];
+    if (!g.inb(ox, oy)) continue;
+    const o = g.idx(ox, oy);
+    const lv = level ? g.up[o] === RoadType.Highway : g.road[o] === RoadType.GroundHighway;
+    if (lv && laneDir(g, o, level) === opp(f)) { other = o; side = s; }
+  }
+  if (other < 0) return fail('高速道路の向きがわかりません');
+  // 交差する一般道：両車線の外側に 3 マスずつ
+  const s = side, so = opp(side);
+  const x0 = x + DX[so] * 3, y0 = y + DY[so] * 3;
+  const x1 = x + DX[s] * 4, y1 = y + DY[s] * 4;
+  const path = planLine(g, x0, y0, x1, y1);
+  const road = planRoad(g, path, RoadType.Road);
+  if (!road.ok) return { ...fail(road.reason || '一般道を通せません'), cells: path.cells, road };
+  // ランプの位置：それぞれの車線の外側、交差点の前後
+  const ramps: [number, number][] = [];
+  const ox = x + DX[s], oy = y + DY[s];
+  for (const [lx, ly, out, dir] of [[x, y, so, f], [ox, oy, s, opp(f)]] as const) {
+    for (const k of [-1, 1]) ramps.push([lx + DX[dir] * k + DX[out], ly + DY[dir] * k + DY[out]]);
+  }
+  // 仮の盤面で順番に確かめる
+  const tmp = g.clone();
+  applyRoad(tmp, road);
+  let cost = road.cost;
+  for (const [rx, ry] of ramps) {
+    const rp = planRamp(tmp, rx, ry);
+    if (!rp.ok) return { ...fail(`ランプを置けません：${rp.reason}`), cells: path.cells, road };
+    applyRamp(tmp, rp);
+    cost += rp.cost;
+  }
+  return { ok: true, reason: '', cost, road, ramps, cells: [...path.cells, ...ramps.map(([a, b]) => g.idx(a, b))] };
 }
 
 // ---- 範囲指定（ゾーン、取り壊し） ----

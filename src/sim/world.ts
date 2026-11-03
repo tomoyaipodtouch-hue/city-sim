@@ -1,16 +1,16 @@
 // 都市のシミュレーション本体（Worker 上で動く）
-import { Grid } from './grid';
+import { Grid, GRID_U8, GRID_F32, Ctl } from './grid';
 import { Rng } from './rng';
 import { DAYS_PER_MONTH, DX, DY } from './constants';
 import {
-  CIVIC, CivicId, DEFAULT_TAX, DIFFICULTY, GROW, GROW_KINDS, GrowKind, IND_DENSITY_MUL, maxFloorsFor, POWER_LINE_UPKEEP, ROADS, RoadType,
+  CIVIC, CivicId, DEFAULT_TAX, DIFFICULTY, isHighway, GROW, GROW_KINDS, GrowKind, IND_DENSITY_MUL, maxFloorsFor, POWER_LINE_UPKEEP, ROADS, RoadType,
   ZONE_KINDS, ZoneType,
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
 import {
-  applyRoad, applyZone, flattenRect, normRect, planBulldoze, planLine, planPlop, planPowerLine, planRoad, planZone,
+  applyRamp, applyRoad, applyZone, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
 } from './plan';
-import { assignCommute, congestionFactor, Destination, Origin } from './traffic';
+import { assignTrips, buildJunctions, congestionFactor, Destination, Origin } from './traffic';
 
 export enum BState {
   Building = 0,
@@ -37,6 +37,9 @@ export interface Building {
   watered: boolean;
   floors: number; // 階数（0 = 描画側で決める）
   commute: number; // 平均通勤時間（分）
+  customers?: number; // 買い物客の充足率（商業）
+  freight?: number; // 貨物を運べた割合（工業）
+  freightTime?: number; // 貨物の輸送時間（分）
   employed: number; // 職のある住人の割合（住宅）
   badMonths: number;
 }
@@ -69,6 +72,7 @@ export interface Maps {
   landValue: Uint8Array;
   pollution: Uint8Array;
   traffic: Float32Array;
+  freight: Float32Array; // トラックの交通量（見た目用）
   congestion: Float32Array;
 }
 
@@ -88,6 +92,13 @@ export interface SaveData {
   conn: Uint8Array;
   flow?: Uint8Array;
   deck?: Float32Array;
+  up?: Uint8Array;
+  conn1?: Uint8Array;
+  flow1?: Uint8Array;
+  upH?: Float32Array;
+  ictl?: Uint8Array;
+  isplit?: Uint8Array;
+  iflags?: Uint8Array;
   pline: Uint8Array;
   zone: Uint8Array;
   zden: Uint8Array;
@@ -115,7 +126,10 @@ export type Command =
   | { t: 'bulldoze'; x0: number; y0: number; x1: number; y1: number }
   | { t: 'pline'; x0: number; y0: number; x1: number; y1: number }
   | { t: 'plop'; id: CivicId; x: number; y: number }
-  | { t: 'tax'; kind: GrowKind; rate: number };
+  | { t: 'tax'; kind: GrowKind; rate: number }
+  | { t: 'ramp'; x: number; y: number }
+  | { t: 'diamond'; x: number; y: number }
+  | { t: 'junction'; cell: number; ctl: number; split: number; flags: number };
 
 const emptyKinds = (v: number) => Object.fromEntries(GROW_KINDS.map((k) => [k, v])) as Record<GrowKind, number>;
 
@@ -177,14 +191,16 @@ export class World {
 
   private makeMaps(n: number): Maps {
     const c = n * n;
-    const congestion = new Float32Array(c);
+    // 交通量と混雑度は、地上と上空の2階層分
+    const congestion = new Float32Array(c * 2);
     congestion.fill(1);
     return {
       power: new Uint8Array(c),
       water: new Uint8Array(c),
       landValue: new Uint8Array(c),
       pollution: new Uint8Array(c),
-      traffic: new Float32Array(c),
+      traffic: new Float32Array(c * 2),
+      freight: new Float32Array(c * 2),
       congestion,
     };
   }
@@ -219,15 +235,8 @@ export class World {
       taxes: { ...this.taxes },
       n: g.n,
       heights: g.heights.slice(),
-      road: g.road.slice(),
-      conn: g.conn.slice(),
-      flow: g.flow.slice(),
-      deck: g.deck.slice(),
-      pline: g.pline.slice(),
-      zone: g.zone.slice(),
-      zden: g.zden.slice(),
+      ...(Object.fromEntries([...GRID_U8, ...GRID_F32].map((k) => [k, g[k].slice()])) as Pick<SaveData, 'road' | 'conn' | 'pline' | 'zone' | 'zden' | 'tree'>),
       bldg: g.bldg.slice(),
-      tree: g.tree.slice(),
       buildings: [...this.buildings.values()].map((b) => ({ ...b })),
       nextId: this.nextId,
       rng: this.rng.state,
@@ -251,22 +260,20 @@ export class World {
     w.funds = d.funds;
     w.taxes = { ...emptyKinds(DEFAULT_TAX), ...d.taxes };
     g.heights.set(d.heights);
-    g.road.set(d.road);
-    g.conn.set(d.conn);
+    const rec = d as unknown as Record<string, ArrayLike<number> | undefined>;
+    for (const k of [...GRID_U8, ...GRID_F32]) {
+      const v = rec[k];
+      if (v && v.length === g[k].length) g[k].set(v);
+    }
     // 古い保存データには flow がないので、すべて両方向にする
-    g.flow.set(d.flow ?? d.conn);
-    if (d.deck) g.deck.set(d.deck);
-    g.pline.set(d.pline);
-    g.zone.set(d.zone);
-    g.zden.set(d.zden);
+    if (!d.flow) g.flow.set(d.conn);
     g.bldg.set(d.bldg);
-    g.tree.set(d.tree);
     for (const b of d.buildings) w.buildings.set(b.id, { ...b, floors: b.floors ?? 0 });
     w.nextId = d.nextId;
     w.rng.state = d.rng;
     w.demand = { ...emptyKinds(0), ...d.demand };
-    if (d.congestion) w.maps.congestion.set(d.congestion);
-    if (d.traffic) w.maps.traffic.set(d.traffic);
+    if (d.congestion && d.congestion.length === w.maps.congestion.length) w.maps.congestion.set(d.congestion);
+    if (d.traffic && d.traffic.length === w.maps.traffic.length) w.maps.traffic.set(d.traffic);
     w.history = d.history || [];
     w.milestones = d.milestones || [];
     w.recomputeAll();
@@ -351,6 +358,35 @@ export class World {
         if (def.water && !this.accessCells(b).length) msg = '道路に面していないので、水を送れません';
         return { ok: true, cost: plan.cost, msg };
       }
+      case 'ramp': {
+        const plan = planRamp(g, c.x, c.y);
+        if (!plan.ok) return { ok: false, msg: plan.reason };
+        if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
+        applyRamp(g, plan);
+        this.afterGridChange();
+        return { ok: true, cost: plan.cost, msg: plan.roads.length ? undefined : 'ランプを置きました。一般の道路をつないでください' };
+      }
+      case 'diamond': {
+        const plan = planDiamond(g, c.x, c.y);
+        if (!plan.ok || !plan.road) return { ok: false, msg: plan.reason };
+        if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
+        applyRoad(g, plan.road);
+        this.heightVersion++;
+        for (const [rx, ry] of plan.ramps) {
+          const rp = planRamp(g, rx, ry);
+          if (rp.ok) applyRamp(g, rp);
+        }
+        this.afterGridChange();
+        return { ok: true, cost: plan.cost };
+      }
+      case 'junction': {
+        if (c.cell < 0 || c.cell >= g.n * g.n || !g.road[c.cell]) return { ok: false, msg: '交差点が見つかりません' };
+        g.ictl[c.cell] = c.ctl;
+        g.isplit[c.cell] = Math.max(10, Math.min(90, Math.round(c.split)));
+        g.iflags[c.cell] = c.flags;
+        this.gridVersion++;
+        return { ok: true };
+      }
       case 'tax': {
         this.taxes[c.kind] = Math.max(0, Math.min(20, Math.round(c.rate * 10) / 10));
         return { ok: true };
@@ -371,19 +407,30 @@ export class World {
   private removeRoad(i: number) {
     const g = this.g, n = g.n;
     const x = i % n, y = (i / n) | 0;
+    const m = g.conn[i] | g.conn1[i];
     for (let d = 0; d < 8; d++) {
-      if (g.conn[i] & (1 << d)) {
-        const nx = x + DX[d], ny = y + DY[d];
-        if (g.inb(nx, ny)) {
-          g.conn[ny * n + nx] &= ~(1 << ((d + 4) & 7));
-          g.flow[ny * n + nx] &= ~(1 << ((d + 4) & 7));
-        }
-      }
+      if (!(m & (1 << d))) continue;
+      const nx = x + DX[d], ny = y + DY[d];
+      if (!g.inb(nx, ny)) continue;
+      const j = ny * n + nx, b = ~(1 << ((d + 4) & 7));
+      g.conn[j] &= b;
+      g.flow[j] &= b;
+      g.conn1[j] &= b;
+      g.flow1[j] &= b;
+      // 上空の道路がどこにもつながらなくなったら消す（立体交差の残り）
+      if (g.up[j] && !g.conn1[j]) { g.up[j] = 0; g.upH[j] = 0; }
     }
     g.road[i] = 0;
     g.conn[i] = 0;
     g.flow[i] = 0;
     g.deck[i] = 0;
+    g.up[i] = 0;
+    g.conn1[i] = 0;
+    g.flow1[i] = 0;
+    g.upH[i] = 0;
+    g.ictl[i] = 0;
+    g.isplit[i] = 50;
+    g.iflags[i] = 0;
   }
 
   private placeBuilding(b: Building) {
@@ -448,16 +495,20 @@ export class World {
     for (let y = b.y - 1; y <= b.y + b.h; y++)
       for (let x = b.x - 1; x <= b.x + b.w; x++) {
         if (x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h) continue;
-        if (g.inb(x, y) && g.road[g.idx(x, y)]) out.push(g.idx(x, y));
+        if (g.inb(x, y) && this.isLocalRoad(g.road[g.idx(x, y)])) out.push(g.idx(x, y));
       }
     return out;
+  }
+
+  private isLocalRoad(t: number) {
+    return t !== 0 && !isHighway(t) && t !== RoadType.Ramp;
   }
 
   private hasRoadAccess(x: number, y: number) {
     const g = this.g;
     for (let d = 0; d < 8; d++) {
       const nx = x + DX[d], ny = y + DY[d];
-      if (g.inb(nx, ny) && g.road[g.idx(nx, ny)]) return true;
+      if (g.inb(nx, ny) && this.isLocalRoad(g.road[g.idx(nx, ny)])) return true;
     }
     return false;
   }
@@ -861,7 +912,7 @@ export class World {
         if (pk) park[g.idx(x, y)] = Math.max(park[g.idx(x, y)], pk);
       }
     }
-    for (let i = 0; i < N; i++) if (g.road[i]) src[i] += Math.min(0.6, this.maps.traffic[i] / 3000);
+    for (let i = 0; i < N; i++) if (g.anyRoad(i)) src[i] += Math.min(0.6, (this.maps.traffic[i] + this.maps.traffic[i + N]) / 3000);
     const pol = blur(src, n, 3, 3);
     for (let i = 0; i < N; i++) this.maps.pollution[i] = Math.min(255, Math.round(pol[i] * 140));
 
@@ -892,42 +943,60 @@ export class World {
     for (let i = 0; i < N; i++) this.maps.landValue[i] = Math.round(Math.max(0, Math.min(1, lvb[i])) * 255);
   }
 
-  // ---------------- 通勤 ----------------
+  // ---------------- 交通（通勤・買い物・貨物） ----------------
   private updateTraffic() {
-    const g = this.g, n = g.n;
-    const origins = new Map<number, Origin>();
+    const g = this.g, n = g.n, N = n * n;
+    const commuters = new Map<number, Origin>();
+    const shoppers = new Map<number, Origin>();
+    const trucks = new Map<number, Origin>();
     const jobsAt = new Map<number, Destination[]>();
+    const shopsAt = new Map<number, Destination[]>();
+    const addOrigin = (m: Map<number, Origin>, cell: number, id: number, trips: number) => {
+      let o = m.get(cell);
+      if (!o) m.set(cell, (o = { cell, trips: 0, buildings: [] }));
+      o.trips += trips;
+      o.buildings.push({ id, trips });
+    };
+    const addDest = (m: Map<number, Destination[]>, acc: number[], d: Destination) => {
+      for (const c of acc) {
+        let l = m.get(c);
+        if (!l) m.set(c, (l = []));
+        l.push(d);
+      }
+    };
     for (const b of this.buildings.values()) {
       if (b.civic || b.state !== BState.Normal) continue;
       const def = GROW[b.type as GrowKind];
       const acc = this.accessCells(b);
       if (!acc.length) continue;
+      const cell = acc[b.seed % acc.length];
       if (def.zone === ZoneType.R) {
-        const workers = Math.round(b.occ * 0.5);
-        const cell = acc[b.seed % acc.length];
-        let o = origins.get(cell);
-        if (!o) origins.set(cell, (o = { cell, workers: 0, buildings: [] }));
-        o.workers += workers;
-        o.buildings.push({ id: b.id, workers });
+        addOrigin(commuters, cell, b.id, Math.round(b.occ * 0.5));
+        addOrigin(shoppers, cell, b.id, Math.round(b.occ * 0.2));
       } else {
-        const dest = { id: b.id, free: b.cap };
-        for (const c of acc) {
-          let l = jobsAt.get(c);
-          if (!l) jobsAt.set(c, (l = []));
-          l.push(dest);
-        }
+        addDest(jobsAt, acc, { id: b.id, free: b.cap });
+        if (b.type === 'CS1' || b.type === 'CS2' || b.type === 'CS3') addDest(shopsAt, acc, { id: b.id, free: b.cap * 6 });
+        if (def.zone === ZoneType.I) addOrigin(trucks, cell, b.id, Math.max(1, Math.round(b.occ * (b.type === 'IA' ? 0.05 : 0.12))));
       }
     }
     const pop = this.population();
-    const external = this.neighborConnected ? Math.round(200 + pop * 0.25) : 0;
-    const r = assignCommute(g, [...origins.values()], jobsAt, external, this.maps.congestion, () => this.rng.next());
-    // 交通量と混雑度（前の月と平均してなめらかにする）
+    const hwy = this.highwayConnected ? 1.5 : 1;
+    const external = this.neighborConnected ? Math.round((200 + pop * 0.25) * hwy) : 0;
     const traffic = this.maps.traffic, cong = this.maps.congestion;
-    for (let i = 0; i < n * n; i++) {
-      if (!g.road[i]) { traffic[i] = 0; cong[i] = 1; continue; }
-      traffic[i] = traffic[i] * 0.4 + r.volume[i] * 0.6;
-      const cap = ROADS[g.road[i]].capacity;
-      cong[i] = cong[i] * 0.5 + congestionFactor(traffic[i], cap) * 0.5;
+    const junctions = buildJunctions(g, traffic);
+    const rnd = () => this.rng.next();
+    const rc = assignTrips(g, [...commuters.values()], jobsAt, cong, junctions, rnd, { externalCap: external, maxMinutes: 80, weight: 1 });
+    const rs = assignTrips(g, [...shoppers.values()], shopsAt, cong, junctions, rnd, { externalCap: this.neighborConnected ? pop * 0.03 : 0, maxMinutes: 30, weight: 0.5 });
+    const rf = assignTrips(g, [...trucks.values()], new Map(), cong, junctions, rnd, { externalCap: 1e9, externalOnly: true, maxMinutes: 90, weight: 2.5 });
+    // 交通量と混雑度（前の月と平均してなめらかにする）
+    for (let v = 0; v < 2 * N; v++) {
+      const t = g.nodeType(v);
+      if (!t) { traffic[v] = 0; cong[v] = 1; this.maps.freight[v] = 0; continue; }
+      const vol = rc.volume[v] + rs.volume[v] + rf.volume[v];
+      traffic[v] = traffic[v] * 0.4 + vol * 0.6;
+      this.maps.freight[v] = this.maps.freight[v] * 0.4 + rf.volume[v] * 0.6;
+      const cap = ROADS[t].capacity;
+      cong[v] = cong[v] * 0.5 + congestionFactor(traffic[v], cap) * 0.5;
     }
     let employed = 0;
     for (const b of this.buildings.values()) {
@@ -935,27 +1004,37 @@ export class World {
       const def = GROW[b.type as GrowKind];
       if (def.zone === ZoneType.R) {
         const workers = Math.round(b.occ * 0.5);
-        const e = r.employed.get(b.id);
+        const e = rc.served.get(b.id);
         if (e === undefined) {
           b.employed = 0;
           b.commute = 0;
         } else {
           b.employed = workers > 0 ? e / workers : 1;
-          b.commute = r.commute.get(b.id) || 0;
+          b.commute = rc.time.get(b.id) || 0;
           employed += e;
         }
       } else {
-        const f = r.filled.get(b.id) || 0;
+        const f = rc.filled.get(b.id) || 0;
         // 隣の都市からの通勤者もいる
         const outside = this.neighborConnected ? Math.min(b.cap - f, b.cap * 0.2) : 0;
         b.occ = Math.round(b.occ * 0.4 + (f + outside) * 0.6);
+        // 買い物客と貨物の輸送
+        if (b.type === 'CS1' || b.type === 'CS2' || b.type === 'CS3') {
+          b.customers = Math.min(1, (rs.filled.get(b.id) || 0) / Math.max(1, b.cap * 6) + (this.neighborConnected ? 0.15 : 0));
+        }
+        if (def.zone === ZoneType.I) {
+          const shipped = rf.served.get(b.id);
+          b.freight = shipped === undefined ? 1 : Math.min(1, shipped / Math.max(1, Math.round(b.occ * 0.12)));
+          b.freightTime = rf.time.get(b.id) || 0;
+        }
       }
     }
     this.employedTotal = employed;
-    this.avgCommute = r.avgCommute;
-    // 道路マスごとの通勤時間（近くの空き地の魅力に使う）
-    const cm = new Float32Array(n * n);
-    const cnt = new Float32Array(n * n);
+    this.avgCommute = rc.avgTime;
+    this.tripStats = { shopping: Math.round(rs.avgTime * 10) / 10, freight: Math.round(rf.avgTime * 10) / 10, trucks: Math.round([...trucks.values()].reduce((a, o) => a + o.trips, 0)) };
+    // マスごとの通勤時間（近くの空き地の魅力に使う）
+    const cm = new Float32Array(N);
+    const cnt = new Float32Array(N);
     for (const b of this.buildings.values()) {
       if (b.civic || GROW[b.type as GrowKind].zone !== ZoneType.R || !b.commute) continue;
       for (let y = b.y; y < b.y + b.h; y++) for (let x = b.x; x < b.x + b.w; x++) {
@@ -964,8 +1043,13 @@ export class World {
       }
     }
     const bc = blur(cm, n, 4, 2), bn = blur(cnt, n, 4, 2);
-    for (let i = 0; i < n * n; i++) this.commuteAtCell[i] = bn[i] > 0.01 ? bc[i] / bn[i] : 0;
+    for (let i = 0; i < N; i++) this.commuteAtCell[i] = bn[i] > 0.01 ? bc[i] / bn[i] : 0;
+    // 自動の交差点の制御方式（表示用）
+    this.junctionCtl = junctions.ctl;
   }
+  junctionCtl: Uint8Array = new Uint8Array(0);
+  static readonly CTL_AUTO = Ctl.Auto;
+  tripStats = { shopping: 0, freight: 0, trucks: 0 };
 
   // ---------------- 需要 ----------------
   private updateDemand() {
@@ -1040,6 +1124,8 @@ export class World {
         b.occ = Math.round(b.occ + (target - b.occ) * 0.3);
       } else {
         if (b.occ < b.cap * 0.3 && b.stateDays > 180) bad = true;
+        if (b.customers !== undefined && b.customers < 0.2 && b.stateDays > 240) bad = true;
+        if (b.freight !== undefined && b.freight < 0.3 && b.stateDays > 180) bad = true;
       }
       b.badMonths = bad ? b.badMonths + 1 : Math.max(0, b.badMonths - 1);
       if (b.badMonths >= 6) {
@@ -1074,6 +1160,7 @@ export class World {
     const g = this.g;
     for (let i = 0; i < g.n * g.n; i++) {
       if (g.road[i]) exp.道路 += ROADS[g.road[i]].upkeep;
+      if (g.up[i]) exp.道路 += ROADS[g.up[i]].upkeep;
       if (g.pline[i]) exp.電力 += POWER_LINE_UPKEEP;
     }
     let income = 0, expense = 0;
@@ -1089,13 +1176,19 @@ export class World {
 
   private checkNeighbor() {
     const g = this.g, n = g.n;
-    let found = false;
-    for (let k = 0; k < n && !found; k++) {
-      if (g.road[k] || g.road[(n - 1) * n + k] || g.road[k * n] || g.road[k * n + n - 1]) found = true;
+    let found = false, hwy = false;
+    for (let k = 0; k < n; k++) {
+      for (const i of [k, (n - 1) * n + k, k * n, k * n + n - 1]) {
+        if (g.anyRoad(i)) found = true;
+        if (isHighway(g.road[i]) || isHighway(g.up[i])) hwy = true;
+      }
     }
     if (found && !this.neighborConnected) this.pushNews('道路が隣の都市とつながりました。通勤や取引が始まります。');
+    if (hwy && !this.highwayConnected) this.pushNews('高速道路が隣の都市とつながりました。通勤と貨物の輸送が便利になります。');
     this.neighborConnected = found;
+    this.highwayConnected = hwy;
   }
+  private highwayConnected = false;
 
   population() {
     let p = 0;

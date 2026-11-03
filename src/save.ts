@@ -61,7 +61,7 @@ export async function listSaves(): Promise<SaveMeta[]> {
 }
 
 // ---- ファイル ----
-const TYPED = ['heights', 'road', 'conn', 'flow', 'deck', 'pline', 'zone', 'zden', 'bldg', 'tree', 'congestion', 'traffic'] as const;
+const TYPED = ['heights', 'road', 'conn', 'flow', 'deck', 'up', 'conn1', 'flow1', 'upH', 'ictl', 'isplit', 'iflags', 'pline', 'zone', 'zden', 'bldg', 'tree', 'congestion', 'traffic'] as const;
 
 function toB64(a: ArrayBufferView): string {
   const u = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
@@ -101,7 +101,7 @@ export async function importFile(f: Blob): Promise<SaveData> {
   if (obj.format !== 'pocket-metro') throw new Error('Pocket Metro の保存ファイルではありません');
   const out = obj as Record<string, unknown>;
   const types: Record<string, (b: ArrayBuffer) => ArrayBufferView> = {
-    heights: (b) => new Float32Array(b), deck: (b) => new Float32Array(b), congestion: (b) => new Float32Array(b), traffic: (b) => new Float32Array(b),
+    heights: (b) => new Float32Array(b), deck: (b) => new Float32Array(b), upH: (b) => new Float32Array(b), congestion: (b) => new Float32Array(b), traffic: (b) => new Float32Array(b),
     bldg: (b) => new Int32Array(b),
   };
   for (const k of TYPED) {

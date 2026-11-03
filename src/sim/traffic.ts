@@ -1,12 +1,11 @@
-// 通勤の交通シミュレーション
-// SC4 と同じく、住宅から職場まで所要時間が最短の経路を探し、道路ごとの交通量を集計する。
+// 交通シミュレーション
+// SC4 と同じく、出発地から目的地まで所要時間が最短の経路を探し、道路ごとの交通量を集計する。
 // 住人は建物単位、さらに出発する道路マス単位にまとめて計算する。
-import { Grid } from './grid';
-import { CELL, DX, DY, isDiag } from './constants';
-import { ROADS } from './defs';
+// 経路探索のノードは「階層 × マス」（地上と上空）。最後の番号は「隣の都市」。
+import { Grid, Ctl, JF } from './grid';
+import { CELL, isDiag } from './constants';
+import { ROADS, RoadType, isHighway } from './defs';
 
-export const MAX_COMMUTE_MIN = 80;
-const EXTERNAL_PENALTY_MIN = 14; // 隣の都市へ行くときの追加時間
 const START_OVERHEAD_MIN = 2; // 家を出て駐車場まで等
 
 class MinHeap {
@@ -61,9 +60,9 @@ class MinHeap {
 }
 
 export interface Origin {
-  cell: number; // 出発する道路マス
-  workers: number;
-  buildings: { id: number; workers: number }[];
+  cell: number; // 出発する道路マス（地上）
+  trips: number;
+  buildings: { id: number; trips: number }[];
 }
 
 export interface Destination {
@@ -71,48 +70,142 @@ export interface Destination {
   free: number;
 }
 
-export interface CommuteResult {
-  volume: Float32Array; // 道路マスごとの1日の交通量
-  employed: Map<number, number>; // 住宅ID → 職のある人数
-  commute: Map<number, number>; // 住宅ID → 平均通勤時間（分）
-  filled: Map<number, number>; // 職場ID → 働く人数
-  externalWorkers: number; // 隣の都市へ通勤する人数
-  avgCommute: number;
+export interface TripResult {
+  volume: Float32Array; // ノードごとの1日の交通量
+  served: Map<number, number>; // 出発する建物ID → 目的地に着けた数
+  time: Map<number, number>; // 出発する建物ID → 平均所要時間（分）
+  filled: Map<number, number>; // 目的地ID → 受け入れた数
+  external: number; // 隣の都市へ行った数
+  avgTime: number;
 }
 
-// 道路マスの移動時間（分）。congestion は前回の混雑度（1以上）。
+// ---------------- 交差点 ----------------
+export interface JunctionModel {
+  ctl: Uint8Array; // 実際に使う制御方式（自動の場合は交通量で決める）
+  load: Float32Array; // 交差点の混み具合（交通量 / 交差点の容量）
+  deg: Uint8Array;
+}
+
+const NODE_CAP: Record<number, number> = {
+  [Ctl.None]: 2600,
+  [Ctl.Stop]: 2000,
+  [Ctl.Signal]: 5200,
+  [Ctl.Roundabout]: 4200,
+};
+
+// 自動のときの制御方式：交通量が少なければ信号なし、多くなると一時停止、さらに多いと信号
+export function autoCtl(vol: number, deg: number, roadType: number) {
+  if (deg < 3) return Ctl.None;
+  if (vol < 900) return Ctl.None;
+  if (vol < 2600 && roadType <= RoadType.Road) return Ctl.Stop;
+  return Ctl.Signal;
+}
+
+export function buildJunctions(g: Grid, traffic: Float32Array): JunctionModel {
+  const N = g.n * g.n;
+  const ctl = new Uint8Array(N), load = new Float32Array(N), deg = new Uint8Array(N);
+  for (let i = 0; i < N; i++) {
+    const m = g.conn[i];
+    if (!m || isHighway(g.road[i])) continue;
+    let d = 0;
+    for (let k = 0; k < 8; k++) if (m & (1 << k)) d++;
+    deg[i] = d;
+    if (d < 3) continue;
+    const c = g.ictl[i] === Ctl.Auto ? autoCtl(traffic[i], d, g.road[i]) : g.ictl[i];
+    ctl[i] = c;
+    const lanes = g.iflags[i] & (JF.leftLane | JF.rightLane) ? 1.25 : 1;
+    load[i] = traffic[i] / ((NODE_CAP[c] ?? 2600) * lanes);
+  }
+  return { ctl, load, deg };
+}
+
+// 曲がり方：0 = 直進, 1 = 右折, 2 = 左折, 3 = Uターン（右側通行、y が下向きの座標）
+export function turnKind(din: number, dout: number) {
+  const diff = (dout - din + 8) & 7;
+  if (diff === 0 || diff === 1 || diff === 7) return diff === 0 ? 0 : diff === 1 ? 1 : 2;
+  if (diff === 4) return 3;
+  return diff < 4 ? 1 : 2;
+}
+
+// 交差点の待ち時間（分）。通れない場合は -1。
+export function junctionDelay(g: Grid, j: JunctionModel, cell: number, din: number, dout: number): number {
+  const c = j.ctl[cell];
+  if (!c) return 0;
+  const f = g.iflags[cell];
+  const turn = turnKind(din, dout);
+  if (turn === 3) return -1;
+  if (f & JF.straightOnly && turn !== 0) return -1;
+  if (f & JF.noLeft && turn === 2) return -1;
+  if (f & JF.noRight && turn === 1) return -1;
+  const x = Math.min(0.95, j.load[cell]);
+  let delay: number;
+  switch (c) {
+    case Ctl.Signal: {
+      // 進入する向きの青の割合
+      const ew = din === 0 || din === 4 ? 1 : din === 2 || din === 6 ? 0 : 0.5;
+      const split = g.isplit[cell] / 100;
+      const green = Math.max(0.1, ew * split + (1 - ew) * (1 - split));
+      const cycle = 1.5;
+      delay = (0.5 * cycle * (1 - green) * (1 - green)) / (1 - x * green) + 0.05;
+      break;
+    }
+    case Ctl.Stop:
+      delay = 0.15 + 0.8 * x * x;
+      break;
+    case Ctl.Roundabout:
+      delay = 0.06 + 0.6 * x * x * x;
+      break;
+    default:
+      delay = 0.03 + 1.6 * x * x * x;
+  }
+  // 曲がる車は遅くなる。専用レーンがあれば緩和される
+  if (turn === 2) delay *= f & JF.leftLane ? 0.7 : 1.6;
+  else if (turn === 1) delay *= f & JF.rightLane ? 0.6 : 1.15;
+  return delay;
+}
+
+// 道路の移動時間（分）
 export function edgeMinutes(g: Grid, from: number, d: number, congestion: Float32Array) {
-  const def = ROADS[g.road[from]] || ROADS[1];
+  const def = ROADS[g.nodeType(from)] || ROADS[1];
   const len = isDiag(d) ? CELL * 1.414 : CELL;
   const base = len / ((def.speedKmh * 1000) / 60);
   return base * congestion[from];
 }
 
-export function assignCommute(
+export interface TripOptions {
+  externalCap: number; // 隣の都市で受け入れられる数
+  externalOnly?: boolean; // 目的地は隣の都市だけ（貨物）
+  maxMinutes: number;
+  weight: number; // 交通量に加えるときの重み（トラックは大きい）
+}
+
+export function assignTrips(
   g: Grid,
   origins: Origin[],
-  jobsAt: Map<number, Destination[]>, // 道路マス → そこに面した職場
-  externalJobs: number,
+  destAt: Map<number, Destination[]>, // 道路マス（地上）→ そこに面した目的地
   congestion: Float32Array,
+  junctions: JunctionModel,
   random: () => number,
-): CommuteResult {
-  const n = g.n, N = n * n;
-  const EXT = N; // 仮想ノード：隣の都市
-  const volume = new Float32Array(N);
-  const employed = new Map<number, number>();
-  const commute = new Map<number, number>();
+  opt: TripOptions,
+): TripResult {
+  const n = g.n, N = n * n, NN = 2 * N;
+  const EXT = NN;
+  const volume = new Float32Array(NN);
+  const served = new Map<number, number>();
+  const time = new Map<number, number>();
   const filled = new Map<number, number>();
-  const dist = new Float32Array(N + 1);
-  const prev = new Int32Array(N + 1);
-  const stamp = new Int32Array(N + 1);
-  const done = new Int32Array(N + 1);
+  const dist = new Float32Array(NN + 1);
+  const prev = new Int32Array(NN + 1);
+  const inDir = new Int8Array(NN + 1);
+  const stamp = new Int32Array(NN + 1);
+  const done = new Int32Array(NN + 1);
   const heap = new MinHeap();
   let gen = 0;
-  let extFree = externalJobs;
-  let externalWorkers = 0;
-  // 同じ職場が複数の道路マスに面している場合があるので、空き数は職場単位で共有する
+  let extFree = opt.externalCap;
+  let external = 0;
+  // 同じ目的地が複数の道路マスに面している場合があるので、空き数は目的地単位で共有する
   const freeById = new Map<number, Destination>();
-  for (const list of jobsAt.values()) for (const d of list) freeById.set(d.id, d);
+  if (!opt.externalOnly) for (const list of destAt.values()) for (const d of list) freeById.set(d.id, d);
   let totalFree = extFree;
   for (const d of freeById.values()) totalFree += d.free;
 
@@ -123,21 +216,22 @@ export function assignCommute(
     [order[i], order[j]] = [order[j], order[i]];
   }
 
-  const isEdge = (i: number) => {
-    const x = i % n, y = (i / n) | 0;
+  const isEdge = (c: number) => {
+    const x = c % n, y = (c / n) | 0;
     return x === 0 || y === 0 || x === n - 1 || y === n - 1;
   };
+  const extPenalty = (node: number) => (isHighway(g.nodeType(node)) ? 6 : 14);
 
   let sumTime = 0, sumTrips = 0;
 
   for (const o of order) {
-    let remaining = o.workers;
+    let remaining = o.trips;
     let got = 0, timeAcc = 0;
     if (remaining <= 0) continue;
     if (totalFree <= 0) {
       for (const b of o.buildings) {
-        employed.set(b.id, 0);
-        commute.set(b.id, 0);
+        served.set(b.id, 0);
+        time.set(b.id, 0);
       }
       continue;
     }
@@ -145,6 +239,7 @@ export function assignCommute(
     heap.clear();
     dist[o.cell] = START_OVERHEAD_MIN;
     prev[o.cell] = -1;
+    inDir[o.cell] = -1;
     stamp[o.cell] = gen;
     heap.push(START_OVERHEAD_MIN, o.cell);
     while (heap.size && remaining > 0) {
@@ -152,16 +247,16 @@ export function assignCommute(
       const u = heap.pop();
       if (done[u] === gen) continue;
       done[u] = gen;
-      if (t > MAX_COMMUTE_MIN) break;
+      if (t > opt.maxMinutes) break;
 
       // 目的地の判定
       let take = 0;
       if (u === EXT) {
         take = Math.min(remaining, extFree);
         extFree -= take;
-        externalWorkers += take;
-      } else {
-        const list = jobsAt.get(u);
+        external += take;
+      } else if (u < N && !opt.externalOnly) {
+        const list = destAt.get(u);
         if (list) {
           for (const d of list) {
             const dd = freeById.get(d.id)!;
@@ -181,8 +276,9 @@ export function assignCommute(
         timeAcc += take * t;
         // 経路に交通量を加える
         let c = u === EXT ? prev[EXT] : u;
+        const w = take * opt.weight;
         while (c >= 0) {
-          volume[c] += take;
+          volume[c] += w;
           c = prev[c];
         }
         if (totalFree <= 0) break;
@@ -190,31 +286,25 @@ export function assignCommute(
       if (u === EXT) continue;
 
       // 隣へ広げる
-      const m = g.flow[u];
-      if (m) {
-        const x = u % n, y = (u / n) | 0;
-        let deg = 0;
-        const cm = g.conn[u];
-        for (let d = 0; d < 8; d++) if (cm & (1 << d)) deg++;
-        const junction = deg >= 3 ? 0.12 * congestion[u] : 0;
-        for (let d = 0; d < 8; d++) {
-          if (!(m & (1 << d))) continue;
-          const nx = x + DX[d];
-          const ny = y + DY[d];
-          if (nx < 0 || ny < 0 || nx >= n || ny >= n) continue;
-          const v = ny * n + nx;
-          if (!g.road[v]) continue;
-          const nt = t + edgeMinutes(g, u, d, congestion) + junction;
-          if (stamp[v] !== gen || nt < dist[v]) {
-            stamp[v] = gen;
-            dist[v] = nt;
-            prev[v] = u;
-            heap.push(nt, v);
-          }
+      const cell = u >= N ? u - N : u;
+      const din = inDir[u];
+      g.forEachOut(u, (v, d) => {
+        let jd = 0;
+        if (u < N && din >= 0 && junctions.ctl[cell]) {
+          jd = junctionDelay(g, junctions, cell, din, d);
+          if (jd < 0) return;
+        } else if (din >= 0 && ((d - din + 8) & 7) === 4) return; // Uターンはしない
+        const nt = t + edgeMinutes(g, u, d, congestion) + jd;
+        if (stamp[v] !== gen || nt < dist[v]) {
+          stamp[v] = gen;
+          dist[v] = nt;
+          prev[v] = u;
+          inDir[v] = d;
+          heap.push(nt, v);
         }
-      }
-      if (extFree > 0 && isEdge(u)) {
-        const nt = t + EXTERNAL_PENALTY_MIN;
+      });
+      if (extFree > 0 && isEdge(cell)) {
+        const nt = t + extPenalty(u);
         if (stamp[EXT] !== gen || nt < dist[EXT]) {
           stamp[EXT] = gen;
           dist[EXT] = nt;
@@ -224,16 +314,16 @@ export function assignCommute(
       }
     }
     // 建物ごとに配分
-    const ratio = o.workers > 0 ? got / o.workers : 0;
+    const ratio = o.trips > 0 ? got / o.trips : 0;
     const avg = got > 0 ? timeAcc / got : 0;
     for (const b of o.buildings) {
-      employed.set(b.id, b.workers * ratio);
-      commute.set(b.id, avg);
+      served.set(b.id, b.trips * ratio);
+      time.set(b.id, avg);
     }
     sumTime += timeAcc;
     sumTrips += got;
   }
-  return { volume, employed, commute, filled, externalWorkers, avgCommute: sumTrips ? sumTime / sumTrips : 0 };
+  return { volume, served, time, filled, external, avgTime: sumTrips ? sumTime / sumTrips : 0 };
 }
 
 // 混雑度（BPR 関数）

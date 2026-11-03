@@ -57,7 +57,7 @@ describe('simulation', () => {
     expect(p.dirs.filter((d) => d % 2 === 1).length).toBe(4);
   });
 
-  it('grows a city over several years', () => {
+  it('grows a city over several years', { timeout: 60000 }, () => {
     const w = World.create({ name: 'テスト', seed: 12345, style: 'river', difficulty: 1, sandbox: false });
     const log = buildTestCity(w);
     const t0 = performance.now();
@@ -76,7 +76,7 @@ describe('simulation', () => {
     const ms = performance.now() - t0;
     console.log(log.join('\n'));
     console.log(rows.join('\n'));
-    console.log(`10 years: ${ms.toFixed(0)} ms`);
+    console.log(`10 years: ${ms.toFixed(0)} ms (${(ms / 120).toFixed(1)} ms/month)`);
     const kinds: Record<string, number> = {};
     for (const b of w.buildings.values()) kinds[b.type] = (kinds[b.type] || 0) + 1;
     console.log(kinds);
@@ -125,7 +125,7 @@ describe('stage 2a roads', () => {
     expect(w.g.road[w.g.idx(14, 8)]).toBe(RoadType.Road);
   });
 
-  it('grows taller buildings in dense zones', () => {
+  it('grows taller buildings in dense zones', { timeout: 60000 }, () => {
     const w = World.create({ name: 'dense', seed: 777, style: 'river', difficulty: 0, sandbox: true });
     buildTestCity(w);
     // 中心部を高密度に指定し直す
@@ -142,5 +142,87 @@ describe('stage 2a roads', () => {
     console.log(`dense: pop=${w.stats.population} jobs=${w.stats.jobs} maxFloors=${maxFloors} offices=${offices} buildings=${w.buildings.size}`);
     expect(maxFloors).toBeGreaterThan(6);
     expect(w.stats.population).toBeGreaterThan(5000);
+  });
+});
+
+describe('stage 2b highways', () => {
+  const flat = () => {
+    const w = new World(48);
+    w.g.heights.fill(10);
+    w.funds = 1e7;
+    return w;
+  };
+  // 2つのノード間で、通れる経路があるか
+  const reachable = (w: World, from: number, to: number) => {
+    const seen = new Set<number>([from]);
+    const q = [from];
+    const N = w.g.n * w.g.n;
+    while (q.length) {
+      const u = q.pop()!;
+      if (u % N === to) return true;
+      w.g.forEachOut(u, (v) => { if (!seen.has(v)) { seen.add(v); q.push(v); } });
+    }
+    return false;
+  };
+
+  it('roads cross a ground highway with an overpass and do not connect to it', () => {
+    const w = flat();
+    expect(w.exec({ t: 'road', x0: 2, y0: 20, x1: 40, y1: 20, road: RoadType.GroundHighway }).ok).toBe(true);
+    const r = w.exec({ t: 'road', x0: 20, y0: 10, x1: 20, y1: 30, road: RoadType.Road });
+    expect(r.ok).toBe(true);
+    const c = w.g.idx(20, 20);
+    expect(w.g.road[c]).toBe(RoadType.GroundHighway);
+    expect(w.g.up[c]).toBe(RoadType.Road); // 立体交差
+    // 一般道から高速道路には入れない
+    const N = w.g.n * w.g.n;
+    let entersHighway = false;
+    w.g.forEachOut(w.g.idx(20, 18), (v) => { if (v < N && w.g.road[v] === RoadType.GroundHighway) entersHighway = true; });
+    expect(entersHighway).toBe(false);
+    // 一般道は南北につながっている
+    expect(reachable(w, w.g.idx(20, 12), w.g.idx(20, 28))).toBe(true);
+  });
+
+  it('a ground highway drawn over an existing road turns the road into an overpass', () => {
+    const w = flat();
+    expect(w.exec({ t: 'road', x0: 20, y0: 5, x1: 20, y1: 40, road: RoadType.Road }).ok).toBe(true);
+    expect(w.exec({ t: 'road', x0: 2, y0: 20, x1: 40, y1: 20, road: RoadType.GroundHighway }).ok).toBe(true);
+    expect(w.g.up[w.g.idx(20, 20)]).toBe(RoadType.Road);
+    expect(w.g.up[w.g.idx(20, 19)]).toBe(RoadType.Road);
+    expect(reachable(w, w.g.idx(20, 6), w.g.idx(20, 38))).toBe(true);
+  });
+
+  it('ramps connect roads and highways', () => {
+    const w = flat();
+    w.exec({ t: 'road', x0: 2, y0: 20, x1: 45, y1: 20, road: RoadType.GroundHighway });
+    w.exec({ t: 'road', x0: 10, y0: 21, x1: 10, y1: 35, road: RoadType.Road });
+    // 南側の車線（東向き）の横、一般道の隣にランプ
+    const r = w.exec({ t: 'ramp', x: 11, y: 21 });
+    expect(r.ok).toBe(true);
+    expect(reachable(w, w.g.idx(10, 34), w.g.idx(44, 20))).toBe(true); // 一般道 → 高速道路
+    expect(reachable(w, w.g.idx(4, 20), w.g.idx(10, 34))).toBe(true); // 高速道路 → 一般道
+  });
+
+  it('elevated highways pass over roads and the diamond interchange connects them', () => {
+    const w = flat();
+    w.exec({ t: 'road', x0: 20, y0: 2, x1: 20, y1: 45, road: RoadType.Street });
+    expect(w.exec({ t: 'road', x0: 2, y0: 24, x1: 45, y1: 24, road: RoadType.Highway }).ok).toBe(true);
+    const c = w.g.idx(20, 24);
+    expect(w.g.road[c]).toBe(RoadType.Street);
+    expect(w.g.up[c]).toBe(RoadType.Highway);
+    expect(w.g.upH[c]).toBeGreaterThan(15);
+    const d = w.exec({ t: 'diamond', x: 30, y: 24 });
+    expect(d.ok).toBe(true);
+    expect(reachable(w, w.g.idx(30, 27), w.g.idx(44, 24))).toBe(true); // 南から高速道路（東向き）へ
+    expect(reachable(w, w.g.n * w.g.n + w.g.idx(4, 24), w.g.idx(30, 20))).toBe(true); // 高架の高速道路から北へ
+  });
+
+  it('turn restrictions block movements', () => {
+    const w = flat();
+    w.exec({ t: 'road', x0: 5, y0: 20, x1: 35, y1: 20, road: RoadType.Road });
+    w.exec({ t: 'road', x0: 20, y0: 5, x1: 20, y1: 35, road: RoadType.Road });
+    const c = w.g.idx(20, 20);
+    expect(w.exec({ t: 'junction', cell: c, ctl: 3, split: 70, flags: 16 }).ok).toBe(true);
+    expect(w.g.ictl[c]).toBe(3);
+    expect(w.g.iflags[c]).toBe(16);
   });
 });

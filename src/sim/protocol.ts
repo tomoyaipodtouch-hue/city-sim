@@ -21,15 +21,7 @@ export interface GridMsg {
   t: 'grid';
   n: number;
   heights?: Float32Array;
-  road: Uint8Array;
-  conn: Uint8Array;
-  flow: Uint8Array;
-  deck: Float32Array;
-  pline: Uint8Array;
-  zone: Uint8Array;
-  zden: Uint8Array;
-  bldg: Int32Array;
-  tree: Uint8Array;
+  arrays: Record<string, Uint8Array | Float32Array | Int32Array>; // GRID_U8 / GRID_F32 / GRID_I32 の配列
 }
 
 export type FromWorker =

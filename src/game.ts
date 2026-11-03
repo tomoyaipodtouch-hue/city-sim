@@ -47,15 +47,8 @@ export class GameClient {
         if (!this.grid || this.grid.n !== m.n) this.grid = new Grid(m.n);
         const g = this.grid;
         if (m.heights) g.heights.set(m.heights);
-        g.road.set(m.road);
-        g.conn.set(m.conn);
-        g.flow.set(m.flow);
-        g.deck.set(m.deck);
-        g.pline.set(m.pline);
-        g.zone.set(m.zone);
-        g.zden.set(m.zden);
-        g.bldg.set(m.bldg);
-        g.tree.set(m.tree);
+        const rec = g as unknown as Record<string, { set(a: ArrayLike<number>): void }>;
+        for (const k in m.arrays) rec[k]?.set(m.arrays[k]);
         this.onGrid?.(g, !!m.heights);
         break;
       }

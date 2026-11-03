@@ -7,6 +7,9 @@ export enum RoadType {
   Road = 2,
   OneWay = 3,
   Avenue = 4,
+  Highway = 5, // 高架の高速道路（上空の階層）
+  GroundHighway = 6, // 地上の高速道路
+  Ramp = 7, // ランプ（高速道路の出入口）
 }
 
 export interface RoadDef {
@@ -20,6 +23,9 @@ export interface RoadDef {
   oneWay?: boolean; // 一方向だけ通れる
   wide?: boolean; // 2マス幅（大通り）
   rank: number; // 上書きするときの優先度
+  highway?: boolean; // 高速道路（一般の道路とは直接つながらない）
+  elevated?: boolean; // 上空の階層に作る
+  lift?: number; // 地面からの高さ（上空の階層）
 }
 
 export const ROADS: Record<number, RoadDef> = {
@@ -27,7 +33,14 @@ export const ROADS: Record<number, RoadDef> = {
   [RoadType.Road]: { id: RoadType.Road, name: '一般道', speedKmh: 50, capacity: 2400, cost: 20, upkeep: 0.2, width: 10, rank: 2 },
   [RoadType.OneWay]: { id: RoadType.OneWay, name: '一方通行', speedKmh: 50, capacity: 3000, cost: 25, upkeep: 0.25, width: 10, oneWay: true, rank: 3 },
   [RoadType.Avenue]: { id: RoadType.Avenue, name: '大通り', speedKmh: 60, capacity: 3600, cost: 30, upkeep: 0.3, width: 11, oneWay: true, wide: true, rank: 4 },
+  [RoadType.Highway]: { id: RoadType.Highway, name: '高架高速道路', speedKmh: 100, capacity: 7000, cost: 120, upkeep: 1.0, width: 13, oneWay: true, wide: true, rank: 6, highway: true, elevated: true, lift: 10 },
+  [RoadType.GroundHighway]: { id: RoadType.GroundHighway, name: '地上の高速道路', speedKmh: 90, capacity: 6500, cost: 60, upkeep: 0.6, width: 13, oneWay: true, wide: true, rank: 5, highway: true },
+  [RoadType.Ramp]: { id: RoadType.Ramp, name: 'ランプ', speedKmh: 50, capacity: 3000, cost: 0, upkeep: 0.3, width: 9, rank: 0 },
 };
+
+export const OVERPASS_LIFT = 7.5; // 地上の高速道路をまたぐ道路の高さ
+export const RAMP_COST = 600; // ランプ1か所
+export const isHighway = (t: number) => t === RoadType.Highway || t === RoadType.GroundHighway;
 
 export const BRIDGE_COST_MUL = 6; // 橋は建設費が何倍か
 export const MAX_BRIDGE = 24; // 橋の最大の長さ（マス）
