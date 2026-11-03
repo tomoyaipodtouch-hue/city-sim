@@ -10,9 +10,8 @@ export class CameraRig {
   camera: THREE.PerspectiveCamera;
   target = new THREE.Vector3();
   dist = 520;
-  // 0 = グリッドが画面に対して縦横にまっすぐ見える向き
-  yaw = 0;
-  yawTarget = 0;
+  yaw = Math.PI / 4;
+  yawTarget = Math.PI / 4;
   private size = 2048;
 
   constructor(aspect: number) {
@@ -26,7 +25,8 @@ export class CameraRig {
 
   get pitch() {
     const t = Math.log(this.dist / MIN_DIST) / Math.log(MAX_DIST / MIN_DIST);
-    return THREE.MathUtils.degToRad(26 + t * 36);
+    // 近づいたときも地面がつぶれすぎないよう、真上寄りの角度にする（近く 48°〜遠く 72°）
+    return THREE.MathUtils.degToRad(48 + t * 24);
   }
 
   update(dt: number, g: Grid | null) {
