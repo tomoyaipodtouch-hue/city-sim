@@ -66,7 +66,7 @@ export class CityRenderer {
     this.sun.shadow.bias = -0.0006;
     this.sun.shadow.normalBias = 0.6;
     this.scene.add(this.sun, this.sun.target);
-    this.scene.add(this.roads.group, this.buildings.group, this.trees.group, this.cars.mesh, this.preview.mesh, this.preview.line);
+    this.scene.add(this.roads.group, this.buildings.group, this.trees.group, this.cars.group, this.preview.mesh, this.preview.line);
     this.resize();
     window.addEventListener('resize', () => this.resize());
     requestAnimationFrame(this.loop);
@@ -124,7 +124,13 @@ export class CityRenderer {
   setMaps(m: Maps) {
     this.maps = m;
     this.dirty.overlay = true;
-    if (this.grid) this.cars.setData(this.grid, m.traffic, m.congestion);
+    // 交差点の制御方式が変わったら道路を作り直す（信号やラウンドアバウトの表示）
+    const old = this.roads.jctl;
+    if (old.length !== m.jctl.length || old.some((v, i) => v !== m.jctl[i])) {
+      this.roads.jctl = m.jctl;
+      this.dirty.grid = true;
+    }
+    if (this.grid) this.cars.setData(this.grid, m.traffic, m.congestion, m.freight);
     this.kick();
   }
 
@@ -190,7 +196,8 @@ export class CityRenderer {
     if (!carsMoving && this.idleFrames > 30 && this.idleFrames % 10 !== 0) return;
     this.rig.update(dt, this.grid);
     if (carsMoving) this.cars.update(dt);
-    else this.cars.mesh.count = 0;
+    else this.cars.group.visible = false;
+    if (carsMoving) this.cars.group.visible = true;
     this.updateShadow();
     this.renderer.render(this.scene, this.rig.camera);
     this.fpsAcc += dt;

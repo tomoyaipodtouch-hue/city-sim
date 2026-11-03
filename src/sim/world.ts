@@ -73,6 +73,7 @@ export interface Maps {
   pollution: Uint8Array;
   traffic: Float32Array;
   freight: Float32Array; // トラックの交通量（見た目用）
+  jctl: Uint8Array; // 交差点の実際の制御方式（自動の場合は交通量で決まったもの）
   congestion: Float32Array;
 }
 
@@ -201,6 +202,7 @@ export class World {
       pollution: new Uint8Array(c),
       traffic: new Float32Array(c * 2),
       freight: new Float32Array(c * 2),
+      jctl: new Uint8Array(c),
       congestion,
     };
   }
@@ -384,6 +386,8 @@ export class World {
         g.ictl[c.cell] = c.ctl;
         g.isplit[c.cell] = Math.max(10, Math.min(90, Math.round(c.split)));
         g.iflags[c.cell] = c.flags;
+        this.maps.jctl.set(buildJunctions(g, this.maps.traffic).ctl);
+        this.mapsVersion++;
         this.gridVersion++;
         return { ok: true };
       }
@@ -1046,6 +1050,7 @@ export class World {
     for (let i = 0; i < N; i++) this.commuteAtCell[i] = bn[i] > 0.01 ? bc[i] / bn[i] : 0;
     // 自動の交差点の制御方式（表示用）
     this.junctionCtl = junctions.ctl;
+    this.maps.jctl.set(junctions.ctl);
   }
   junctionCtl: Uint8Array = new Uint8Array(0);
   static readonly CTL_AUTO = Ctl.Auto;

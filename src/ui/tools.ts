@@ -1,6 +1,6 @@
 // ツールの定義と、ドラッグ中のプレビュー・確定
-import { CIVIC, CivicId, DENSITY_NAMES, ROADS, RoadType, ZoneType, ZONE_COST, ZONE_NAMES, POWER_LINE_COST } from '../sim/defs';
-import { normRect, planBulldoze, planLine, planPlop, planPowerLine, planRoad, planZone } from '../sim/plan';
+import { CIVIC, CivicId, DENSITY_NAMES, ROADS, RoadType, ZoneType, ZONE_COST, ZONE_NAMES, POWER_LINE_COST, RAMP_COST } from '../sim/defs';
+import { normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone } from '../sim/plan';
 import type { Command } from '../sim/world';
 import type { GameClient } from '../game';
 import type { CityRenderer } from '../render/renderer';
@@ -31,8 +31,11 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { tool: 'road:2', name: ROADS[RoadType.Road].name, note: `${yen(ROADS[2].cost)}/マス` },
       { tool: 'road:3', name: ROADS[RoadType.OneWay].name, note: `${yen(ROADS[3].cost)}/マス` },
       { tool: 'road:4', name: `${ROADS[RoadType.Avenue].name}（2マス幅）`, note: `${yen(ROADS[4].cost * 2)}/マス` },
-      { name: '高架高速道路', note: '今後追加', disabled: true },
-      { name: '地上の高速道路', note: '今後追加', disabled: true },
+      { tool: 'road:5', name: `${ROADS[RoadType.Highway].name}（2マス幅）`, note: `${yen(ROADS[5].cost * 2)}/マス` },
+      { tool: 'road:6', name: `${ROADS[RoadType.GroundHighway].name}（2マス幅）`, note: `${yen(ROADS[6].cost * 2)}/マス` },
+      { tool: 'ramp', name: 'ランプ（出入口）', note: yen(RAMP_COST) },
+      { tool: 'diamond', name: 'ダイヤモンド型インターチェンジ', note: '高速道路をタップ' },
+      { name: 'クローバー型インターチェンジ', note: '今後追加', disabled: true },
     ],
   },
   {
@@ -138,7 +141,11 @@ export class ToolController {
       const path = planLine(g, d.x0, d.y0, x, y);
       const plan = planRoad(g, path, type);
       const cells = plan.lanes.flatMap((l) => l.cells);
-      pv.setTiles(g, cells, (i) => (plan.bad.has(i) ? 0xe5534b : plan.deck.has(i) ? 0x6fc3ff : type === RoadType.Street ? 0xcfd6dc : 0xffffff));
+      const conv = new Set(plan.converts);
+      const upper = new Set(plan.lanes.flatMap((l) => l.cells.filter((_, k) => l.levels[k] === 1)));
+      pv.setTiles(g, cells, (i) =>
+        plan.bad.has(i) ? 0xe5534b : conv.has(i) ? 0xffb347 : upper.has(i) ? 0xb9a6ff : plan.deck.has(i) ? 0x6fc3ff : type === RoadType.Street ? 0xcfd6dc : 0xffffff,
+      );
       pv.setPath(g, path.cells);
       if (path.cells.length < 2) return { text: 'ドラッグして道路を引く', bad: false };
       const extra = plan.bridgeCells ? `（橋 ${plan.bridgeCells} マス）` : '';
@@ -176,6 +183,18 @@ export class ToolController {
       pv.setPath(g, []);
       return cells.size ? { text: `取り壊し ${yen(plan.cost)}`, bad: false } : { text: '取り壊すものがありません', bad: true };
     }
+    if (t === 'ramp') {
+      const plan = planRamp(g, x, y);
+      pv.setTiles(g, [g.idx(x, y)], () => (plan.ok ? 0x5cc46a : 0xe5534b));
+      pv.setPath(g, plan.ok ? [plan.hb, plan.cell, plan.ha] : []);
+      return plan.ok ? { text: `ランプ　${yen(plan.cost)}${plan.roads.length ? '' : '（道路をつないでください）'}`, bad: false } : { text: plan.reason, bad: true };
+    }
+    if (t === 'diamond') {
+      const plan = planDiamond(g, x, y);
+      pv.setTiles(g, plan.cells.length ? plan.cells : [g.idx(x, y)], () => (plan.ok ? 0x5cc46a : 0xe5534b));
+      pv.setPath(g, []);
+      return plan.ok ? { text: `インターチェンジ　${yen(plan.cost)}`, bad: false } : { text: plan.reason, bad: true };
+    }
     if (t.startsWith('plop:')) {
       const id = t.split(':')[1] as CivicId;
       const plan = planPlop(g, id, x, y);
@@ -203,10 +222,12 @@ export class ToolController {
     } else if (t === 'dezone') cmd = { t: 'zone', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1, zone: ZoneType.None, den: 0 };
     else if (t === 'bulldoze') cmd = { t: 'bulldoze', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1 };
     else if (t.startsWith('plop:')) cmd = { t: 'plop', id: t.split(':')[1] as CivicId, x: d.x1, y: d.y1 };
+    else if (t === 'ramp') cmd = { t: 'ramp', x: d.x1, y: d.y1 };
+    else if (t === 'diamond') cmd = { t: 'diamond', x: d.x1, y: d.y1 };
     if (!cmd) return;
     const res = await this.game.exec(cmd);
     if (res.ok) {
-      if (cmd.t === 'road' || cmd.t === 'pline') sfx.road();
+      if (cmd.t === 'road' || cmd.t === 'pline' || cmd.t === 'ramp' || cmd.t === 'diamond') sfx.road();
       else if (cmd.t === 'zone') sfx.zone();
       else if (cmd.t === 'bulldoze') sfx.bulldoze();
       else sfx.plop();

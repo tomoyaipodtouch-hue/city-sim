@@ -50,10 +50,13 @@ export function buildOverlay(out: Uint8Array, g: Grid, maps: Maps | null, view: 
       }
     } else if (maps) {
       if (view === 'traffic') {
-        if (g.road[i]) {
-          const ratio = maps.traffic[i] / ROADS[g.road[i]].capacity;
+        if (g.road[i] || g.up[i]) {
+          const N = g.n * g.n;
+          const r0 = g.road[i] ? maps.traffic[i] / ROADS[g.road[i]].capacity : 0;
+          const r1 = g.up[i] ? maps.traffic[i + N] / ROADS[g.up[i]].capacity : 0;
+          const ratio = Math.max(r0, r1);
           [r, gg, b] = ramp(ratio / 1.2, TRAFFIC_RAMP);
-          a = maps.traffic[i] > 0.5 ? 230 : 90;
+          a = maps.traffic[i] + maps.traffic[i + N] > 0.5 ? 230 : 90;
         } else if (!water) {
           r = gg = b = 20;
           a = 90;

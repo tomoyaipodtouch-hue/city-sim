@@ -1,4 +1,4 @@
-// 車の表示（交通量に比例した台数を走らせる）
+// 車とトラックの表示（交通量に比例した台数を走らせる）
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Grid } from '../sim/grid';
@@ -7,9 +7,10 @@ import { ROADS } from '../sim/defs';
 import { ROAD_LIFT } from './roadLayer';
 
 const MAX_CARS = 1500;
+const MAX_TRUCKS = 300;
 
 interface Car {
-  from: number;
+  from: number; // ノード（階層つき）
   to: number;
   d: number;
   t: number;
@@ -27,12 +28,28 @@ function vc(geo: THREE.BufferGeometry, hex: number) {
   return geo.toNonIndexed();
 }
 
-export class CarLayer {
+class Fleet {
   mesh: THREE.InstancedMesh;
-  private cars: Car[] = [];
-  private cdf: Float32Array = new Float32Array(0);
-  private cells: Int32Array = new Int32Array(0);
-  private target = 0;
+  cars: Car[] = [];
+  cdf = new Float32Array(0);
+  nodes = new Int32Array(0);
+  target = 0;
+  constructor(geo: THREE.BufferGeometry, max: number, palette: number[]) {
+    this.mesh = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }), max);
+    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.mesh.count = 0;
+    this.mesh.frustumCulled = false;
+    const col = new THREE.Color();
+    for (let i = 0; i < max; i++) {
+      col.setHex(palette[(i * 7) % palette.length]);
+      this.mesh.setColorAt(i, col);
+    }
+  }
+}
+
+export class CarLayer {
+  group = new THREE.Group();
+  private fleets: Fleet[];
   private grid: Grid | null = null;
   private traffic: Float32Array | null = null;
   private cong: Float32Array | null = null;
@@ -46,79 +63,73 @@ export class CarLayer {
   constructor() {
     const body = vc(new THREE.BoxGeometry(1.9, 1.0, 4.4).translate(0, 0.75, 0), 0xffffff);
     const cabin = vc(new THREE.BoxGeometry(1.7, 0.75, 2.3).translate(0, 1.6, -0.2), 0x2a3440);
-    const geo = mergeGeometries([body, cabin])!;
-    this.mesh = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }), MAX_CARS);
-    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.mesh.count = 0;
-    this.mesh.castShadow = false;
-    this.mesh.frustumCulled = false;
-    const palette = [0xd8d8d8, 0x2b2b2b, 0x9a1d1d, 0x1d3f8a, 0x8a8f96, 0xf2f2f2, 0x3b5d3a, 0xc9a227, 0x5a2d82, 0x6d4c33];
-    const col = new THREE.Color();
-    for (let i = 0; i < MAX_CARS; i++) {
-      col.setHex(palette[(i * 7) % palette.length]);
-      this.mesh.setColorAt(i, col);
-    }
+    const car = mergeGeometries([body, cabin])!;
+    const box = vc(new THREE.BoxGeometry(2.4, 2.9, 7.5).translate(0, 1.9, -1.2), 0xffffff);
+    const cab = vc(new THREE.BoxGeometry(2.3, 2.2, 2.2).translate(0, 1.5, 3.6), 0xffffff);
+    const glass = vc(new THREE.BoxGeometry(2.32, 0.7, 0.2).translate(0, 2.1, 4.65), 0x2a3440);
+    const truck = mergeGeometries([box, cab, glass])!;
+    this.fleets = [
+      new Fleet(car, MAX_CARS, [0xd8d8d8, 0x2b2b2b, 0x9a1d1d, 0x1d3f8a, 0x8a8f96, 0xf2f2f2, 0x3b5d3a, 0xc9a227, 0x5a2d82, 0x6d4c33]),
+      new Fleet(truck, MAX_TRUCKS, [0xe8e8e8, 0xc0392b, 0x2e6da4, 0xd9a400, 0x4c7a3b]),
+    ];
+    this.group.add(...this.fleets.map((f) => f.mesh));
   }
 
-  setData(g: Grid, traffic: Float32Array, cong: Float32Array) {
+  setData(g: Grid, traffic: Float32Array, cong: Float32Array, freight: Float32Array) {
     this.grid = g;
     this.traffic = traffic;
     this.cong = cong;
-    const cells: number[] = [];
-    const w: number[] = [];
-    let total = 0;
-    for (let i = 0; i < traffic.length; i++) {
-      if (!g.road[i] || traffic[i] < 1 || !g.flow[i]) continue;
-      total += traffic[i];
-      cells.push(i);
-      w.push(total);
-    }
-    this.cells = Int32Array.from(cells);
-    this.cdf = Float32Array.from(w);
-    this.target = Math.min(MAX_CARS, Math.round(total * 0.012));
-    // 道路がなくなった車は消す
-    for (const c of this.cars) if (!g.road[c.from] || !g.road[c.to]) c.alive = false;
-    this.cars = this.cars.filter((c) => c.alive);
+    const NN = g.n * g.n * 2;
+    const build = (f: Fleet, vol: Float32Array, scale: number, max: number) => {
+      const nodes: number[] = [], w: number[] = [];
+      let total = 0;
+      for (let v = 0; v < NN; v++) {
+        if (vol[v] < 1 || !g.nodeType(v)) continue;
+        total += vol[v];
+        nodes.push(v);
+        w.push(total);
+      }
+      f.nodes = Int32Array.from(nodes);
+      f.cdf = Float32Array.from(w);
+      f.target = Math.min(max, Math.round(total * scale));
+      // 道路がなくなった車は消す
+      f.cars = f.cars.filter((c) => g.nodeType(c.from) && g.nodeType(c.to));
+    };
+    // トラックは交通量に重み 2.5 で入っているので、台数は少なめ
+    build(this.fleets[0], traffic, 0.012, MAX_CARS);
+    build(this.fleets[1], freight, 0.003, MAX_TRUCKS);
   }
 
-  private spawn(): Car | null {
-    const g = this.grid!;
-    if (!this.cells.length) return null;
-    const total = this.cdf[this.cdf.length - 1];
+  private spawn(f: Fleet): Car | null {
+    if (!f.nodes.length) return null;
+    const total = f.cdf[f.cdf.length - 1];
     const r = Math.random() * total;
-    let lo = 0, hi = this.cdf.length - 1;
+    let lo = 0, hi = f.cdf.length - 1;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (this.cdf[mid] < r) lo = mid + 1;
+      if (f.cdf[mid] < r) lo = mid + 1;
       else hi = mid;
     }
-    const from = this.cells[lo];
-    const d = this.pickDir(from, -1);
-    if (d < 0) return null;
-    const n = g.n;
-    const to = from + DY[d] * n + DX[d];
-    return { from, to, d, t: Math.random(), alive: true, lane: Math.random() < 0.5 ? 0 : 1 };
+    const from = f.nodes[lo];
+    const nx = this.pickNext(from, -1);
+    if (!nx) return null;
+    return { from, to: nx[0], d: nx[1], t: Math.random(), alive: true, lane: Math.random() < 0.5 ? 0 : 1 };
   }
 
-  private pickDir(cell: number, back: number): number {
+  // 次のノードを、交通量の多い方を選びやすくして決める（Uターンはしない）
+  private pickNext(node: number, din: number): [number, number] | null {
     const g = this.grid!, tr = this.traffic!;
-    const n = g.n;
-    const m = g.flow[cell];
-    const x = cell % n, y = (cell / n) | 0;
+    const opts: [number, number][] = [];
+    const ws: number[] = [];
     let total = 0;
-    const opts: number[] = [], ws: number[] = [];
-    for (let d = 0; d < 8; d++) {
-      if (!(m & (1 << d)) || d === back) continue;
-      const nx = x + DX[d], ny = y + DY[d];
-      if (!g.inb(nx, ny)) continue;
-      const j = ny * n + nx;
-      if (!g.road[j]) continue;
-      const w = tr[j] + 2;
-      opts.push(d);
+    g.forEachOut(node, (v, d) => {
+      if (din >= 0 && d === opp(din)) return;
+      const w = tr[v] + 2;
+      opts.push([v, d]);
       ws.push(w);
       total += w;
-    }
-    if (!opts.length) return back >= 0 && m & (1 << back) ? back : -1;
+    });
+    if (!opts.length) return null;
     let r = Math.random() * total;
     for (let k = 0; k < opts.length; k++) {
       r -= ws[k];
@@ -130,60 +141,62 @@ export class CarLayer {
   update(dt: number) {
     const g = this.grid;
     if (!g || !this.enabled) {
-      this.mesh.count = 0;
+      for (const f of this.fleets) f.mesh.count = 0;
       return;
     }
-    const n = g.n;
-    // 台数を目標に近づける
-    let add = Math.min(30, this.target - this.cars.length);
-    while (add-- > 0) {
-      const c = this.spawn();
-      if (c) this.cars.push(c);
-    }
-    if (this.cars.length > this.target) this.cars.length = Math.max(0, this.target);
-
-    let k = 0;
-    for (const c of this.cars) {
-      const def = ROADS[g.road[c.from]] || ROADS[1];
-      const len = c.d & 1 ? CELL * 1.414 : CELL;
-      const cg = Math.max(this.cong![c.from], 1);
-      const speed = ((def.speedKmh / 3.6) * 0.9) / cg;
-      c.t += (dt * speed) / len;
-      let guard = 0;
-      while (c.t >= 1 && guard++ < 3) {
-        c.t -= 1;
-        // ときどき入れ替えて、交通量の分布を保つ
-        if (Math.random() < 0.03) {
-          const nc = this.spawn();
-          if (nc) Object.assign(c, nc);
-          continue;
-        }
-        const nd = this.pickDir(c.to, opp(c.d));
-        if (nd < 0) {
-          c.alive = false;
-          break;
-        }
-        c.from = c.to;
-        c.d = nd;
-        c.to = c.from + DY[nd] * n + DX[nd];
+    const n = g.n, NC = n * n;
+    for (const f of this.fleets) {
+      // 台数を目標に近づける
+      let add = Math.min(30, f.target - f.cars.length);
+      while (add-- > 0) {
+        const c = this.spawn(f);
+        if (c) f.cars.push(c);
       }
-      if (!c.alive) continue;
-      const fx = (c.from % n) + 0.5, fy = ((c.from / n) | 0) + 0.5;
-      const tx = (c.to % n) + 0.5, ty = ((c.to / n) | 0) + 0.5;
-      const fh = g.roadH(c.from), th = g.roadH(c.to);
-      const dx = DX[c.d], dz = DY[c.d];
-      const l = Math.hypot(dx, dz);
-      // 右側通行。一方通行と大通りは2車線を使い分ける
-      const lane = def.oneWay ? (c.lane ? 1 : -1) * def.width * 0.2 : (def.width / 2) * 0.48;
-      const ox = (-dz / l) * lane, oz = (dx / l) * lane;
-      this.v.set((fx + (tx - fx) * c.t) * CELL + ox, fh + (th - fh) * c.t + ROAD_LIFT, (fy + (ty - fy) * c.t) * CELL + oz);
-      this.q.setFromAxisAngle(this.up, Math.atan2(dx, dz));
-      this.mtx.compose(this.v, this.q, this.s);
-      this.mesh.setMatrixAt(k++, this.mtx);
-      if (k >= MAX_CARS) break;
+      if (f.cars.length > f.target) f.cars.length = Math.max(0, f.target);
+      let k = 0;
+      for (const c of f.cars) {
+        const def = ROADS[g.nodeType(c.from)] || ROADS[1];
+        const len = c.d & 1 ? CELL * 1.414 : CELL;
+        const cg = Math.max(this.cong![c.from], 1);
+        const speed = ((def.speedKmh / 3.6) * 0.9) / cg;
+        c.t += (dt * speed) / len;
+        let guard = 0;
+        while (c.t >= 1 && guard++ < 3) {
+          c.t -= 1;
+          // ときどき入れ替えて、交通量の分布を保つ
+          if (Math.random() < 0.03) {
+            const nc = this.spawn(f);
+            if (nc) Object.assign(c, nc);
+            continue;
+          }
+          const nx = this.pickNext(c.to, c.d);
+          if (!nx) {
+            c.alive = false;
+            break;
+          }
+          c.from = c.to;
+          c.to = nx[0];
+          c.d = nx[1];
+        }
+        if (!c.alive) continue;
+        const fc = c.from % NC, tc = c.to % NC;
+        const fx = (fc % n) + 0.5, fy = ((fc / n) | 0) + 0.5;
+        const tx = (tc % n) + 0.5, ty = ((tc / n) | 0) + 0.5;
+        const fh = g.nodeH(c.from), th = g.nodeH(c.to);
+        const dx = DX[c.d], dz = DY[c.d];
+        const l = Math.hypot(dx, dz);
+        // 右側通行。一方通行・大通り・高速道路は2車線を使い分ける
+        const lane = def.oneWay ? (c.lane ? 1 : -1) * def.width * 0.2 : (def.width / 2) * 0.48;
+        const ox = (-dz / l) * lane, oz = (dx / l) * lane;
+        this.v.set((fx + (tx - fx) * c.t) * CELL + ox, fh + (th - fh) * c.t + ROAD_LIFT, (fy + (ty - fy) * c.t) * CELL + oz);
+        this.q.setFromAxisAngle(this.up, Math.atan2(dx, dz));
+        this.mtx.compose(this.v, this.q, this.s);
+        f.mesh.setMatrixAt(k++, this.mtx);
+        if (k >= f.mesh.instanceMatrix.count) break;
+      }
+      f.cars = f.cars.filter((c) => c.alive);
+      f.mesh.count = k;
+      f.mesh.instanceMatrix.needsUpdate = true;
     }
-    this.cars = this.cars.filter((c) => c.alive);
-    this.mesh.count = k;
-    this.mesh.instanceMatrix.needsUpdate = true;
   }
 }
