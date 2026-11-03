@@ -9,11 +9,15 @@ import { ROAD_LIFT } from './roadLayer';
 const MAX_CARS = 1500;
 const MAX_TRUCKS = 300;
 
+// 車は「今いるマス（from）」の中を、入ってきた辺の中点から出ていく辺の中点まで、
+// マスの中心を制御点にした曲線（2次ベジェ曲線）に沿って進む。道路の描き方と同じ形になる。
 interface Car {
-  from: number; // ノード（階層つき）
-  to: number;
-  d: number;
-  t: number;
+  from: number; // 今いるノード（階層つき）
+  to: number; // 次のノード
+  din: number; // 入ってきた向き
+  d: number; // 出ていく向き
+  t: number; // マスの中での進み具合（0..1）
+  hA: number; // 入ってきたところの高さ
   alive: boolean;
   lane: number;
 }
@@ -113,7 +117,7 @@ export class CarLayer {
     const from = f.nodes[lo];
     const nx = this.pickNext(from, -1);
     if (!nx) return null;
-    return { from, to: nx[0], d: nx[1], t: Math.random(), alive: true, lane: Math.random() < 0.5 ? 0 : 1 };
+    return { from, to: nx[0], din: nx[1], d: nx[1], t: Math.random(), hA: this.grid!.nodeH(from), alive: true, lane: Math.random() < 0.5 ? 0 : 1 };
   }
 
   // 次のノードを、交通量の多い方を選びやすくして決める（Uターンはしない）
@@ -156,9 +160,11 @@ export class CarLayer {
       let k = 0;
       for (const c of f.cars) {
         const def = ROADS[g.nodeType(c.from)] || ROADS[1];
-        const len = c.d & 1 ? CELL * 1.414 : CELL;
+        const turning = c.din !== c.d;
+        // マスの中の道のり（入口の半分 + 出口の半分）
+        const len = (c.din & 1 ? CELL * 0.707 : CELL * 0.5) + (c.d & 1 ? CELL * 0.707 : CELL * 0.5);
         const cg = Math.max(this.cong![c.from], 1);
-        const speed = ((def.speedKmh / 3.6) * 0.9) / cg;
+        const speed = (((def.speedKmh / 3.6) * 0.9) / cg) * (turning ? 0.6 : 1);
         c.t += (dt * speed) / len;
         let guard = 0;
         while (c.t >= 1 && guard++ < 3) {
@@ -174,22 +180,31 @@ export class CarLayer {
             c.alive = false;
             break;
           }
+          c.hA = (g.nodeH(c.from) + g.nodeH(c.to)) / 2;
           c.from = c.to;
+          c.din = c.d;
           c.to = nx[0];
           c.d = nx[1];
         }
         if (!c.alive) continue;
-        const fc = c.from % NC, tc = c.to % NC;
-        const fx = (fc % n) + 0.5, fy = ((fc / n) | 0) + 0.5;
-        const tx = (tc % n) + 0.5, ty = ((tc / n) | 0) + 0.5;
-        const fh = g.nodeH(c.from), th = g.nodeH(c.to);
-        const dx = DX[c.d], dz = DY[c.d];
-        const l = Math.hypot(dx, dz);
+        const fc = c.from % NC;
+        const cx = ((fc % n) + 0.5) * CELL, cz = (((fc / n) | 0) + 0.5) * CELL;
+        // 入口 A、中心 C、出口 B
+        const ax = cx - DX[c.din] * CELL * 0.5, az = cz - DY[c.din] * CELL * 0.5;
+        const bx = cx + DX[c.d] * CELL * 0.5, bz = cz + DY[c.d] * CELL * 0.5;
+        const hc = g.nodeH(c.from), hb = (hc + g.nodeH(c.to)) / 2;
+        const t = c.t, p0 = (1 - t) * (1 - t), p1 = 2 * t * (1 - t), p2 = t * t;
+        const x = p0 * ax + p1 * cx + p2 * bx, z = p0 * az + p1 * cz + p2 * bz;
+        const h = p0 * c.hA + p1 * hc + p2 * hb;
+        // 進行方向（曲線の接線）
+        let tx = 2 * (1 - t) * (cx - ax) + 2 * t * (bx - cx), tz = 2 * (1 - t) * (cz - az) + 2 * t * (bz - cz);
+        const tl = Math.hypot(tx, tz) || 1;
+        tx /= tl;
+        tz /= tl;
         // 右側通行。一方通行・大通り・高速道路は2車線を使い分ける
         const lane = def.oneWay ? (c.lane ? 1 : -1) * def.width * 0.2 : (def.width / 2) * 0.48;
-        const ox = (-dz / l) * lane, oz = (dx / l) * lane;
-        this.v.set((fx + (tx - fx) * c.t) * CELL + ox, fh + (th - fh) * c.t + ROAD_LIFT, (fy + (ty - fy) * c.t) * CELL + oz);
-        this.q.setFromAxisAngle(this.up, Math.atan2(dx, dz));
+        this.v.set(x - tz * lane, h + ROAD_LIFT, z + tx * lane);
+        this.q.setFromAxisAngle(this.up, Math.atan2(tx, tz));
         this.mtx.compose(this.v, this.q, this.s);
         f.mesh.setMatrixAt(k++, this.mtx);
         if (k >= f.mesh.instanceMatrix.count) break;

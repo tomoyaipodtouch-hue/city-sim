@@ -226,3 +226,20 @@ describe('stage 2b highways', () => {
     expect(w.g.iflags[c]).toBe(16);
   });
 });
+
+describe('bulldoze', () => {
+  it('removes elevated highways and overpasses', () => {
+    const w = new World(48);
+    w.g.heights.fill(10);
+    w.funds = 1e7;
+    w.exec({ t: 'road', x0: 20, y0: 2, x1: 20, y1: 45, road: RoadType.Street });
+    w.exec({ t: 'road', x0: 2, y0: 24, x1: 45, y1: 24, road: RoadType.Highway });
+    expect(w.g.up[w.g.idx(10, 24)]).toBe(RoadType.Highway);
+    const r = w.exec({ t: 'bulldoze', x0: 8, y0: 22, x1: 12, y1: 26 });
+    expect(r.ok).toBe(true);
+    expect(w.g.up[w.g.idx(10, 24)]).toBe(0);
+    expect(w.g.up[w.g.idx(10, 23)]).toBe(0);
+    // 隣のマスの接続も消えている
+    expect(w.g.conn1[w.g.idx(13, 24)] & (1 << 4)).toBe(0);
+  });
+});

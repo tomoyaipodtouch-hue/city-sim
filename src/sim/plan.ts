@@ -632,7 +632,7 @@ export function planBulldoze(
     for (let x = r.x0; x <= r.x1; x++) {
       const i = g.idx(x, y);
       cells.push(i);
-      if (g.road[i]) { roads.push(i); cost += 5; }
+      if (g.road[i] || g.up[i]) { roads.push(i); cost += g.up[i] && isHighway(g.up[i]) ? 20 : 5; }
       if (g.pline[i]) { lines.push(i); cost += 1; }
       if (g.bldg[i]) bset.add(g.bldg[i]);
       else if (g.tree[i]) { trees.push(i); cost += 1; }
