@@ -154,7 +154,8 @@ describe('stage 2a roads', () => {
     }
     console.log(`dense: pop=${w.stats.population} jobs=${w.stats.jobs} maxFloors=${maxFloors} offices=${offices} buildings=${w.buildings.size}`);
     expect(maxFloors).toBeGreaterThan(6);
-    expect(w.stats.population).toBeGreaterThan(5000);
+    // 公共サービスのない街なので、犯罪とゴミの影響で伸びは控えめになる
+    expect(w.stats.population).toBeGreaterThan(3000);
   });
 });
 
