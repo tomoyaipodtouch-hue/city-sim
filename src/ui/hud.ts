@@ -3,7 +3,7 @@ import type { GameClient } from '../game';
 import type { CityRenderer } from '../render/renderer';
 import { DATA_VIEWS, DataView } from '../render/overlay';
 import { ToolController, TOOL_GROUPS, PreviewInfo } from './tools';
-import { CIVIC, CivicId, DIFFICULTY, GROW, GROW_KINDS, GrowKind, ROADS, TAX_LABELS, ZONE_NAMES } from '../sim/defs';
+import { CIVIC, CivicId, DENSITY_NAMES, DIFFICULTY, GROW, GROW_KINDS, GrowKind, ROADS, TAX_LABELS, ZONE_NAMES } from '../sim/defs';
 import { BState } from '../sim/world';
 import type { Stats } from '../sim/world';
 import { sfx, soundSettings } from '../sound';
@@ -378,6 +378,7 @@ export class Hud {
           if (b.state === BState.Building) rows.push(['状態', '建設中']);
           else if (b.state === BState.Abandoned) rows.push(['状態', '<span class="neg">空き家</span>']);
           rows.push([isR ? '住人' : '働く人', `${num(b.occ)} / ${num(b.cap)}`]);
+          rows.push(['密度', DENSITY_NAMES[b.den] + (b.floors ? `・${b.floors}階建て` : '')]);
           rows.push(['電力', b.powered ? 'あり' : '<span class="neg">なし</span>'], ['水道', b.watered ? 'あり' : '<span class="neg">なし</span>']);
           if (isR && b.state === BState.Normal) {
             rows.push(['職のある人', `${Math.round(b.employed * 100)}%`]);

@@ -3,7 +3,7 @@ import { Grid } from './grid';
 import { Rng } from './rng';
 import { DAYS_PER_MONTH, DX, DY } from './constants';
 import {
-  CIVIC, CivicId, DEFAULT_TAX, DIFFICULTY, GROW, GROW_KINDS, GrowKind, POWER_LINE_UPKEEP, ROADS, RoadType,
+  CIVIC, CivicId, DEFAULT_TAX, DIFFICULTY, GROW, GROW_KINDS, GrowKind, IND_DENSITY_MUL, maxFloorsFor, POWER_LINE_UPKEEP, ROADS, RoadType,
   ZONE_KINDS, ZoneType,
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
@@ -35,6 +35,7 @@ export interface Building {
   stateDays: number;
   powered: boolean;
   watered: boolean;
+  floors: number; // 階数（0 = 描画側で決める）
   commute: number; // 平均通勤時間（分）
   employed: number; // 職のある住人の割合（住宅）
   badMonths: number;
@@ -85,6 +86,8 @@ export interface SaveData {
   heights: Float32Array;
   road: Uint8Array;
   conn: Uint8Array;
+  flow?: Uint8Array;
+  deck?: Float32Array;
   pline: Uint8Array;
   zone: Uint8Array;
   zden: Uint8Array;
@@ -144,6 +147,7 @@ export class World {
   mapsVersion = 1;
 
   private candidates: Record<number, number[]> = { 1: [], 2: [], 3: [] };
+  private upgrades: Record<number, number[]> = { 1: [], 2: [], 3: [] };
   private candidatesDirty = true;
   private resDensity = new Float32Array(0);
   private commuteAtCell = new Float32Array(0);
@@ -161,6 +165,7 @@ export class World {
   private warnedPower = false;
   private warnedWater = false;
   speed = 2;
+  private cachedPop = 0;
 
   constructor(n = 128) {
     this.g = new Grid(n);
@@ -216,6 +221,8 @@ export class World {
       heights: g.heights.slice(),
       road: g.road.slice(),
       conn: g.conn.slice(),
+      flow: g.flow.slice(),
+      deck: g.deck.slice(),
       pline: g.pline.slice(),
       zone: g.zone.slice(),
       zden: g.zden.slice(),
@@ -246,12 +253,15 @@ export class World {
     g.heights.set(d.heights);
     g.road.set(d.road);
     g.conn.set(d.conn);
+    // 古い保存データには flow がないので、すべて両方向にする
+    g.flow.set(d.flow ?? d.conn);
+    if (d.deck) g.deck.set(d.deck);
     g.pline.set(d.pline);
     g.zone.set(d.zone);
     g.zden.set(d.zden);
     g.bldg.set(d.bldg);
     g.tree.set(d.tree);
-    for (const b of d.buildings) w.buildings.set(b.id, { ...b });
+    for (const b of d.buildings) w.buildings.set(b.id, { ...b, floors: b.floors ?? 0 });
     w.nextId = d.nextId;
     w.rng.state = d.rng;
     w.demand = { ...emptyKinds(0), ...d.demand };
@@ -333,7 +343,7 @@ export class World {
         const b: Building = {
           id: this.nextId++, civic: true, type: c.id, x: plan.x, y: plan.y, w: def.w, h: def.h,
           face: this.findFace(plan.x, plan.y, def.w, def.h), seed: this.rng.int(1e9), den: 0, cap: 0, occ: 0,
-          state: BState.Normal, stateDays: 0, powered: false, watered: false, commute: 0, employed: 1, badMonths: 0,
+          state: BState.Normal, stateDays: 0, powered: false, watered: false, floors: 0, commute: 0, employed: 1, badMonths: 0,
         };
         this.placeBuilding(b);
         this.afterGridChange();
@@ -364,11 +374,16 @@ export class World {
     for (let d = 0; d < 8; d++) {
       if (g.conn[i] & (1 << d)) {
         const nx = x + DX[d], ny = y + DY[d];
-        if (g.inb(nx, ny)) g.conn[ny * n + nx] &= ~(1 << ((d + 4) & 7));
+        if (g.inb(nx, ny)) {
+          g.conn[ny * n + nx] &= ~(1 << ((d + 4) & 7));
+          g.flow[ny * n + nx] &= ~(1 << ((d + 4) & 7));
+        }
       }
     }
     g.road[i] = 0;
     g.conn[i] = 0;
+    g.flow[i] = 0;
+    g.deck[i] = 0;
   }
 
   private placeBuilding(b: Building) {
@@ -480,6 +495,15 @@ export class World {
   private rebuildCandidates() {
     const g = this.g, n = g.n;
     this.candidates = { 1: [], 2: [], 3: [] };
+    // 建て替えの候補：ゾーンの密度が建物より高い、または古くなった中・高密度の建物
+    this.upgrades = { 1: [], 2: [], 3: [] };
+    for (const b of this.buildings.values()) {
+      if (b.civic || b.state !== BState.Normal) continue;
+      const z = GROW[b.type as GrowKind].zone;
+      const zd = g.zden[g.idx(b.x, b.y)];
+      if (g.zone[g.idx(b.x, b.y)] !== z) continue;
+      if (zd > b.den || (zd > 0 && b.stateDays > 720)) this.upgrades[z].push(b.id);
+    }
     for (let y = 0; y < n; y++)
       for (let x = 0; x < n; x++) {
         const i = y * n + x;
@@ -506,6 +530,8 @@ export class World {
       case 'CS1': return 0.35 + 0.5 * res + 0.3 * traffic - 0.2 * pol - water * 0.5;
       case 'CS2': return 0.15 + 0.5 * res + 0.3 * traffic + 0.4 * lv - 0.4 * pol - water;
       case 'CS3': return -0.3 + 0.4 * res + 0.2 * traffic + 1.0 * lv - 0.8 * pol - water * 1.5;
+      case 'CO2': return 0.2 + 0.5 * lv + 0.4 * traffic + 0.2 * res - 0.5 * pol - water;
+      case 'CO3': return -0.25 + 1.0 * lv + 0.4 * traffic + 0.1 * res - 0.8 * pol - water * 1.5;
       case 'IA': return 0.75 - 0.6 * lv - 0.5 * res;
       case 'ID': return 0.7 - 0.2 * lv - water * 0.5;
       case 'IM': return 0.5 + 0.1 * lv - 0.3 * pol - water;
@@ -515,17 +541,31 @@ export class World {
   private growthStep() {
     if (this.candidatesDirty) this.rebuildCandidates();
     const g = this.g;
+    const pop = this.cachedPop;
     for (const z of [ZoneType.R, ZoneType.C, ZoneType.I]) {
-      const list = this.candidates[z];
-      if (!list.length) continue;
-      const kinds = ZONE_KINDS[z];
-      const maxDem = Math.max(...kinds.map((k) => this.demand[k]));
+      const kindsAll = ZONE_KINDS[z];
+      const maxDem = Math.max(...kindsAll.map((k) => this.demand[k]));
       if (maxDem <= 0.02) continue;
+      const list = this.candidates[z];
+      const ups = this.upgrades[z];
       const attempts = Math.ceil(maxDem * 2);
       for (let a = 0; a < attempts; a++) {
-        const i = list[this.rng.int(list.length)];
-        if (g.bldg[i] || g.zone[i] !== z) continue;
+        // 空き地か、建て替え（需要が高いときほど起きやすい）
+        let i: number, replace = 0;
+        if (ups.length && (!list.length || this.rng.next() < 0.25 * maxDem)) {
+          const b = this.buildings.get(ups[this.rng.int(ups.length)]);
+          if (!b || b.state !== BState.Normal) continue;
+          i = g.idx(b.x + this.rng.int(b.w), b.y + this.rng.int(b.h));
+          replace = b.id;
+        } else {
+          if (!list.length) continue;
+          i = list[this.rng.int(list.length)];
+          if (g.bldg[i]) continue;
+        }
+        if (g.zone[i] !== z) continue;
         if (!this.maps.power[i]) continue; // 電力がないと建たない
+        const den = g.zden[i];
+        const kinds = kindsAll.filter((k) => GROW[k].dens.includes(den));
         // 種類を選ぶ
         let total = 0;
         const scores: number[] = [];
@@ -543,19 +583,27 @@ export class World {
         }
         const des = this.desirability(kind, i);
         if (des < 0.15 || this.rng.next() > des + 0.2) continue;
-        this.trySpawn(kind, i);
+        if (replace && this.rng.next() > 0.5) continue;
+        this.trySpawn(kind, i, pop, replace);
       }
     }
   }
 
-  private trySpawn(kind: GrowKind, i: number) {
+  // 敷地を決めて建物を建てる。replace は建て替える建物のID。
+  private trySpawn(kind: GrowKind, i: number, pop: number, replace = 0): boolean {
     const g = this.g, n = g.n;
     const def = GROW[kind];
     const x0 = i % n, y0 = (i / n) | 0;
     const watered = this.maps.water[i] > 0;
-    const sizes = watered ? def.sizes : def.sizes.filter(([w, h]) => w * h <= 2);
-    if (!sizes.length) return;
+    // 水がないと、低密度の小さな建物しか建たない
+    let den = g.zden[i];
+    if (!watered) den = 0;
+    if (!def.dens.includes(den)) return false;
+    let sizes = def.sizes[den] || [];
+    if (!watered) sizes = sizes.filter(([w, h]) => w * h <= 2);
+    if (!sizes.length) return false;
     const [sw, sh] = sizes[this.rng.int(sizes.length)];
+    const old = replace ? this.buildings.get(replace) : undefined;
     // この位置を含む敷地を探す
     const tries: [number, number][] = [];
     for (let oy = 0; oy < sh; oy++) for (let ox = 0; ox < sw; ox++) tries.push([x0 - ox, y0 - oy]);
@@ -566,24 +614,45 @@ export class World {
       for (let yy = y; yy < y + sh && ok; yy++)
         for (let xx = x; xx < x + sw; xx++) {
           const j = yy * n + xx;
-          if (g.zone[j] !== def.zone || g.bldg[j] || g.road[j] || g.isWater(xx, yy)) { ok = false; break; }
+          const occupied = g.bldg[j] && g.bldg[j] !== replace;
+          if (g.zone[j] !== def.zone || occupied || g.road[j] || g.isWater(xx, yy)) { ok = false; break; }
           lo = Math.min(lo, g.cellMinH(xx, yy));
           hi = Math.max(hi, g.cellMaxH(xx, yy));
         }
       if (!ok || hi - lo > 8) continue;
       const lot = { x, y, w: sw, h: sh };
       if (!this.accessCells(lot).length) continue;
-      const cap = Math.max(1, Math.round(def.capPerCell * sw * sh * (0.8 + this.rng.next() * 0.4) * (watered ? 1 : 0.7)));
+      const area = sw * sh;
+      let cap: number, floors = 0;
+      const jitter = 0.85 + this.rng.next() * 0.3;
+      if (den === 0) {
+        cap = def.capPerCell * area * jitter * (watered ? 1 : 0.7);
+      } else if (def.zone === ZoneType.I) {
+        cap = def.capPerCell * area * IND_DENSITY_MUL[den] * jitter;
+      } else {
+        // 階数は人口と地価で決まる
+        const [fmin, fmax] = def.floors[den];
+        const top = Math.max(fmin, Math.min(fmax, maxFloorsFor(pop)));
+        const lv = this.maps.landValue[i] / 255;
+        const t = Math.min(1, Math.pow(this.rng.next(), 1.6) * 0.65 + lv * 0.45);
+        floors = Math.round(fmin + (top - fmin) * t);
+        cap = def.floorCap * area * floors * jitter;
+      }
+      cap = Math.max(1, Math.round(cap));
+      // 建て替えは、今より大きくなる場合だけ
+      if (old && cap <= old.cap * 1.15) return false;
+      if (old) this.removeBuilding(old.id);
       const b: Building = {
         id: this.nextId++, civic: false, type: kind, x, y, w: sw, h: sh, face: this.findFace(x, y, sw, sh),
-        seed: this.rng.int(1e9), den: g.zden[i], cap, occ: 0, state: BState.Building, stateDays: 0,
-        powered: true, watered, commute: 0, employed: 1, badMonths: 0,
+        seed: this.rng.int(1e9), den, cap, occ: 0, state: BState.Building, stateDays: 0,
+        powered: true, watered, floors, commute: 0, employed: 1, badMonths: 0,
       };
       this.placeBuilding(b);
       this.gridVersion++;
       this.candidatesDirty = true;
-      return;
+      return true;
     }
+    return false;
   }
 
   // ---------------- 電力 ----------------
@@ -912,7 +981,7 @@ export class World {
         else popR3 += b.occ;
       } else capK[k] += b.cap;
     }
-    const jobs = capK.CS1 + capK.CS2 + capK.CS3 + capK.IA + capK.ID + capK.IM;
+    const jobs = capK.CS1 + capK.CS2 + capK.CS3 + capK.CO2 + capK.CO3 + capK.IA + capK.ID + capK.IM;
     const ext = this.neighborConnected ? 200 + pop * 0.25 : 0;
     const workers = pop * 0.5;
     const unemployment = workers > 50 ? Math.max(0, (workers - this.employedTotal) / workers) : 0;
@@ -929,6 +998,10 @@ export class World {
       const want = desiredC * share[idx] * 0.75;
       raw[k] = (want - capK[k]) / Math.max(30, want * 0.6);
     });
+    const wantCO = { CO2: pop > 800 ? pop * 0.07 + ext * 0.05 : 0, CO3: pop > 3000 ? pop * 0.05 + ext * 0.03 : 0 };
+    for (const k of ['CO2', 'CO3'] as const) {
+      raw[k] = wantCO[k] > 0 ? (wantCO[k] - capK[k]) / Math.max(60, wantCO[k] * 0.5) : -0.3;
+    }
     const want = { IA: 180 + pop * 0.02, ID: 260 + pop * 0.12 + ext * 0.15, IM: pop > 1200 ? pop * 0.09 : 0 };
     for (const k of ['IA', 'ID', 'IM'] as const) {
       raw[k] = want[k] > 0 ? (want[k] - capK[k]) / Math.max(60, want[k] * 0.5) : -0.3;
@@ -1045,6 +1118,7 @@ export class World {
     this.mapsVersion++;
     this.buildingVersion++;
     const pop = this.population();
+    this.cachedPop = pop;
     this.history.push({ pop, funds: this.funds });
     if (this.history.length > 600) this.history.shift();
     for (const m of [100, 500, 1000, 2000, 5000, 10000, 20000, 50000]) {
@@ -1062,6 +1136,7 @@ export class World {
   }
 
   recomputeAll() {
+    this.cachedPop = this.population();
     this.checkNeighbor();
     this.updatePower();
     this.updateWater();
@@ -1086,7 +1161,7 @@ export class World {
       workers: Math.round(pop * 0.5),
       employed: Math.round(this.employedTotal),
       demand: { ...d },
-      demandRCI: [Math.max(d.R1, d.R2, d.R3), Math.max(d.CS1, d.CS2, d.CS3), Math.max(d.IA, d.ID, d.IM)],
+      demandRCI: [Math.max(d.R1, d.R2, d.R3), Math.max(d.CS1, d.CS2, d.CS3, d.CO2, d.CO3), Math.max(d.IA, d.ID, d.IM)],
       powerSupply: this.powerSupply,
       powerDemand: Math.round(this.powerDemand),
       waterSupply: this.waterSupply,

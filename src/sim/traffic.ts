@@ -190,11 +190,12 @@ export function assignCommute(
       if (u === EXT) continue;
 
       // 隣へ広げる
-      const m = g.conn[u];
+      const m = g.flow[u];
       if (m) {
         const x = u % n, y = (u / n) | 0;
         let deg = 0;
-        for (let d = 0; d < 8; d++) if (m & (1 << d)) deg++;
+        const cm = g.conn[u];
+        for (let d = 0; d < 8; d++) if (cm & (1 << d)) deg++;
         const junction = deg >= 3 ? 0.12 * congestion[u] : 0;
         for (let d = 0; d < 8; d++) {
           if (!(m & (1 << d))) continue;

@@ -5,7 +5,9 @@ export class Grid {
   readonly n: number;
   heights: Float32Array; // 頂点の高さ（(n+1)^2）
   road: Uint8Array; // 道路の種類
-  conn: Uint8Array; // 道路の接続（8方向のビット）
+  conn: Uint8Array; // 道路の接続（8方向のビット。見た目と、道路がつながっているか）
+  flow: Uint8Array; // 通行できる向き（このマスから出ていける方向のビット。一方通行は片方だけ）
+  deck: Float32Array; // 橋の路面の高さ（0 = 橋ではない）
   pline: Uint8Array; // 送電線
   zone: Uint8Array; // ゾーンの種類
   zden: Uint8Array; // ゾーンの密度
@@ -18,6 +20,8 @@ export class Grid {
     this.heights = new Float32Array((n + 1) * (n + 1));
     this.road = new Uint8Array(c);
     this.conn = new Uint8Array(c);
+    this.flow = new Uint8Array(c);
+    this.deck = new Float32Array(c);
     this.pline = new Uint8Array(c);
     this.zone = new Uint8Array(c);
     this.zden = new Uint8Array(c);
@@ -40,6 +44,11 @@ export class Grid {
   // マスの中心の高さ（4隅の平均）
   cellH(x: number, y: number) {
     return (this.vh(x, y) + this.vh(x + 1, y) + this.vh(x, y + 1) + this.vh(x + 1, y + 1)) * 0.25;
+  }
+  // 道路の路面の高さ（橋なら橋の高さ）
+  roadH(i: number) {
+    const d = this.deck[i];
+    return d > 0 ? d : this.cellH(i % this.n, (i / this.n) | 0);
   }
   cellMinH(x: number, y: number) {
     return Math.min(this.vh(x, y), this.vh(x + 1, y), this.vh(x, y + 1), this.vh(x + 1, y + 1));
@@ -67,7 +76,7 @@ export class Grid {
   *roadNeighbors(i: number): Generator<[number, number]> {
     const n = this.n;
     const x = i % n, y = (i / n) | 0;
-    const m = this.conn[i];
+    const m = this.flow[i];
     for (let d = 0; d < 8; d++) {
       if (m & (1 << d)) {
         const nx = x + DX[d], ny = y + DY[d];
@@ -81,6 +90,8 @@ export class Grid {
     g.heights.set(this.heights);
     g.road.set(this.road);
     g.conn.set(this.conn);
+    g.flow.set(this.flow);
+    g.deck.set(this.deck);
     g.pline.set(this.pline);
     g.zone.set(this.zone);
     g.zden.set(this.zden);

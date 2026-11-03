@@ -23,6 +23,8 @@ export interface GridMsg {
   heights?: Float32Array;
   road: Uint8Array;
   conn: Uint8Array;
+  flow: Uint8Array;
+  deck: Float32Array;
   pline: Uint8Array;
   zone: Uint8Array;
   zden: Uint8Array;

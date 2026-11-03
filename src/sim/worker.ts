@@ -19,7 +19,7 @@ function sync(force = false) {
   if (w.gridVersion !== sent.gv || w.heightVersion !== sent.hv) {
     const heights = w.heightVersion !== sent.hv ? g.heights.slice() : undefined;
     post({
-      t: 'grid', n: g.n, heights, road: g.road.slice(), conn: g.conn.slice(), pline: g.pline.slice(),
+      t: 'grid', n: g.n, heights, road: g.road.slice(), conn: g.conn.slice(), flow: g.flow.slice(), deck: g.deck.slice(), pline: g.pline.slice(),
       zone: g.zone.slice(), zden: g.zden.slice(), bldg: g.bldg.slice(), tree: g.tree.slice(),
     });
     sent.gv = w.gridVersion;

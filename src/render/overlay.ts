@@ -44,8 +44,9 @@ export function buildOverlay(out: Uint8Array, g: Grid, maps: Maps | null, view: 
     const built = g.bldg[i] !== 0;
     if (view === 'none' || view === 'zones') {
       if (z && (!built || view === 'zones')) {
-        [r, gg, b] = ZONE_RGB[z];
-        a = built ? 120 : 62;
+        const k = [1, 0.78, 0.6][g.zden[i]] ?? 1;
+        [r, gg, b] = ZONE_RGB[z].map((c) => c * k) as [number, number, number];
+        a = built ? 120 : 62 + g.zden[i] * 18;
       }
     } else if (maps) {
       if (view === 'traffic') {

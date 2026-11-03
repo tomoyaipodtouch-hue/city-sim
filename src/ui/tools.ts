@@ -1,5 +1,5 @@
 // ツールの定義と、ドラッグ中のプレビュー・確定
-import { CIVIC, CivicId, ROADS, RoadType, ZoneType, ZONE_COST, POWER_LINE_COST } from '../sim/defs';
+import { CIVIC, CivicId, DENSITY_NAMES, ROADS, RoadType, ZoneType, ZONE_COST, ZONE_NAMES, POWER_LINE_COST } from '../sim/defs';
 import { normRect, planBulldoze, planLine, planPlop, planPowerLine, planRoad, planZone } from '../sim/plan';
 import type { Command } from '../sim/world';
 import type { GameClient } from '../game';
@@ -29,18 +29,22 @@ export const TOOL_GROUPS: ToolGroup[] = [
     id: 'road', name: '道路', icon: 'road', items: [
       { tool: 'road:1', name: ROADS[RoadType.Street].name, note: `${yen(ROADS[1].cost)}/マス` },
       { tool: 'road:2', name: ROADS[RoadType.Road].name, note: `${yen(ROADS[2].cost)}/マス` },
-      { name: '一方通行', note: '今後追加', disabled: true },
-      { name: '大通り', note: '今後追加', disabled: true },
+      { tool: 'road:3', name: ROADS[RoadType.OneWay].name, note: `${yen(ROADS[3].cost)}/マス` },
+      { tool: 'road:4', name: `${ROADS[RoadType.Avenue].name}（2マス幅）`, note: `${yen(ROADS[4].cost * 2)}/マス` },
       { name: '高架高速道路', note: '今後追加', disabled: true },
       { name: '地上の高速道路', note: '今後追加', disabled: true },
     ],
   },
   {
     id: 'zone', name: 'ゾーン', icon: 'zone', items: [
-      { tool: 'zone:1:0', name: '住宅（低密度）', note: `${yen(ZONE_COST[1])}/マス`, swatch: 'var(--r)' },
-      { tool: 'zone:2:0', name: '商業（低密度）', note: `${yen(ZONE_COST[2])}/マス`, swatch: 'var(--c)' },
-      { tool: 'zone:3:0', name: '工業（低密度）', note: `${yen(ZONE_COST[3])}/マス`, swatch: 'var(--i)' },
-      { name: '中密度・高密度', note: '今後追加', disabled: true },
+      ...[1, 2, 3].flatMap((z) =>
+        [0, 1, 2].map((d) => ({
+          tool: `zone:${z}:${d}`,
+          name: `${ZONE_NAMES[z]}（${DENSITY_NAMES[d]}）`,
+          note: `${yen(ZONE_COST[z][d])}/マス`,
+          swatch: `color-mix(in srgb, ${['', 'var(--r)', 'var(--c)', 'var(--i)'][z]} ${[55, 80, 100][d]}%, #000)`,
+        })),
+      ),
       { tool: 'dezone', name: 'ゾーン解除', note: '空き地のみ' },
     ],
   },
@@ -133,10 +137,12 @@ export class ToolController {
       const type = Number(t.split(':')[1]) as RoadType;
       const path = planLine(g, d.x0, d.y0, x, y);
       const plan = planRoad(g, path, type);
-      pv.setTiles(g, path.cells, (i) => (plan.bad.has(i) ? 0xe5534b : type === RoadType.Road ? 0xffffff : 0xcfd6dc));
+      const cells = plan.lanes.flatMap((l) => l.cells);
+      pv.setTiles(g, cells, (i) => (plan.bad.has(i) ? 0xe5534b : plan.deck.has(i) ? 0x6fc3ff : type === RoadType.Street ? 0xcfd6dc : 0xffffff));
       pv.setPath(g, path.cells);
       if (path.cells.length < 2) return { text: 'ドラッグして道路を引く', bad: false };
-      return plan.ok ? { text: `${yen(plan.cost)}`, bad: false } : { text: plan.reason || '引けません', bad: true };
+      const extra = plan.bridgeCells ? `（橋 ${plan.bridgeCells} マス）` : '';
+      return plan.ok ? { text: `${yen(plan.cost)}${extra}`, bad: false } : { text: plan.reason || '引けません', bad: true };
     }
     if (t === 'pline') {
       const path = planLine(g, d.x0, d.y0, x, y);

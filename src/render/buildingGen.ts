@@ -80,16 +80,27 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     mb.abandoned = false;
     return;
   }
+  const dense = b.den > 0 && b.floors > 0;
   switch (b.type) {
-    case 'R1': houseLow(mb, f, rng, tf, b); break;
-    case 'R2': houseMid(mb, f, rng, tf, b); break;
-    case 'R3': mansion(mb, f, rng, tf); break;
-    case 'CS1': shop(mb, f, rng, tf, 1); break;
-    case 'CS2': shop(mb, f, rng, tf, 2); break;
-    case 'CS3': shop(mb, f, rng, tf, 3); break;
+    case 'R1':
+    case 'R2':
+    case 'R3':
+      if (dense && b.floors >= 9) tower(mb, f, rng, tf, b.floors, false, b.type === 'R3');
+      else if (dense) apartments(mb, f, rng, tf, b.floors, b.type);
+      else if (b.type === 'R1') houseLow(mb, f, rng, tf, b);
+      else if (b.type === 'R2') houseMid(mb, f, rng, tf, b);
+      else mansion(mb, f, rng, tf);
+      break;
+    case 'CS1': case 'CS2': case 'CS3':
+      if (dense) shopMid(mb, f, rng, tf, b.floors, b.type === 'CS3');
+      else shop(mb, f, rng, tf, b.type === 'CS1' ? 1 : b.type === 'CS2' ? 2 : 3);
+      break;
+    case 'CO2': case 'CO3':
+      tower(mb, f, rng, tf, Math.max(3, b.floors), true, b.type === 'CO3');
+      break;
     case 'IA': farm(mb, f, rng, tf); break;
-    case 'ID': factory(mb, f, rng, true); break;
-    case 'IM': factory(mb, f, rng, false); break;
+    case 'ID': factory(mb, f, rng, true, b.den); break;
+    case 'IM': factory(mb, f, rng, false, b.den); break;
     case 'coal': coalPlant(mb, f); break;
     case 'gas': gasPlant(mb, f); break;
     case 'pump': pump(mb, f); break;
@@ -291,12 +302,12 @@ function farm(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
   tf(-13, hz - 2, 1.0);
 }
 
-function factory(mb: MeshBuilder, f: LotFrame, rng: Rng, dirty: boolean) {
+function factory(mb: MeshBuilder, f: LotFrame, rng: Rng, dirty: boolean, den = 0) {
   mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.concrete);
   const wall = rng.pick(PALETTE.indWall);
   const w = f.W - 6, d = f.D - 12;
   const x0 = -w / 2, x1 = w / 2, z0 = -f.D / 2 + 3, z1 = z0 + d;
-  const h = 8 + rng.next() * 5;
+  const h = (8 + rng.next() * 5) * (1 + den * 0.35);
   mb.box(x0, 0, z0, x1, h, z1, wall, dirty ? PAT.industrial : PAT.dock, PALETTE.steel);
   if (dirty) {
     // のこぎり屋根
@@ -430,4 +441,129 @@ function plaza(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
     mb.box(x - 1.2, 0, z - 1.2, x + 1.2, 0.6, z + 1.2, PALETTE.concrete);
     tf(x, z, 0.8 + rng.next() * 0.3);
   }
+}
+
+// ---------------- 中密度・高密度 ----------------
+const APT_WALL = [0xb4624a, 0xc9b08c, 0xd9d2c3, 0x9b9a93, 0xa8735a, 0xe2d6bd, 0x8c8f94].map(C);
+const TOWER_WALL = [0xd4d0c6, 0xb9b4a8, 0xe6e1d6, 0x9fa4a8, 0xc7b79c].map(C);
+const GLASS = [0x5d7f9e, 0x5f8f86, 0x8a7458, 0x3d4a56, 0x9aa6b0, 0x4f6f8f, 0x6b8aa8].map(C);
+
+// 中層の集合住宅（3〜8階）
+function apartments(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, kind: string) {
+  lawn(mb, f, rng);
+  const wall = rng.pick(APT_WALL);
+  const fh = 3.0;
+  const h = floors * fh + 0.6;
+  const W = f.W - 4, D = f.D - 6;
+  const zf = f.D / 2 - 3; // 正面の壁
+  mb.ground(-f.W / 2 + 0.2, zf, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.1, PALETTE.pavement);
+  const blocks: [number, number, number, number][] = [];
+  if (f.W >= 32 && f.D >= 32 && rng.next() < 0.6) {
+    // コの字型（中庭あり）
+    const t = 11;
+    blocks.push([-W / 2, zf - t, W / 2, zf]);
+    blocks.push([-W / 2, zf - D, -W / 2 + t, zf - t]);
+    blocks.push([W / 2 - t, zf - D, W / 2, zf - t]);
+    tf(0, zf - D / 2 - 4, 1.1);
+    tf(-3, zf - D + 4, 0.9);
+  } else {
+    blocks.push([-W / 2, zf - Math.min(D, 14 + rng.next() * 6), W / 2, zf]);
+  }
+  for (const [x0, z0, x1, z1] of blocks) {
+    mb.box(x0, 0, z0, x1, h, z1, wall, PAT.apartment, PALETTE.dark);
+    mb.box(x0, h, z0, x1, h + 0.8, z0 + 0.3, wall);
+    mb.box(x0, h, z1 - 0.3, x1, h + 0.8, z1, wall);
+    roofUnits(mb, x0, z0, x1, z1, h, rng, 1 + rng.int(2));
+  }
+  // ベランダ（正面）
+  const [bx0, , bx1, bz1] = blocks[0];
+  const bal = rng.pick([PALETTE.concrete, PALETTE.white, PALETTE.steel]);
+  for (let k = 1; k < floors; k++) mb.box(bx0 + 1, k * fh, bz1, bx1 - 1, k * fh + 0.18, bz1 + 1.0, bal);
+  // 入口のひさし
+  mb.box(-2, 2.8, bz1, 2, 3.1, bz1 + 2, kind === 'R3' ? PALETTE.dark : PALETTE.concrete);
+  // 給水タンク
+  if (rng.next() < 0.4) mb.cylinder(bx0 + 3, blocks[0][1] + 3, h, h + 3.5, 1.4, 8, PALETTE.wood, PALETTE.dark);
+  tf(-f.W / 2 + 1.6, f.D / 2 - 1.6, 0.8);
+  tf(f.W / 2 - 1.6, f.D / 2 - 1.6, 0.8);
+}
+
+// 中層の商業ビル（1階が店舗）
+function shopMid(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, upscale: boolean) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.pavement);
+  const wall = upscale ? rng.pick(TOWER_WALL) : rng.pick(PALETTE.shopWall);
+  const accent = rng.pick(PALETTE.accent);
+  const W = f.W - 2, D = f.D - 4;
+  const z1 = f.D / 2 - 2, z0 = z1 - D;
+  const g = 4.4, fh = 3.4;
+  const h = g + (floors - 1) * fh;
+  mb.box(-W / 2, 0, z0, W / 2, g, z1, wall, PAT.shop, PALETTE.dark);
+  mb.box(-W / 2 + 0.3, g, z0 + 0.3, W / 2 - 0.3, h, z1 - 0.3, wall, upscale ? PAT.office : PAT.apartment, PALETTE.dark);
+  mb.box(-W / 2 + 0.3, h, z1 - 0.6, W / 2 - 0.3, h + 1.0, z1 - 0.3, wall);
+  // 看板の帯と日よけ
+  mb.box(-W / 2 + 0.4, g - 1.0, z1, W / 2 - 0.4, g - 0.2, z1 + 0.3, accent);
+  mb.quad([-W / 2 + 0.4, 3.0, z1 + 1.6], [W / 2 - 0.4, 3.0, z1 + 1.6], [W / 2 - 0.4, 3.6, z1], [-W / 2 + 0.4, 3.6, z1], accent);
+  // 縦の看板（ネオン風）
+  if (rng.next() < 0.5 && floors >= 3) mb.box(W / 2 - 2, g, z1, W / 2 - 1.2, Math.min(h, g + 9), z1 + 1.2, rng.pick(PALETTE.accent));
+  roofUnits(mb, -W / 2, z0, W / 2, z1, h, rng, 2 + rng.int(3));
+  if (rng.next() < 0.5) tf(-f.W / 2 + 1.2, f.D / 2 - 1.0, 0.7);
+}
+
+// 高層ビル（オフィス・高層マンション）
+function tower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, office: boolean, luxury: boolean) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.pavement);
+  const fh = office ? 3.6 : 3.1;
+  const wall = office ? rng.pick(GLASS) : rng.pick(TOWER_WALL);
+  const frame = office ? rng.pick([PALETTE.steel, PALETTE.white, PALETTE.dark, PALETTE.concrete]) : rng.pick(APT_WALL);
+  const pat = office ? PAT.office : PAT.apartment;
+  // 低層部（ポディウム）
+  const podium = floors >= 8 ? 1 + rng.int(3) : 0;
+  const PW = f.W - 2, PD = f.D - 3;
+  const pz1 = f.D / 2 - 1.5;
+  let y = 0;
+  if (podium) {
+    const ph = 4.5 + (podium - 1) * 4;
+    mb.box(-PW / 2, 0, pz1 - PD, PW / 2, ph, pz1, frame, PAT.shop, PALETTE.dark);
+    y = ph;
+  }
+  // 塔の部分。高いほど段々に細くする
+  const minSide = Math.min(f.W, f.D);
+  let tw = Math.min(f.W - 4, minSide * (0.55 + rng.next() * 0.2) * (f.W / minSide > 1.4 ? 1.5 : 1));
+  let td = Math.min(f.D - 5, minSide * (0.55 + rng.next() * 0.2) * (f.D / minSide > 1.4 ? 1.5 : 1));
+  const cz = pz1 - PD / 2 - (podium ? 0 : 0);
+  const tiers = floors > 30 ? 3 : floors > 16 ? 2 : 1;
+  let remaining = floors - podium;
+  const round = office && luxury && rng.next() < 0.2;
+  for (let t = 0; t < tiers; t++) {
+    const fl = t === tiers - 1 ? remaining : Math.round(remaining * (0.55 + rng.next() * 0.15));
+    remaining -= fl;
+    const h = fl * fh;
+    if (round) mb.cylinder(0, cz, y, y + h, Math.min(tw, td) / 2, 16, wall, PALETTE.dark);
+    else mb.box(-tw / 2, y, cz - td / 2, tw / 2, y + h, cz + td / 2, wall, pat, PALETTE.dark);
+    // 階ごとの帯（オフィスは縦の柱）
+    if (office && !round) {
+      for (let x = -tw / 2; x <= tw / 2 + 0.01; x += tw / Math.max(2, Math.round(tw / 6))) {
+        mb.box(x - 0.18, y, cz + td / 2, x + 0.18, y + h, cz + td / 2 + 0.25, frame);
+        mb.box(x - 0.18, y, cz - td / 2 - 0.25, x + 0.18, y + h, cz - td / 2, frame);
+      }
+    } else if (!office) {
+      for (let k = 1; k < fl; k += 1) mb.box(-tw / 2 - 0.5, y + k * fh, cz + td / 2, tw / 2 + 0.5, y + k * fh + 0.2, cz + td / 2 + 0.9, frame);
+    }
+    y += h;
+    tw *= 0.78;
+    td *= 0.78;
+  }
+  // 屋上（機械室、アンテナ、とがった屋根）
+  const crown = rng.next();
+  if (office && luxury && floors > 30 && crown < 0.4) {
+    mb.hip(-tw / 2, cz - td / 2, tw / 2, cz + td / 2, y, Math.min(tw, td) * 0.9, wall, 0);
+    mb.box(-0.3, y, cz - 0.3, 0.3, y + Math.min(tw, td) * 0.9 + 18, cz + 0.3, PALETTE.steel);
+  } else {
+    mb.box(-tw / 3, y, cz - td / 3, tw / 3, y + 3.5, cz + td / 3, PALETTE.concrete);
+    if (floors > 20 && crown < 0.6) mb.box(-0.25, y + 3.5, cz - 0.25, 0.25, y + 16, cz + 0.25, PALETTE.steel);
+    if (!office) mb.cylinder(tw / 4, cz, y + 3.5, y + 6, 1.6, 8, PALETTE.wood, PALETTE.dark);
+  }
+  // 入口と植え込み
+  mb.box(-3, podium ? 4.3 : 3, pz1, 3, (podium ? 4.3 : 3) + 0.3, pz1 + 2.2, PALETTE.dark);
+  tf(-f.W / 2 + 1.6, f.D / 2 - 1.0, 0.75);
+  tf(f.W / 2 - 1.6, f.D / 2 - 1.0, 0.75);
 }

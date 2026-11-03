@@ -1,7 +1,7 @@
 // ツールの計画（プレビューと実行の両方で使う）
 import { Grid } from './grid';
 import { DX, DY, MAX_ROAD_GRADE, CELL, WATER_LEVEL, dirOf, isDiag, opp } from './constants';
-import { ROADS, RoadType, ZoneType, ZONE_COST, POWER_LINE_COST, CIVIC, CivicId } from './defs';
+import { ROADS, RoadType, ZoneType, ZONE_COST, POWER_LINE_COST, CIVIC, CivicId, BRIDGE_COST_MUL, MAX_BRIDGE } from './defs';
 
 export interface LinePath {
   cells: number[]; // マスの番号
@@ -46,14 +46,24 @@ export function planLine(g: Grid, x0: number, y0: number, x1: number, y1: number
   return { cells, dirs };
 }
 
+export interface Lane {
+  cells: number[];
+  dirs: number[];
+  oneWay: boolean;
+}
+
 export interface RoadPlan {
   ok: boolean;
   path: LinePath;
+  lanes: Lane[];
   type: RoadType;
   cost: number;
   bad: Set<number>;
   vertexH: Map<number, number>; // 頂点番号 → 新しい高さ
+  deck: Map<number, number>; // 橋のマス → 路面の高さ
+  uturns: [number, number][]; // 大通りの端で折り返すための接続（from → to）
   reason: string;
+  bridgeCells: number;
 }
 
 // 斜めの接続が、既存の逆向きの斜めの接続と交差するか
@@ -67,36 +77,167 @@ function crossesDiagonal(g: Grid, i: number, d: number) {
   return (g.conn[ay * n + ax] & (1 << dd)) !== 0;
 }
 
+// 進行方向の左側にある、並行するマスへのずれ（大通りの反対車線）
+function leftOffset(d: number): [number, number] {
+  if (!isDiag(d)) return [DY[d], -DX[d]];
+  return [0, -DX[d]];
+}
+
+// 大通り：引いた線を右側の車線とし、左側に反対車線を作る
+function avenueLanes(g: Grid, path: LinePath): { lanes: Lane[]; ok: boolean } {
+  const { cells, dirs } = path;
+  const n = g.n;
+  const other: number[] = [];
+  for (let k = 0; k < cells.length; k++) {
+    const d = dirs[Math.min(k, dirs.length - 1)] ?? 0;
+    const [ox, oy] = leftOffset(d);
+    const x = (cells[k] % n) + ox, y = ((cells[k] / n) | 0) + oy;
+    if (!g.inb(x, y)) return { lanes: [{ cells, dirs, oneWay: true }], ok: false };
+    const c = y * n + x;
+    if (other[other.length - 1] !== c) other.push(c);
+  }
+  // 反対車線は逆向きに進む
+  other.reverse();
+  const odirs: number[] = [];
+  let ok = true;
+  for (let k = 0; k + 1 < other.length; k++) {
+    const dx = (other[k + 1] % n) - (other[k] % n);
+    const dy = ((other[k + 1] / n) | 0) - ((other[k] / n) | 0);
+    const d = dirOf(dx, dy);
+    if (d < 0) ok = false;
+    odirs.push(d < 0 ? 0 : d);
+  }
+  return { lanes: [{ cells, dirs, oneWay: true }, { cells: other, dirs: odirs, oneWay: true }], ok };
+}
+
 export function planRoad(g: Grid, path: LinePath, type: RoadType): RoadPlan {
   const def = ROADS[type];
-  const n = g.n, V = n + 1;
   const bad = new Set<number>();
-  let reason = '';
+  const reasons: string[] = [];
+  const why = (r: string) => reasons.push(r);
+  let lanes: Lane[] = [{ cells: path.cells, dirs: path.dirs, oneWay: !!def.oneWay }];
+  const uturns: [number, number][] = [];
+  if (def.wide && path.cells.length > 1) {
+    const av = avenueLanes(g, path);
+    lanes = av.lanes;
+    if (!av.ok) {
+      for (const i of path.cells) bad.add(i);
+      why('大通りは、この形には引けません（マップの端や急な曲がり）');
+    } else {
+      const a = lanes[0].cells, b = lanes[1].cells;
+      uturns.push([a[a.length - 1], b[0]], [b[b.length - 1], a[0]]);
+    }
+  }
   let cost = 0;
-  const { cells, dirs } = path;
+  let bridgeCells = 0;
+  const vacc = new Map<number, [number, number]>();
+  const deck = new Map<number, number>();
+  for (const lane of lanes) {
+    const r = planLane(g, lane, type, bad, why, vacc, deck);
+    cost += r.cost;
+    bridgeCells += r.bridge;
+  }
+  const n = g.n, V = n + 1;
+  // 既存の道路の頂点は動かさない
+  const locked = new Set<number>();
+  for (const lane of lanes)
+    for (const i of lane.cells) {
+      if (!g.road[i]) continue;
+      const x = i % n, y = (i / n) | 0;
+      for (const [vx, vy] of [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]]) locked.add(vy * V + vx);
+    }
+  const vertexH = new Map<number, number>();
+  let steep = false, sink = false;
+  for (const [vi, [sum, c]] of vacc) {
+    if (locked.has(vi)) continue;
+    const nh = sum / c;
+    const old = g.heights[vi];
+    if (Math.abs(nh - old) > 0.05) {
+      vertexH.set(vi, nh);
+      cost += Math.abs(nh - old) * 1.5;
+      if (Math.abs(nh - old) > 14) steep = true;
+      if (nh < WATER_LEVEL + 0.5) sink = true;
+    }
+  }
+  if (steep || sink) {
+    for (const lane of lanes)
+      for (const i of lane.cells) {
+        const x = i % n, y = (i / n) | 0;
+        if (deck.has(i)) continue;
+        for (const [vx, vy] of [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]]) {
+          const vh = vertexH.get(vy * V + vx);
+          if (vh !== undefined && (Math.abs(vh - g.heights[vy * V + vx]) > 14 || vh < WATER_LEVEL + 0.5)) bad.add(i);
+        }
+      }
+    why(steep ? '地形の高低差が大きすぎます' : '水際の地面が低すぎます');
+  }
+  cost = Math.round(cost);
+  return {
+    ok: bad.size === 0 && path.cells.length > 1, path, lanes, type, cost, bad, vertexH, deck, uturns,
+    reason: reasons[0] || '', bridgeCells,
+  };
+}
 
-  // 建設費
+function planLane(
+  g: Grid, lane: Lane, type: RoadType, bad: Set<number>, why: (r: string) => void,
+  vacc: Map<number, [number, number]>, deck: Map<number, number>,
+): { cost: number; bridge: number } {
+  const def = ROADS[type];
+  const n = g.n, V = n + 1;
+  const { cells, dirs } = lane;
+  const water = cells.map((i) => g.isWater(i % n, (i / n) | 0) || g.deck[i] > 0);
+  let cost = 0, bridge = 0;
   for (let k = 0; k < cells.length; k++) {
     const i = cells[k];
-    const x = i % n, y = (i / n) | 0;
-    if (g.bldg[i]) { bad.add(i); reason = reason || '建物があります。先に取り壊してください'; }
-    if (g.isWater(x, y)) { bad.add(i); reason = reason || '水の上には引けません（橋は今後追加します）'; }
+    if (g.bldg[i]) { bad.add(i); why('建物があります。先に取り壊してください'); }
     const cur = g.road[i];
     const len = k > 0 && isDiag(dirs[k - 1]) ? 1.41 : 1;
-    if (cur === 0) cost += def.cost * len;
-    else if (cur < type) cost += (def.cost - ROADS[cur].cost) * len;
+    const mul = water[k] ? BRIDGE_COST_MUL : 1;
+    if (cur === 0) cost += def.cost * len * mul;
+    else if (ROADS[cur].rank < def.rank) cost += Math.max(0, def.cost - ROADS[cur].cost) * len * mul;
   }
   for (let k = 0; k < dirs.length; k++) {
     if (isDiag(dirs[k]) && crossesDiagonal(g, cells[k], dirs[k])) {
       bad.add(cells[k]);
       bad.add(cells[k + 1]);
-      reason = reason || '斜めの道路どうしは交差点なしで交差できません';
+      why('斜めの道路どうしは交差点なしで交差できません');
     }
   }
 
-  // 勾配の調整
-  const t = cells.map((i) => g.cellH(i % n, (i / n) | 0));
+  // 橋（水の上の連続したマス）
+  const t = cells.map((i) => g.roadH(i));
   const fixed = cells.map((i) => g.road[i] !== 0);
+  for (let k = 0; k < cells.length; k++) {
+    if (!water[k]) continue;
+    let e = k;
+    while (e + 1 < cells.length && water[e + 1]) e++;
+    const run = cells.slice(k, e + 1);
+    bridge += run.length;
+    const markBad = (r: string) => { for (const c of run) bad.add(c); why(r); };
+    if (k === 0 || e === cells.length - 1) markBad('橋の両端は陸地にしてください');
+    else {
+      const d0 = dirs[k - 1];
+      for (let j = k - 1; j <= e; j++) if (dirs[j] !== d0) { markBad('橋はまっすぐに架けてください'); break; }
+      if (run.length > MAX_BRIDGE) markBad(`橋が長すぎます（最大 ${MAX_BRIDGE} マス）`);
+      // 既存の橋とは、同じ向きでしかつなげない
+      for (const c of run) {
+        const m = g.conn[c];
+        if (m && (m & ~((1 << d0) | (1 << opp(d0))))) markBad('橋の上に交差点は作れません');
+      }
+      const h0 = g.roadH(cells[k - 1]), h1 = g.roadH(cells[e + 1]);
+      const dh = Math.max(h0, h1, WATER_LEVEL + 3.5);
+      for (let j = k; j <= e; j++) {
+        const c = cells[j];
+        const h = g.deck[c] > 0 ? g.deck[c] : dh;
+        t[j] = h;
+        fixed[j] = true;
+        deck.set(c, h);
+      }
+    }
+    k = e;
+  }
+
+  // 勾配の調整
   const segLen = (k: number) => (isDiag(dirs[k]) ? CELL * 1.414 : CELL);
   for (let k = 1; k < t.length; k++) {
     if (fixed[k]) continue;
@@ -110,71 +251,57 @@ export function planRoad(g: Grid, path: LinePath, type: RoadType): RoadPlan {
   }
   for (let k = 1; k < t.length; k++) {
     const m = MAX_ROAD_GRADE * segLen(k - 1) * 1.6;
-    if (Math.abs(t[k] - t[k - 1]) > m) {
+    if (Math.abs(t[k] - t[k - 1]) > m + 0.01) {
       bad.add(cells[k]);
-      reason = reason || '坂が急すぎます';
+      why('坂が急すぎます');
     }
   }
-  const acc = new Map<number, [number, number]>();
   for (let k = 0; k < cells.length; k++) {
     if (fixed[k]) continue;
     const i = cells[k];
     const x = i % n, y = (i / n) | 0;
     for (const [vx, vy] of [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]]) {
       const vi = vy * V + vx;
-      const a = acc.get(vi) || [0, 0];
+      const a = vacc.get(vi) || [0, 0];
       a[0] += t[k];
       a[1] += 1;
-      acc.set(vi, a);
+      vacc.set(vi, a);
     }
   }
-  const vertexH = new Map<number, number>();
-  // 既存の道路の頂点は動かさない
-  const locked = new Set<number>();
-  for (let k = 0; k < cells.length; k++) {
-    if (!fixed[k]) continue;
-    const i = cells[k];
-    const x = i % n, y = (i / n) | 0;
-    for (const [vx, vy] of [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]]) locked.add(vy * V + vx);
-  }
-  for (const [vi, [s, c]] of acc) {
-    if (locked.has(vi)) continue;
-    const nh = s / c;
-    const old = g.heights[vi];
-    if (Math.abs(nh - old) > 0.05) {
-      vertexH.set(vi, nh);
-      cost += Math.abs(nh - old) * 1.5;
-      if (Math.abs(nh - old) > 14) { reason = reason || '地形の高低差が大きすぎます'; }
-      if (nh < WATER_LEVEL + 0.5) reason = reason || '水の上には引けません（橋は今後追加します）';
-    }
-  }
-  if (reason.startsWith('地形') || reason.startsWith('水')) {
-    for (const i of cells) {
-      const x = i % n, y = (i / n) | 0;
-      for (const [vx, vy] of [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]]) {
-        const vh = vertexH.get(vy * V + vx);
-        if (vh !== undefined && (Math.abs(vh - g.heights[vy * V + vx]) > 14 || vh < WATER_LEVEL + 0.5)) bad.add(i);
-      }
-    }
-  }
-  cost = Math.round(cost);
-  return { ok: bad.size === 0 && cells.length > 1, path, type, cost, bad, vertexH, reason };
+  return { cost, bridge };
 }
 
 export function applyRoad(g: Grid, plan: RoadPlan) {
-  const { cells, dirs } = plan.path;
+  const def = ROADS[plan.type];
   for (const [vi, h] of plan.vertexH) g.heights[vi] = h;
-  for (let k = 0; k < cells.length; k++) {
-    const i = cells[k];
-    if (g.road[i] < plan.type) g.road[i] = plan.type;
-    g.zone[i] = 0;
-    g.zden[i] = 0;
-    g.tree[i] = 0;
+  for (const [c, h] of plan.deck) g.deck[c] = h;
+  for (const lane of plan.lanes) {
+    const { cells, dirs } = lane;
+    for (const i of cells) {
+      const cur = g.road[i];
+      if (!cur || ROADS[cur].rank < def.rank) g.road[i] = plan.type;
+      g.zone[i] = 0;
+      g.zden[i] = 0;
+      g.tree[i] = 0;
+    }
+    for (let k = 0; k < dirs.length; k++) {
+      const d = dirs[k];
+      const a = cells[k], b = cells[k + 1];
+      g.conn[a] |= 1 << d;
+      g.conn[b] |= 1 << opp(d);
+      g.flow[a] |= 1 << d;
+      if (lane.oneWay) g.flow[b] &= ~(1 << opp(d));
+      else g.flow[b] |= 1 << opp(d);
+    }
   }
-  for (let k = 0; k < dirs.length; k++) {
-    const d = dirs[k];
-    g.conn[cells[k]] |= 1 << d;
-    g.conn[cells[k + 1]] |= 1 << opp(d);
+  // 大通りの端の折り返し
+  const n = g.n;
+  for (const [a, b] of plan.uturns) {
+    const d = dirOf((b % n) - (a % n), ((b / n) | 0) - ((a / n) | 0));
+    if (d < 0) continue;
+    g.conn[a] |= 1 << d;
+    g.conn[b] |= 1 << opp(d);
+    g.flow[a] |= 1 << d;
   }
 }
 
@@ -219,7 +346,7 @@ export function planZone(g: Grid, r: Rect, zone: ZoneType, den: number): ZonePla
       }
       if (g.zone[i] === zone && g.zden[i] === den) continue;
       cells.push(i);
-      cost += ZONE_COST[zone];
+      cost += ZONE_COST[zone][den];
     }
   }
   return { cells, skipped, cost, zone, den };

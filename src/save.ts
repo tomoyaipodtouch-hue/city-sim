@@ -61,7 +61,7 @@ export async function listSaves(): Promise<SaveMeta[]> {
 }
 
 // ---- ファイル ----
-const TYPED = ['heights', 'road', 'conn', 'pline', 'zone', 'zden', 'bldg', 'tree', 'congestion', 'traffic'] as const;
+const TYPED = ['heights', 'road', 'conn', 'flow', 'deck', 'pline', 'zone', 'zden', 'bldg', 'tree', 'congestion', 'traffic'] as const;
 
 function toB64(a: ArrayBufferView): string {
   const u = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
@@ -78,7 +78,10 @@ function fromB64(s: string): Uint8Array {
 
 export async function exportFile(d: SaveData): Promise<Blob> {
   const obj: Record<string, unknown> = { ...d, format: 'pocket-metro' };
-  for (const k of TYPED) obj[k] = toB64(d[k]);
+  for (const k of TYPED) {
+    const v = d[k];
+    if (v) obj[k] = toB64(v);
+  }
   const json = JSON.stringify(obj);
   if ('CompressionStream' in window) {
     const cs = new Blob([json]).stream().pipeThrough(new CompressionStream('gzip'));
@@ -98,10 +101,11 @@ export async function importFile(f: Blob): Promise<SaveData> {
   if (obj.format !== 'pocket-metro') throw new Error('Pocket Metro の保存ファイルではありません');
   const out = obj as Record<string, unknown>;
   const types: Record<string, (b: ArrayBuffer) => ArrayBufferView> = {
-    heights: (b) => new Float32Array(b), congestion: (b) => new Float32Array(b), traffic: (b) => new Float32Array(b),
+    heights: (b) => new Float32Array(b), deck: (b) => new Float32Array(b), congestion: (b) => new Float32Array(b), traffic: (b) => new Float32Array(b),
     bldg: (b) => new Int32Array(b),
   };
   for (const k of TYPED) {
+    if (!obj[k]) continue;
     const u = fromB64(obj[k]);
     const buf = u.buffer.slice(u.byteOffset, u.byteOffset + u.byteLength) as ArrayBuffer;
     out[k] = types[k] ? types[k](buf) : new Uint8Array(buf);

@@ -49,6 +49,8 @@ export class GameClient {
         if (m.heights) g.heights.set(m.heights);
         g.road.set(m.road);
         g.conn.set(m.conn);
+        g.flow.set(m.flow);
+        g.deck.set(m.deck);
         g.pline.set(m.pline);
         g.zone.set(m.zone);
         g.zden.set(m.zden);

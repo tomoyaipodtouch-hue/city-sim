@@ -30,7 +30,7 @@ export class PreviewLayer {
     for (const i of cells) {
       if (k >= MAX) break;
       const x = i % n, y = (i / n) | 0;
-      this.mtx.makeTranslation((x + 0.5) * CELL, g.cellMaxH(x, y) + 0.7, (y + 0.5) * CELL);
+      this.mtx.makeTranslation((x + 0.5) * CELL, Math.max(g.cellMaxH(x, y), g.deck[i] || 0, 0) + 0.7, (y + 0.5) * CELL);
       this.mesh.setMatrixAt(k, this.mtx);
       c.setHex(colorOf(i));
       this.mesh.setColorAt(k, c);
@@ -43,7 +43,7 @@ export class PreviewLayer {
 
   setPath(g: Grid, cells: number[]) {
     const n = g.n;
-    const pts = cells.map((i) => new THREE.Vector3(((i % n) + 0.5) * CELL, g.cellH(i % n, (i / n) | 0) + 1.2, (((i / n) | 0) + 0.5) * CELL));
+    const pts = cells.map((i) => new THREE.Vector3(((i % n) + 0.5) * CELL, Math.max(g.roadH(i), 0) + 1.2, (((i / n) | 0) + 0.5) * CELL));
     this.line.geometry.dispose();
     this.line.geometry = new THREE.BufferGeometry().setFromPoints(pts);
   }

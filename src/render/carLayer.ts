@@ -14,6 +14,7 @@ interface Car {
   d: number;
   t: number;
   alive: boolean;
+  lane: number;
 }
 
 function vc(geo: THREE.BufferGeometry, hex: number) {
@@ -67,7 +68,7 @@ export class CarLayer {
     const w: number[] = [];
     let total = 0;
     for (let i = 0; i < traffic.length; i++) {
-      if (!g.road[i] || traffic[i] < 1 || !g.conn[i]) continue;
+      if (!g.road[i] || traffic[i] < 1 || !g.flow[i]) continue;
       total += traffic[i];
       cells.push(i);
       w.push(total);
@@ -96,13 +97,13 @@ export class CarLayer {
     if (d < 0) return null;
     const n = g.n;
     const to = from + DY[d] * n + DX[d];
-    return { from, to, d, t: Math.random(), alive: true };
+    return { from, to, d, t: Math.random(), alive: true, lane: Math.random() < 0.5 ? 0 : 1 };
   }
 
   private pickDir(cell: number, back: number): number {
     const g = this.grid!, tr = this.traffic!;
     const n = g.n;
-    const m = g.conn[cell];
+    const m = g.flow[cell];
     const x = cell % n, y = (cell / n) | 0;
     let total = 0;
     const opts: number[] = [], ws: number[] = [];
@@ -169,11 +170,11 @@ export class CarLayer {
       if (!c.alive) continue;
       const fx = (c.from % n) + 0.5, fy = ((c.from / n) | 0) + 0.5;
       const tx = (c.to % n) + 0.5, ty = ((c.to / n) | 0) + 0.5;
-      const fh = g.cellH(c.from % n, (c.from / n) | 0), th = g.cellH(c.to % n, (c.to / n) | 0);
+      const fh = g.roadH(c.from), th = g.roadH(c.to);
       const dx = DX[c.d], dz = DY[c.d];
       const l = Math.hypot(dx, dz);
-      // 右側通行
-      const lane = (def.width / 2) * 0.48;
+      // 右側通行。一方通行と大通りは2車線を使い分ける
+      const lane = def.oneWay ? (c.lane ? 1 : -1) * def.width * 0.2 : (def.width / 2) * 0.48;
       const ox = (-dz / l) * lane, oz = (dx / l) * lane;
       this.v.set((fx + (tx - fx) * c.t) * CELL + ox, fh + (th - fh) * c.t + ROAD_LIFT, (fy + (ty - fy) * c.t) * CELL + oz);
       this.q.setFromAxisAngle(this.up, Math.atan2(dx, dz));
