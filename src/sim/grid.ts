@@ -10,7 +10,7 @@ import { CELL, DX, DY, WATER_LEVEL, opp } from './constants';
 
 // 同期・保存の対象になる配列の名前
 export const GRID_U8 = ['road', 'conn', 'flow', 'pline', 'zone', 'zden', 'tree', 'up', 'conn1', 'flow1', 'ictl', 'isplit', 'iflags'] as const;
-export const GRID_F32 = ['deck', 'upH'] as const;
+export const GRID_F32 = ['deck', 'upH', 'lift'] as const;
 export const GRID_I32 = ['bldg'] as const;
 export type GridU8Key = (typeof GRID_U8)[number];
 export type GridF32Key = (typeof GRID_F32)[number];
@@ -43,6 +43,7 @@ export class Grid {
   conn1: Uint8Array; // 上空の接続
   flow1: Uint8Array; // 上空で通行できる向き
   upH: Float32Array; // 上空の路面の高さ
+  lift: Float32Array; // 立体交差の取り付け部分で、地上の道路を持ち上げる高さ
   ictl: Uint8Array; // 交差点の制御方式（Ctl）
   isplit: Uint8Array; // 信号の時間配分（東西方向の青の割合、0..100。50 = 半々）
   iflags: Uint8Array; // 交差点のフラグ（JF）
@@ -64,6 +65,7 @@ export class Grid {
     this.conn1 = new Uint8Array(c);
     this.flow1 = new Uint8Array(c);
     this.upH = new Float32Array(c);
+    this.lift = new Float32Array(c);
     this.ictl = new Uint8Array(c);
     this.isplit = new Uint8Array(c).fill(50);
     this.iflags = new Uint8Array(c);
@@ -93,7 +95,7 @@ export class Grid {
   // 地上の道路の路面の高さ（橋なら橋の高さ）
   roadH(i: number) {
     const d = this.deck[i];
-    return d > 0 ? d : this.cellH(i % this.n, (i / this.n) | 0);
+    return d > 0 ? d : this.cellH(i % this.n, (i / this.n) | 0) + this.lift[i];
   }
   // ノード（階層つき）の路面の高さ
   nodeH(node: number) {

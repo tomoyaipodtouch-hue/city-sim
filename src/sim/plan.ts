@@ -711,3 +711,36 @@ export function flattenRect(g: Grid, x: number, y: number, w: number, h: number,
     if (!nearRoad) g.heights[vy * V + vx] = target;
   }
 }
+
+// 立体交差（地上の高速道路をまたぐ一般道）の前後の道路を、少しずつ持ち上げて坂をゆるやかにする
+export function regradeApproaches(g: Grid) {
+  const n = g.n;
+  g.lift.fill(0);
+  for (let c = 0; c < n * n; c++) {
+    const u = g.up[c];
+    if (!u || isHighway(u) || u === RoadType.Ramp) continue;
+    const H = g.upH[c];
+    const x = c % n, y = (c / n) | 0;
+    for (let d = 0; d < 8; d++) {
+      if (!(g.conn1[c] & (1 << d))) continue;
+      const j = (y + DY[d]) * n + (x + DX[d]);
+      if (!g.inb(x + DX[d], y + DY[d]) || g.arriveLevel(1, j, d) === 1) continue;
+      // まっすぐ続いている地上の道路のマスを、最大3マスまで探す
+      const run: number[] = [];
+      for (let k = 1; k <= 3; k++) {
+        const ax = x + DX[d] * k, ay = y + DY[d] * k;
+        if (!g.inb(ax, ay)) break;
+        const a = ay * n + ax;
+        const straight = (1 << d) | (1 << opp(d));
+        if (!g.road[a] || g.up[a] || g.deck[a] > 0) break;
+        if (k === 1 ? (g.conn[a] & ~straight) !== 0 : g.conn[a] !== straight) break;
+        run.push(a);
+      }
+      run.forEach((a, k) => {
+        const frac = 1 - (k + 1) / (run.length + 1);
+        const rise = (H - g.cellH(a % n, (a / n) | 0)) * frac;
+        if (rise > g.lift[a]) g.lift[a] = rise;
+      });
+    }
+  }
+}

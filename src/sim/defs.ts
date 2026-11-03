@@ -29,7 +29,7 @@ export interface RoadDef {
 }
 
 export const ROADS: Record<number, RoadDef> = {
-  [RoadType.Street]: { id: RoadType.Street, name: '通り', speedKmh: 30, capacity: 900, cost: 10, upkeep: 0.1, width: 7, rank: 1 },
+  [RoadType.Street]: { id: RoadType.Street, name: '街路', speedKmh: 30, capacity: 900, cost: 10, upkeep: 0.1, width: 7, rank: 1 },
   [RoadType.Road]: { id: RoadType.Road, name: '一般道', speedKmh: 50, capacity: 2400, cost: 20, upkeep: 0.2, width: 10, rank: 2 },
   [RoadType.OneWay]: { id: RoadType.OneWay, name: '一方通行', speedKmh: 50, capacity: 3000, cost: 25, upkeep: 0.25, width: 10, oneWay: true, rank: 3 },
   [RoadType.Avenue]: { id: RoadType.Avenue, name: '大通り', speedKmh: 60, capacity: 3600, cost: 30, upkeep: 0.3, width: 11, oneWay: true, wide: true, rank: 4 },

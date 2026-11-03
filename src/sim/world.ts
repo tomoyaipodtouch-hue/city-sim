@@ -8,7 +8,7 @@ import {
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
 import {
-  applyRamp, applyRoad, applyZone, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
+  applyRamp, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
 } from './plan';
 import { assignTrips, buildJunctions, congestionFactor, Destination, Origin } from './traffic';
 
@@ -399,6 +399,7 @@ export class World {
   }
 
   private afterGridChange() {
+    regradeApproaches(this.g);
     this.gridVersion++;
     this.candidatesDirty = true;
     this.updatePower();
@@ -1234,6 +1235,7 @@ export class World {
   }
 
   recomputeAll() {
+    regradeApproaches(this.g);
     this.cachedPop = this.population();
     this.checkNeighbor();
     this.updatePower();
