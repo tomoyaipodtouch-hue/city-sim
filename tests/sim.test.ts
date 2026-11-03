@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { World } from '../src/sim/world';
-import { RoadType, ZoneType } from '../src/sim/defs';
+import { plantPower, RoadType, ZoneType } from '../src/sim/defs';
 import { planLine } from '../src/sim/plan';
 import { buildTestCity } from './helpers';
 
@@ -100,6 +100,17 @@ describe('stage 2a roads', () => {
     expect(w.exec({ t: 'terrain', op: 'level', x0: 4, y0: 4, x1: 9, y1: 6 }).ok).toBe(true);
     const h0 = w.g.vh(5, 5);
     expect(w.g.vh(9, 5)).toBeCloseTo(h0);
+  });
+
+  it('new power plants supply power; wind turbines produce more on high ground', () => {
+    const w = new World(48);
+    w.g.heights.fill(6);
+    w.funds = 1e6;
+    for (const [id, x, y] of [['nuclear', 2, 2], ['solar', 10, 2], ['oil', 16, 2], ['wind', 24, 2]] as const) expect(w.exec({ t: 'plop', id, x, y }).ok).toBe(true);
+    w.updateStats();
+    expect(w.stats.powerSupply).toBe(3600 + 300 + 700 + plantPower('wind', 6));
+    expect(plantPower('wind', 40)).toBeGreaterThan(plantPower('wind', 6));
+    expect(plantPower('wind', 200)).toBe(64);
   });
 
   it('builds a bridge across water', () => {

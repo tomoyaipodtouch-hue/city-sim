@@ -110,6 +110,10 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     case 'IH': hightech(mb, f, rng, tf, b.den); break;
     case 'coal': coalPlant(mb, f); break;
     case 'gas': gasPlant(mb, f); break;
+    case 'oil': oilPlant(mb, f); break;
+    case 'nuclear': nuclearPlant(mb, f); break;
+    case 'wind': windTurbine(mb, f, rng); break;
+    case 'solar': solarFarm(mb, f); break;
     case 'pump': pump(mb, f); break;
     case 'tower': waterTower(mb, f); break;
     case 'park_s': park(mb, f, rng, tf, false); break;
@@ -426,6 +430,86 @@ function gasPlant(mb: MeshBuilder, f: LotFrame) {
   mb.cylinder(-4, -12, 0, 32, 1.8, 10, PALETTE.steel, PALETTE.dark);
   mb.cylinder(14, -10, 0, 9, 6, 16, PALETTE.white, PALETTE.white);
   mb.cylinder(14, 8, 0, 9, 5, 16, PALETTE.white, PALETTE.white);
+}
+
+function oilPlant(mb: MeshBuilder, f: LotFrame) {
+  mb.ground(-f.W / 2 + 0.3, -f.D / 2 + 0.3, f.W / 2 - 0.3, f.D / 2 - 0.3, 0.08, PALETTE.concrete);
+  mb.box(-26, 0, -4, 4, 16, 18, PALETTE.indWall[3], PAT.industrial, PALETTE.steel);
+  mb.box(-22, 16, 0, -6, 24, 12, PALETTE.indWall[1], PAT.industrial, PALETTE.steel);
+  mb.cylinder(16, 14, 0, 48, 2.6, 14, PALETTE.indWall[0], PALETTE.dark, 2.0);
+  mb.cylinder(16, 14, 40, 44, 2.2, 14, PALETTE.accent[0], undefined, 2.1);
+  // 石油のタンク
+  for (const [x, z] of [[-18, -20], [-4, -20], [10, -20], [22, -6]]) {
+    mb.cylinder(x, z, 0, 9, 5.5, 18, PALETTE.white, PALETTE.indWall[0]);
+    mb.cylinder(x, z, 0, 1.2, 6.2, 18, PALETTE.concrete, PALETTE.concrete);
+  }
+  mb.box(-24, 2, -13, 24, 2.6, -12.4, PALETTE.steel); // 配管
+}
+
+function nuclearPlant(mb: MeshBuilder, f: LotFrame) {
+  mb.ground(-f.W / 2 + 0.3, -f.D / 2 + 0.3, f.W / 2 - 0.3, f.D / 2 - 0.3, 0.08, PALETTE.concrete);
+  mb.ground(-f.W / 2 + 2, -f.D / 2 + 2, f.W / 2 - 2, -f.D / 2 + 4, 0.1, PALETTE.lawn); // 植え込み
+  // 冷却塔（くびれた形）
+  for (const [x, z] of [[-20, -18], [6, -20]]) {
+    const tw = C(0xe6e3da);
+    mb.cylinder(x, z, 0, 22, 13, 24, tw, undefined, 9.5);
+    mb.cylinder(x, z, 22, 34, 9.5, 24, tw, undefined, 9);
+    mb.cylinder(x, z, 34, 43, 9, 24, tw, undefined, 10.2);
+    mb.cylinder(x, z, 43, 44, 10.2, 24, C(0xbdb8ac), C(0x4a4c50), 10.2);
+  }
+  // 原子炉の建屋（円筒と丸い屋根）
+  mb.cylinder(18, 18, 0, 20, 10, 24, PALETTE.white, undefined);
+  const dome = [[20, 10, 9.2], [24, 9.2, 7.2], [27, 7.2, 4.4], [28.6, 4.4, 0.01]];
+  let y0 = 20;
+  for (const [y1, r0, r1] of dome) {
+    mb.cylinder(18, 18, y0, y1, r0, 24, PALETTE.white, r1 < 0.1 ? PALETTE.white : undefined, r1);
+    y0 = y1;
+  }
+  // タービン建屋と事務所
+  mb.box(-30, 0, 6, 4, 14, 28, PALETTE.indWall[1], PAT.industrial, PALETTE.steel);
+  mb.box(-30, 0, 30, -12, 8, 37, PALETTE.white, PAT.office, PALETTE.roof[3]);
+  mb.box(5, 0, 26, 7, 10, 28, PALETTE.steel);
+}
+
+function windTurbine(mb: MeshBuilder, f: LotFrame, rng: Rng) {
+  void f;
+  mb.ground(-7.5, -7.5, 7.5, 7.5, 0.08, PALETTE.lawn);
+  mb.cylinder(0, 0, 0, 1, 3, 12, PALETTE.concrete, PALETTE.concrete);
+  mb.cylinder(0, 0, 1, 42, 1.3, 12, PALETTE.white, undefined, 0.7);
+  mb.box(-1.2, 41.2, -3.5, 1.2, 43.6, 2, PALETTE.white);
+  // 羽根（3枚、正面は -z 向き）。両面から見えるように裏表を作る
+  const hub: [number, number, number] = [0, 42.4, -3.8];
+  const rot = rng.next() * Math.PI * 2;
+  for (let k = 0; k < 3; k++) {
+    const a = rot + (k * Math.PI * 2) / 3;
+    const ux = Math.cos(a), uy = Math.sin(a), px = -uy * 0.9, py = ux * 0.9;
+    const L = 19;
+    const p0: [number, number, number] = [hub[0] + px, hub[1] + py, hub[2]];
+    const p1: [number, number, number] = [hub[0] - px, hub[1] - py, hub[2]];
+    const p2: [number, number, number] = [hub[0] + ux * L - px * 0.3, hub[1] + uy * L - py * 0.3, hub[2]];
+    const p3: [number, number, number] = [hub[0] + ux * L + px * 0.3, hub[1] + uy * L + py * 0.3, hub[2]];
+    mb.quad(p0, p1, p2, p3, PALETTE.white);
+    mb.quad(p3, p2, p1, p0, PALETTE.white);
+  }
+  mb.cylinder(0, -3.8, 41.6, 43.2, 0.9, 10, PALETTE.white, PALETTE.white);
+}
+
+function solarFarm(mb: MeshBuilder, f: LotFrame) {
+  mb.ground(-f.W / 2 + 0.3, -f.D / 2 + 0.3, f.W / 2 - 0.3, f.D / 2 - 0.3, 0.08, C(0x8c9a6a));
+  const panel = C(0x1d3557), frame = C(0xaab4be);
+  // 南（+z）向きに傾けたパネルの列
+  for (let z = -f.D / 2 + 4; z < f.D / 2 - 4; z += 5.2) {
+    for (let x = -f.W / 2 + 2.5; x < f.W / 2 - 2.5; x += 9.5) {
+      const x1 = Math.min(f.W / 2 - 2.5, x + 9);
+      const a: [number, number, number] = [x, 2.4, z], b: [number, number, number] = [x1, 2.4, z];
+      const c: [number, number, number] = [x1, 0.7, z + 3.2], d: [number, number, number] = [x, 0.7, z + 3.2];
+      mb.quad(d, c, b, a, panel);
+      mb.quad(a, b, c, d, frame);
+      mb.box(x + 0.3, 0, z + 0.2, x + 0.6, 2.4, z + 0.5, frame);
+      mb.box(x1 - 0.6, 0, z + 0.2, x1 - 0.3, 2.4, z + 0.5, frame);
+    }
+  }
+  mb.box(f.W / 2 - 9, 0, -f.D / 2 + 1, f.W / 2 - 2, 3.5, -f.D / 2 + 4, PALETTE.indWall[4], PAT.industrial, PALETTE.steel); // 変電設備
 }
 
 function pump(mb: MeshBuilder, f: LotFrame) {

@@ -170,7 +170,7 @@ export const SERVICE_DEPT: Record<ServiceKind, Dept> = {
 export const GARBAGE_PER_RES = 0.9;
 export const GARBAGE_PER_JOB = 0.6;
 
-export type CivicId = 'coal' | 'gas' | 'pump' | 'tower' | 'park_s' | 'park_l' | 'plaza' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station'
+export type CivicId = 'coal' | 'gas' | 'oil' | 'nuclear' | 'wind' | 'solar' | 'pump' | 'tower' | 'park_s' | 'park_l' | 'plaza' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station'
   | 'ferry_p' | 'ferry_c' | 'seaport' | 'airport_s' | 'airport_l' | 'freight_st'
   | 'police_s' | 'police_l' | 'fire_s' | 'fire_l' | 'clinic' | 'hospital' | 'school_e' | 'school_h' | 'college' | 'library'
   | 'landfill' | 'incinerator' | 'recycling'
@@ -204,6 +204,10 @@ export interface CivicDef {
 export const CIVIC: Record<CivicId, CivicDef> = {
   coal: { id: 'coal', name: '石炭火力発電所', w: 4, h: 4, cost: 12000, upkeep: 220, power: 900, pollution: 30, desc: '安くて発電量が多いが、大気汚染がひどい' },
   gas: { id: 'gas', name: 'ガス火力発電所', w: 3, h: 3, cost: 18000, upkeep: 260, power: 550, pollution: 8, desc: '汚染が少ないが、費用が高い' },
+  oil: { id: 'oil', name: '石油火力発電所', w: 4, h: 4, cost: 15000, upkeep: 250, power: 700, pollution: 20, desc: '石炭より汚染が少なく、ガスより発電量が多い' },
+  nuclear: { id: 'nuclear', name: '原子力発電所', w: 5, h: 5, cost: 60000, upkeep: 750, power: 3600, pollution: 0, desc: '発電量がとても多く、大気を汚さない。建設費と維持費が高い' },
+  wind: { id: 'wind', name: '風力発電機', w: 1, h: 1, cost: 1500, upkeep: 20, power: 40, pollution: 0, desc: '小さくて汚染がない。高い場所ほど発電量が多い（最大 64 MW）' },
+  solar: { id: 'solar', name: '太陽光発電所', w: 3, h: 3, cost: 20000, upkeep: 110, power: 300, pollution: 0, desc: '汚染がないが、広さの割に発電量が少ない' },
   pump: { id: 'pump', name: '揚水ポンプ', w: 2, h: 2, cost: 2500, upkeep: 80, water: 1200, needsPower: true, desc: '周りの道路に沿って水を送る。電力が必要' },
   tower: { id: 'tower', name: '給水塔', w: 1, h: 1, cost: 600, upkeep: 25, water: 350, needsPower: true, desc: '小さな給水施設。電力が必要' },
   park_s: { id: 'park_s', name: '小さな公園', w: 1, h: 1, cost: 150, upkeep: 6, park: 0.12, desc: '周りの地価が少し上がる' },
@@ -247,3 +251,10 @@ export const DIFFICULTY = [
 ] as const;
 
 export const DEFAULT_TAX = 9; // 税率（%）
+
+// 発電量（MW）。風力は高い場所ほど多い（地面の高さ 0m で半分、40m で 1.6 倍）
+export function plantPower(id: CivicId, groundH: number) {
+  const p = CIVIC[id].power ?? 0;
+  if (id === 'wind') return Math.round(p * Math.max(0.5, Math.min(1.6, 0.5 + groundH / 36)));
+  return p;
+}

@@ -4,7 +4,7 @@ import type { CityRenderer } from '../render/renderer';
 import { DATA_VIEWS, DataView } from '../render/overlay';
 import { ToolController, TOOL_GROUPS, PreviewInfo } from './tools';
 import { ADVISORS, AdvisorId, LOAN_AMOUNTS, MAX_LOANS, ordinanceCost, ORDINANCES } from '../sim/governance';
-import { CIVIC, CivicId, DENSITY_NAMES, DEPTS, DEPT_NAMES, DIFFICULTY, isHighway, LINES, GROW, GROW_KINDS, GrowKind, ROADS, TAX_LABELS, ZONE_NAMES } from '../sim/defs';
+import { CIVIC, CivicId, plantPower, DENSITY_NAMES, DEPTS, DEPT_NAMES, DIFFICULTY, isHighway, LINES, GROW, GROW_KINDS, GrowKind, ROADS, TAX_LABELS, ZONE_NAMES } from '../sim/defs';
 import { BState } from '../sim/world';
 import type { Stats } from '../sim/world';
 import { sfx, soundSettings } from '../sound';
@@ -375,7 +375,8 @@ export class Hud {
         if (b.civic) {
           const def = CIVIC[b.type as CivicId];
           title = def.name;
-          if (def.power) rows.push(['発電量', `${def.power} MW`]);
+          if (def.power) rows.push(['発電量', `${plantPower(b.type as CivicId, g.cellH(b.x, b.y))} MW`]);
+          if (def.power && def.pollution === 0) rows.push(['大気汚染', 'なし']);
           if (def.water) rows.push(['給水量', `${def.water}`], ['電力', b.powered ? 'あり' : '<span class="neg">なし</span>']);
           if (def.pollution) rows.push(['大気汚染', def.pollution > 20 ? 'ひどい' : 'ややある']);
           if (def.transit && m) {

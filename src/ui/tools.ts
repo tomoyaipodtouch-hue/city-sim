@@ -56,6 +56,10 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { tool: 'pline', name: '送電線', note: `${yen(POWER_LINE_COST)}/マス` },
       { tool: 'plop:coal', name: CIVIC.coal.name, note: yen(CIVIC.coal.cost) },
       { tool: 'plop:gas', name: CIVIC.gas.name, note: yen(CIVIC.gas.cost) },
+      { tool: 'plop:oil', name: CIVIC.oil.name, note: yen(CIVIC.oil.cost) },
+      { tool: 'plop:wind', name: CIVIC.wind.name, note: yen(CIVIC.wind.cost) },
+      { tool: 'plop:solar', name: CIVIC.solar.name, note: yen(CIVIC.solar.cost) },
+      { tool: 'plop:nuclear', name: CIVIC.nuclear.name, note: yen(CIVIC.nuclear.cost) },
     ],
   },
   {

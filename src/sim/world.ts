@@ -3,7 +3,7 @@ import { Grid, GRID_U8, GRID_F32, Ctl } from './grid';
 import { Rng } from './rng';
 import { DAYS_PER_MONTH, DX, DY } from './constants';
 import {
-  CIVIC, CivicId, DEFAULT_TAX, DEPT_NAMES, Dept, DIFFICULTY, isHighway, SERVICE_DEPT, LineKind, LINES, FARE, BUS_STOP_UPKEEP, GROW, GROW_KINDS, GrowKind, IND_DENSITY_MUL, maxFloorsFor, POWER_LINE_UPKEEP, ROADS, RoadType,
+  CIVIC, CivicId, plantPower, DEFAULT_TAX, DEPT_NAMES, Dept, DIFFICULTY, isHighway, SERVICE_DEPT, LineKind, LINES, FARE, BUS_STOP_UPKEEP, GROW, GROW_KINDS, GrowKind, IND_DENSITY_MUL, maxFloorsFor, POWER_LINE_UPKEEP, ROADS, RoadType,
   ZONE_KINDS, ZoneType,
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
@@ -909,7 +909,7 @@ export class World {
       const consumers: Building[] = [];
       for (const id of ids) {
         const b = this.buildings.get(id)!;
-        if (b.civic && CIVIC[b.type as CivicId].power) supply += CIVIC[b.type as CivicId].power!;
+        if (b.civic && CIVIC[b.type as CivicId].power) supply += plantPower(b.type as CivicId, g.cellH(b.x, b.y));
         else consumers.push(b);
       }
       let need = 0;
