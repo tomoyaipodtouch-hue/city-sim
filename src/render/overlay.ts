@@ -3,7 +3,7 @@ import { Grid } from '../sim/grid';
 import { ROADS } from '../sim/defs';
 import type { Maps } from '../sim/world';
 
-export type DataView = 'none' | 'zones' | 'traffic' | 'transit' | 'landValue' | 'pollution' | 'power' | 'water';
+export type DataView = 'none' | 'zones' | 'traffic' | 'transit' | 'landValue' | 'pollution' | 'power' | 'water' | 'crime' | 'fireRisk' | 'health' | 'edu';
 
 export const DATA_VIEWS: { id: DataView; name: string }[] = [
   { id: 'none', name: '通常' },
@@ -14,6 +14,10 @@ export const DATA_VIEWS: { id: DataView; name: string }[] = [
   { id: 'pollution', name: '大気汚染' },
   { id: 'power', name: '電力' },
   { id: 'water', name: '水道' },
+  { id: 'crime', name: '犯罪' },
+  { id: 'fireRisk', name: '火災の危険' },
+  { id: 'health', name: '医療' },
+  { id: 'edu', name: '教育' },
 ];
 
 const ZONE_RGB: [number, number, number][] = [
@@ -72,6 +76,18 @@ export function buildOverlay(out: Uint8Array, g: Grid, maps: Maps | null, view: 
         } else if (!water) {
           r = gg = b = 20;
           a = 90;
+        }
+      } else if ((view === 'crime' || view === 'fireRisk') && !water) {
+        const v = (view === 'crime' ? maps.crime[i] : maps.fireRisk[i]) / 255;
+        if (v > 0.02) {
+          [r, gg, b] = ramp(v, view === 'crime' ? [[240, 220, 120], [230, 120, 60], [170, 30, 60]] : [[250, 230, 120], [240, 140, 40], [200, 40, 20]]);
+          a = Math.min(210, 60 + v * 200);
+        }
+      } else if ((view === 'health' || view === 'edu') && !water) {
+        const v = (view === 'health' ? maps.health[i] : maps.edu[i]) / 255;
+        if (z || g.bldg[i]) {
+          [r, gg, b] = v > 0.02 ? ramp(v, view === 'health' ? [[180, 230, 200], [60, 190, 120], [20, 130, 80]] : [[200, 210, 255], [100, 140, 240], [60, 60, 200]]) : [200, 70, 60];
+          a = 150;
         }
       } else if (view === 'landValue' && !water) {
         [r, gg, b] = ramp(maps.landValue[i] / 255, LV_RAMP);

@@ -107,6 +107,7 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     case 'IA': farm(mb, f, rng, tf); break;
     case 'ID': factory(mb, f, rng, true, b.den); break;
     case 'IM': factory(mb, f, rng, false, b.den); break;
+    case 'IH': hightech(mb, f, rng, tf, b.den); break;
     case 'coal': coalPlant(mb, f); break;
     case 'gas': gasPlant(mb, f); break;
     case 'pump': pump(mb, f); break;
@@ -125,6 +126,19 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     case 'airport_s': airport(mb, f, rng, 1); break;
     case 'airport_l': airport(mb, f, rng, 2); break;
     case 'freight_st': freightStation(mb, f, rng); break;
+    case 'police_s': civicBox(mb, f, rng, PALETTE.accent[2], 1, 'police'); break;
+    case 'police_l': civicBox(mb, f, rng, PALETTE.accent[2], 3, 'police'); break;
+    case 'fire_s': fireStation(mb, f, false); break;
+    case 'fire_l': fireStation(mb, f, true); break;
+    case 'clinic': civicBox(mb, f, rng, PALETTE.white, 2, 'health'); break;
+    case 'hospital': hospital(mb, f); break;
+    case 'school_e': school(mb, f, rng, 2); break;
+    case 'school_h': school(mb, f, rng, 3); break;
+    case 'college': college(mb, f, rng, tf); break;
+    case 'library': library(mb, f, tf); break;
+    case 'landfill': landfill(mb, f, rng); break;
+    case 'incinerator': incinerator(mb, f); break;
+    case 'recycling': recycling(mb, f, rng); break;
   }
   mb.abandoned = false;
 }
@@ -717,4 +731,144 @@ function freightStation(mb: MeshBuilder, f: LotFrame, rng: Rng) {
   for (const x of [-f.W / 2 + 4, f.W / 2 - 4]) for (const z of [-f.D / 2 + 1, 6]) mb.box(x - 0.4, 0, z - 0.4, x + 0.4, 12, z + 0.4, PALETTE.accent[3]);
   mb.box(-f.W / 2 + 3.5, 12, -f.D / 2 + 0.5, f.W / 2 - 3.5, 13.5, 6.5, PALETTE.accent[3]);
   mb.box(-6, 0, 8, 6, 5, f.D / 2 - 1.5, PALETTE.indWall[0], PAT.dock, PALETTE.steel);
+}
+
+// ---------------- 公共サービス ----------------
+const BRICK = new THREE.Color(0x9a4a35), BEIGE = new THREE.Color(0xd9ccb0), RED = new THREE.Color(0xc0392b), BLUE = new THREE.Color(0x2f5fa8), GREEN = new THREE.Color(0x3f7d3a);
+
+function sign(mb: MeshBuilder, x: number, z: number, y: number, c: THREE.Color) {
+  mb.box(x - 2, y, z, x + 2, y + 0.9, z + 0.25, c);
+}
+
+// 交番・警察署・診療所（シンプルな公共の建物）
+function civicBox(mb: MeshBuilder, f: LotFrame, rng: Rng, accent: THREE.Color, floors: number, kind: 'police' | 'health') {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.pavement);
+  const wall = kind === 'police' ? rng.pick([BEIGE, PALETTE.concrete]) : PALETTE.white;
+  const W = f.W - 3, D = Math.min(f.D - 5, 12 + floors * 2);
+  const z1 = f.D / 2 - 3, z0 = z1 - D;
+  const h = floors * 3.6 + 0.6;
+  mb.box(-W / 2, 0, z0, W / 2, h, z1, wall, PAT.office, PALETTE.concrete);
+  mb.box(-W / 2, h, z0, W / 2, h + 0.5, z1, accent);
+  mb.box(-2.5, 2.8, z1, 2.5, 3.2, z1 + 2, accent);
+  sign(mb, 0, z1 + 0.05, h - 1.6, accent);
+  if (kind === 'police') {
+    // パトカー
+    for (let k = 0; k < Math.min(4, floors + 1); k++) {
+      const x = -W / 2 + 2 + k * 3.2;
+      mb.box(x, 0, z0 - 6, x + 1.9, 1.5, z0 - 1.6, PALETTE.white);
+      mb.box(x + 0.3, 1.5, z0 - 4.6, x + 1.6, 1.8, z0 - 3.6, BLUE);
+    }
+  } else {
+    mb.box(-0.5, h + 0.5, z0 + D / 2 - 2, 0.5, h + 3.5, z0 + D / 2 + 2, RED);
+    mb.box(-2, h + 1.5, z0 + D / 2 - 0.5, 2, h + 2.5, z0 + D / 2 + 0.5, RED);
+  }
+}
+
+function fireStation(mb: MeshBuilder, f: LotFrame, large: boolean) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.pavement);
+  const W = f.W - 3, D = f.D - 8, z1 = f.D / 2 - 5, z0 = z1 - D;
+  const h = large ? 8 : 6.5;
+  mb.box(-W / 2, 0, z0, W / 2, h, z1, BRICK, PAT.none, PALETTE.concrete);
+  // 車庫の扉と消防車
+  const doors = large ? 3 : 2;
+  for (let k = 0; k < doors; k++) {
+    const x = -W / 2 + 2 + k * ((W - 4) / doors);
+    const dw = (W - 4) / doors - 1;
+    mb.box(x, 0.05, z1, x + dw, 4.4, z1 + 0.06, PALETTE.white);
+    mb.box(x + 0.6, 0, z1 + 0.5, x + dw - 0.6, 2.8, z1 + 4.5, RED);
+  }
+  // 訓練塔
+  mb.box(W / 2 - 4, 0, z0 - 1, W / 2 - 1, large ? 18 : 14, z0 + 2, BRICK, PAT.house, PALETTE.dark);
+}
+
+function hospital(mb: MeshBuilder, f: LotFrame) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.pavement);
+  const W = f.W - 4;
+  mb.box(-W / 2, 0, -f.D / 2 + 3, W / 2, 20, 6, PALETTE.white, PAT.office, PALETTE.concrete);
+  mb.box(-W / 2 + 4, 0, 6, W / 2 - 4, 9, f.D / 2 - 5, PALETTE.white, PAT.office, PALETTE.concrete);
+  mb.box(-4, 3.5, f.D / 2 - 5, 4, 4, f.D / 2 - 1.5, RED);
+  // 屋上のヘリポート
+  mb.cylinder(0, -f.D / 4, 20, 20.3, 7, 16, PALETTE.dark, PALETTE.dark);
+  mb.ground(-3, -f.D / 4 - 0.4, 3, -f.D / 4 + 0.4, 20.35, PALETTE.white);
+  // 赤十字
+  mb.box(-0.6, 20, 5.9, 0.6, 24, 6.2, RED);
+  mb.box(-2, 21.4, 5.9, 2, 22.6, 6.2, RED);
+}
+
+function school(mb: MeshBuilder, f: LotFrame, rng: Rng, floors: number) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.07, PALETTE.lawn);
+  const wall = rng.pick([BRICK, BEIGE]);
+  const W = f.W - 4;
+  const h = floors * 3.6;
+  mb.box(-W / 2, 0, f.D / 2 - 14, W / 2, h, f.D / 2 - 3, wall, PAT.apartment, PALETTE.concrete);
+  mb.box(-W / 2, 0, -f.D / 2 + 3, -W / 2 + 8, h, f.D / 2 - 14, wall, PAT.apartment, PALETTE.concrete);
+  // 校庭（トラック）と旗
+  mb.ground(-W / 2 + 10, -f.D / 2 + 3, W / 2, f.D / 2 - 17, 0.1, PALETTE.dirt);
+  mb.ground(-W / 2 + 13, -f.D / 2 + 6, W / 2 - 3, f.D / 2 - 20, 0.12, PALETTE.lawn2);
+  mb.box(W / 2 - 2, 0, f.D / 2 - 2.5, W / 2 - 1.85, 8, f.D / 2 - 2.35, PALETTE.steel);
+  mb.box(W / 2 - 1.85, 6.5, f.D / 2 - 2.5, W / 2 + 0.2, 7.8, f.D / 2 - 2.4, BLUE);
+  // スクールバス
+  mb.box(-4, 0, f.D / 2 - 2.6, 5, 2.6, f.D / 2 - 0.4, new THREE.Color(0xf2b705));
+}
+
+function college(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.07, PALETTE.lawn2);
+  // 中庭を囲む校舎と、時計塔
+  for (const [x0, z0, x1, z1] of [[-26, -26, 26, -16], [-26, 16, 26, 26], [-26, -16, -16, 16], [16, -16, 26, 16]]) {
+    mb.box(x0, 0, z0, x1, 11, z1, BRICK, PAT.apartment, PALETTE.roof[3]);
+    mb.hip(x0, z0, x1, z1, 11, 3, PALETTE.roof[3], 0.3);
+  }
+  mb.box(-3, 0, 20, 3, 26, 26, BRICK, PAT.house, PALETTE.dark);
+  mb.hip(-3, 20, 3, 26, 26, 6, PALETTE.roof[0], 0.2);
+  mb.ground(-2, -16, 2, 16, 0.1, PALETTE.pavement);
+  mb.ground(-16, -2, 16, 2, 0.1, PALETTE.pavement);
+  for (let k = 0; k < 10; k++) tf(-14 + rng.next() * 28, -14 + rng.next() * 28, 0.9 + rng.next() * 0.4);
+}
+
+function library(mb: MeshBuilder, f: LotFrame, tf: TF) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.lawn);
+  mb.box(-11, 0, -8, 11, 1, 9, PALETTE.concrete);
+  mb.box(-10, 1, -7, 10, 9, 6, BEIGE, PAT.house, PALETTE.concrete);
+  for (let x = -8; x <= 8; x += 2.7) mb.cylinder(x, 7.5, 1, 9, 0.5, 8, PALETTE.white);
+  mb.box(-10, 9, -7, 10, 10, 8.5, PALETTE.white);
+  mb.quad([-10.5, 10, 8.6], [10.5, 10, 8.6], [0, 13, 8.6], [0, 13, 8.6], PALETTE.white);
+  tf(-12, 12, 0.8);
+  tf(12, 12, 0.8);
+}
+
+function landfill(mb: MeshBuilder, f: LotFrame, rng: Rng) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.07, PALETTE.dirt);
+  const trash = [0x6d6457, 0x8a7d66, 0x5d6a58, 0x7b6f63].map((h) => new THREE.Color(h));
+  for (let k = 0; k < 7; k++) {
+    const x = -f.W / 2 + 6 + rng.next() * (f.W - 16), z = -f.D / 2 + 6 + rng.next() * (f.D - 18);
+    mb.hip(x, z, x + 8 + rng.next() * 6, z + 8 + rng.next() * 6, 0, 2 + rng.next() * 3, rng.pick(trash), 0);
+  }
+  mb.box(f.W / 2 - 10, 0, f.D / 2 - 8, f.W / 2 - 3, 3.5, f.D / 2 - 3, PALETTE.indWall[0]);
+  mb.box(-f.W / 2 + 0.5, 0, f.D / 2 - 1, f.W / 2 - 0.5, 2, f.D / 2 - 0.8, PALETTE.steel);
+}
+
+function incinerator(mb: MeshBuilder, f: LotFrame) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.concrete);
+  mb.box(-18, 0, -10, 12, 16, 14, PALETTE.indWall[1], PAT.industrial, PALETTE.steel);
+  mb.cylinder(16, -12, 0, 45, 2.6, 12, PALETTE.white, PALETTE.dark, 2);
+  mb.cylinder(16, -12, 38, 42, 2.25, 12, RED, undefined, 2.15);
+}
+
+function recycling(mb: MeshBuilder, f: LotFrame, rng: Rng) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.concrete);
+  mb.box(-f.W / 2 + 3, 0, -f.D / 2 + 3, f.W / 2 - 12, 9, f.D / 2 - 5, GREEN, PAT.dock, PALETTE.steel);
+  for (let k = 0; k < 4; k++) mb.box(f.W / 2 - 10, 0, -f.D / 2 + 3 + k * 6, f.W / 2 - 4, 2.4, -f.D / 2 + 7.5 + k * 6, rng.pick([BLUE, GREEN, PALETTE.accent[3]]));
+}
+
+// ハイテク産業：低層のガラスの研究所と、緑の多い敷地
+function hightech(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.07, PALETTE.lawn2);
+  const glass = rng.pick([new THREE.Color(0x5d8fb0), new THREE.Color(0x6aa3a0), new THREE.Color(0x8fa8c0)]);
+  const W = f.W - 8, D = f.D - 12;
+  const h = 7 + den * 4;
+  mb.box(-W / 2, 0, -D / 2, W / 2 - 6, h, D / 2 - 4, glass, PAT.office, PALETTE.white);
+  mb.box(W / 2 - 12, 0, D / 2 - 10, W / 2, h * 0.6, D / 2 + 2, PALETTE.white, PAT.office, PALETTE.steel);
+  roofUnits(mb, -W / 2, -D / 2, W / 2 - 6, D / 2 - 4, h, rng, 2);
+  mb.ground(-f.W / 2 + 1, f.D / 2 - 5, f.W / 2 - 1, f.D / 2 - 0.5, 0.1, PALETTE.asphalt);
+  for (let k = 0; k < 6; k++) tf(-f.W / 2 + 2 + rng.next() * (f.W - 4), -f.D / 2 + 2 + rng.next() * 3, 0.8 + rng.next() * 0.4);
 }

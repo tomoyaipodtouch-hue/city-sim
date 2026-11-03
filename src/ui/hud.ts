@@ -3,7 +3,7 @@ import type { GameClient } from '../game';
 import type { CityRenderer } from '../render/renderer';
 import { DATA_VIEWS, DataView } from '../render/overlay';
 import { ToolController, TOOL_GROUPS, PreviewInfo } from './tools';
-import { CIVIC, CivicId, DENSITY_NAMES, DIFFICULTY, isHighway, LINES, GROW, GROW_KINDS, GrowKind, ROADS, TAX_LABELS, ZONE_NAMES } from '../sim/defs';
+import { CIVIC, CivicId, DENSITY_NAMES, DEPTS, DEPT_NAMES, DIFFICULTY, isHighway, LINES, GROW, GROW_KINDS, GrowKind, ROADS, TAX_LABELS, ZONE_NAMES } from '../sim/defs';
 import { BState } from '../sim/world';
 import type { Stats } from '../sim/world';
 import { sfx, soundSettings } from '../sound';
@@ -257,7 +257,7 @@ export class Hud {
       f.style.top = v >= 0 ? `${50 - h}%` : '50%';
       f.style.opacity = v >= 0 ? '1' : '0.55';
     });
-    if (!this.sheet.classList.contains('hidden') && (this.sheetTab === 'budget' || this.sheetTab === 'tax')) this.refreshSheetLive();
+    if (!this.sheet.classList.contains('hidden') && (this.sheetTab === 'budget' || this.sheetTab === 'tax') && !this.deptDrag) this.refreshSheetLive();
   }
 
   // ---------------- ニュース ----------------
@@ -379,6 +379,7 @@ export class Hud {
             rows.push(['近くの乗客数', `${num(v)} 人/日`]);
           }
           if (b.note) rows.push(['状態', b.note]);
+          if (def.service) this.facilityId = b.id;
           rows.push(['維持費', `${yen(def.upkeep)}/月`]);
         } else {
           const def = GROW[b.type as GrowKind];
@@ -391,6 +392,7 @@ export class Hud {
           rows.push(['電力', b.powered ? 'あり' : '<span class="neg">なし</span>'], ['水道', b.watered ? 'あり' : '<span class="neg">なし</span>']);
           if (b.customers !== undefined && b.state === BState.Normal) rows.push(['買い物客', `${Math.round(b.customers * 100)}%`]);
           if (b.freight !== undefined && b.state === BState.Normal) rows.push(['貨物の輸送', b.freight >= 0.95 ? `できている（${(b.freightTime ?? 0).toFixed(0)} 分）` : `<span class="neg">${Math.round(b.freight * 100)}%</span>`]);
+          if (m && b.state === BState.Normal) rows.push(['犯罪', `${Math.round((m.crime[g.idx(b.x, b.y)] / 255) * 100)}`]);
           if (isR && b.state === BState.Normal) {
             rows.push(['職のある人', `${Math.round(b.employed * 100)}%`]);
             rows.push(['通勤時間', b.commute ? `${b.commute.toFixed(0)} 分` : '-']);
@@ -437,6 +439,19 @@ export class Hud {
     rows.push(['場所', `${c.x}, ${c.y}`]);
     this.info.innerHTML = `<h4><span>${title}</span><button class="x">✕</button></h4><table>${rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('')}</table>`;
     this.info.querySelector<HTMLElement>('.x')!.onclick = () => this.info.classList.add('hidden');
+    // 公共サービスの施設ごとの予算
+    if (this.facilityId && bid === this.facilityId) {
+      const b = this.game.buildings.get(bid)!;
+      const box = el('div', 'jpanel');
+      box.innerHTML = `<h5>この施設の予算</h5><div class="jrow"><input type="range" min="0" max="150" step="5" value="${b.fund ?? 100}"><span class="v">${b.fund ?? 100}%</span></div>`;
+      const input = box.querySelector('input')!;
+      const v = box.querySelector<HTMLElement>('.v')!;
+      input.onchange = () => void this.game.exec({ t: 'facilityFund', id: b.id, value: Number(input.value) });
+      input.oninput = () => (v.textContent = `${input.value}%`);
+      this.info.append(box);
+      this.junctionOpen = true; // 操作中に作り直さないようにする
+    }
+    this.facilityId = 0;
     // 交差点の設定（地上の一般道で、3方向以上につながっている場所）
     this.junctionOpen = false;
     if (g.road[i] && !isHighway(g.road[i]) && g.road[i] !== 7) {
@@ -450,6 +465,7 @@ export class Hud {
   }
 
   private junctionOpen = false;
+  private facilityId = 0;
 
   private junctionPanel(cell: number): HTMLElement {
     const g = this.game.grid!;
@@ -560,8 +576,20 @@ export class Hud {
             <tr><td>水道（使用 / 給水）</td><td class="${s.waterDemand > s.waterSupply ? 'neg' : ''}">${num(s.waterDemand)} / ${num(s.waterSupply)}</td></tr>
             <tr><td>隣の都市との道路</td><td>${s.neighborConnected ? 'つながっている' : '<span class="neg">つながっていない</span>'}</td></tr>
           </table>
-          <p class="muted">部門ごとの予算の調整は、警察・消防・学校などを追加するときに入れます。</p></div>
-        </div>`;
+          </div>
+        </div>
+        <h5 style="margin-top:14px">公共サービス</h5>
+        <table class="tbl">
+          <tr><td>教育水準（子ども／大人／高齢者）</td><td>${Math.round(s.services.eq.child)} ／ ${Math.round(s.services.eq.adult)} ／ ${Math.round(s.services.eq.elderly)}</td></tr>
+          <tr><td>健康度・平均寿命</td><td>${Math.round(s.services.hq)} ・ ${s.services.lifeExp.toFixed(0)} 歳</td></tr>
+          <tr><td>犯罪（住人が感じる度合い）</td><td>${Math.round(s.services.crime * 100)}</td></tr>
+          <tr><td>ゴミ（出る量／処理／残り）</td><td class="${s.services.garbage.excess > 0 ? 'neg' : ''}">${num(s.services.garbage.produced)} ／ ${num(s.services.garbage.handled)} ／ ${num(s.services.garbage.excess)} /月</td></tr>
+        </table>
+        <h5 style="margin-top:14px">部門ごとの予算</h5>
+        <p class="muted" style="margin:0 0 8px">100% が標準です。下げると費用が減りますが効き目も下がり、60%未満が6か月続くとストライキが起きます。</p>
+        <div class="depts"></div>
+        `;
+      this.renderDepts(body.querySelector<HTMLElement>('.depts')!, s);
     } else {
       // 税金のスライダーは作り直すと操作中に途切れるので、値だけ更新する
       if (!body.querySelector('.tax')) {
@@ -594,6 +622,24 @@ export class Hud {
     }
   }
   taxCache: Partial<Record<GrowKind, number>> = {};
+  private deptDrag = false;
+
+  private renderDepts(box: HTMLElement, s: Stats) {
+    for (const d of DEPTS) {
+      const row = el('div', 'tax');
+      const strike = s.services.strike[d] > 0;
+      row.innerHTML = `<span>${DEPT_NAMES[d]}</span><input type="range" min="0" max="150" step="5" value="${s.services.funding[d]}"><span class="v">${s.services.funding[d]}%</span><span class="dm ${strike ? 'neg' : ''}">${strike ? 'スト中' : ''}</span>`;
+      const input = row.querySelector('input')!;
+      const v = row.querySelector<HTMLElement>('.v')!;
+      input.oninput = () => {
+        v.textContent = `${input.value}%`;
+        void this.game.exec({ t: 'funding', dept: d, value: Number(input.value) });
+      };
+      input.onpointerdown = () => (this.deptDrag = true);
+      input.onpointerup = () => (this.deptDrag = false);
+      box.append(row);
+    }
+  }
 
   private async renderSave(body: HTMLElement) {
     const saves = await this.act.listSaves();
@@ -792,5 +838,9 @@ const LEGENDS: Partial<Record<DataView, string>> = {
   transit: '少ない<i class="grad" style="background:linear-gradient(90deg,#78c8ff,#3c6ef0,#963cdc)"></i>多い（乗客数）',
   power: '<span style="color:#fadc3c">■</span> 電力あり　<span style="color:#dc3232">■</span> 電力なし',
   water: '<span style="color:#3c96f0">■</span> 水あり　<span style="color:#dc463c">■</span> 水なし',
+  crime: '少ない<i class="grad" style="background:linear-gradient(90deg,#f0dc78,#e6783c,#aa1e3c)"></i>多い',
+  fireRisk: '低い<i class="grad" style="background:linear-gradient(90deg,#fae678,#f08c28,#c82814)"></i>高い',
+  health: '<span style="color:#c84638">■</span> 範囲外　弱い<i class="grad" style="background:linear-gradient(90deg,#b4e6c8,#3cbe78,#148250)"></i>強い',
+  edu: '<span style="color:#c84638">■</span> 範囲外　弱い<i class="grad" style="background:linear-gradient(90deg,#c8d2ff,#648cf0,#3c3cc8)"></i>強い',
   zones: '<span style="color:var(--r)">■</span> 住宅　<span style="color:var(--c)">■</span> 商業　<span style="color:var(--i)">■</span> 工業',
 };

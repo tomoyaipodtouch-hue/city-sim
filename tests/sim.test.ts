@@ -373,3 +373,53 @@ describe('stage 3b water and air', () => {
     expect(port.note).toContain('外洋');
   });
 });
+
+describe('stage 4a services', () => {
+  const town = () => {
+    const w = World.create({ name: 's', seed: 12345, style: 'river', difficulty: 0, sandbox: true });
+    buildTestCity(w);
+    return w;
+  };
+  const months = (w: World, m: number) => { for (let k = 0; k < m * 30; k++) w.stepDay(); };
+  // 道路に接する空き地を探して施設を置く
+  const place = (w: World, id: 'police_l' | 'school_e' | 'landfill' | 'clinic') => {
+    const g = w.g;
+    // 住宅の中心に近い順に空き地を探す
+    let sx = 0, sy = 0, c = 0;
+    for (const b of w.buildings.values()) if (!b.civic && String(b.type).startsWith('R')) { sx += b.x; sy += b.y; c++; }
+    const cx = Math.round(sx / Math.max(1, c)), cy = Math.round(sy / Math.max(1, c));
+    const spots: [number, number][] = [];
+    for (let y = 2; y < g.n - 2; y++) for (let x = 2; x < g.n - 2; x++) spots.push([x, y]);
+    spots.sort((p, q) => Math.hypot(p[0] - cx, p[1] - cy) - Math.hypot(q[0] - cx, q[1] - cy));
+    for (const [x, y] of spots) {
+      const i = g.idx(x, y);
+      if (g.road[i] || g.bldg[i] || g.isWater(x, y)) continue;
+      if (w.exec({ t: 'plop', id, x, y }).ok) return true;
+    }
+    return false;
+  };
+
+  it('police lowers crime, schools raise education, landfills handle garbage', { timeout: 120000 }, () => {
+    const a = town(), b = town();
+    months(a, 24);
+    months(b, 24);
+    expect(place(b, 'police_l')).toBe(true);
+    expect(place(b, 'police_l')).toBe(true);
+    expect(place(b, 'school_e')).toBe(true);
+    expect(place(b, 'landfill')).toBe(true);
+    months(a, 24);
+    months(b, 24);
+    const sa = a.stats.services, sb = b.stats.services;
+    console.log(`services: crime ${sa.crime.toFixed(2)} → ${sb.crime.toFixed(2)}, childEQ ${sa.eq.child.toFixed(0)} → ${sb.eq.child.toFixed(0)}, garbage excess ${sa.garbage.excess} → ${sb.garbage.excess}`);
+    expect(sb.crime).toBeLessThan(sa.crime);
+    expect(sb.eq.child).toBeGreaterThan(sa.eq.child + 10);
+    expect(sb.garbage.excess).toBeLessThan(sa.garbage.excess);
+  });
+
+  it('low funding leads to a strike', () => {
+    const w = town();
+    w.exec({ t: 'funding', dept: 'police', value: 30 });
+    months(w, 7);
+    expect(w.stats.services.strike.police).toBeGreaterThan(0);
+  });
+});
