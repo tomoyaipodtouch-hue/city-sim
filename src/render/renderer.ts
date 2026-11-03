@@ -13,11 +13,18 @@ import { CarLayer } from './carLayer';
 import { PreviewLayer } from './previewLayer';
 import { CameraRig, pickGround } from './cameraRig';
 import { buildOverlay, DataView } from './overlay';
+import { StreetLights } from './lightsLayer';
+import { shared } from './materials';
 
 export interface Quality {
   shadows: boolean;
   pixelRatio: number;
   cars: boolean;
+}
+
+function smooth(a: number, b: number, x: number) {
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
 }
 
 export class CityRenderer {
@@ -34,6 +41,14 @@ export class CityRenderer {
   cars = new CarLayer();
   preview = new PreviewLayer();
   sun: THREE.DirectionalLight;
+  hemi: THREE.HemisphereLight;
+  // 昼と夜：timeOfDay は 0..1（0.5 が正午）。auto のときは時間が進んでいる間だけ回る
+  dayMode: 'auto' | 'day' | 'night' = 'auto';
+  timeOfDay = 0.36;
+  timeRunning: () => boolean = () => false;
+  private night = 0;
+  private sunDir = new THREE.Vector3(-0.62, 0.52, 0.42).normalize();
+  lights = new StreetLights();
   grid: Grid | null = null;
   maps: Maps | null = null;
   buildingList: Building[] = [];
@@ -64,7 +79,8 @@ export class CityRenderer {
     this.scene.background = sky;
     this.scene.fog = new THREE.Fog(sky, 1500, 7000);
     // 環境光は弱め、太陽を強めにして、日なたと日かげの差をはっきりさせる
-    this.scene.add(new THREE.HemisphereLight(0xcfe0f2, 0x4f4a3e, 0.85));
+    this.hemi = new THREE.HemisphereLight(0xcfe0f2, 0x4f4a3e, 0.85);
+    this.scene.add(this.hemi, this.lights.points);
     this.sun = new THREE.DirectionalLight(0xffeed6, 3.2);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
@@ -203,6 +219,7 @@ export class CityRenderer {
         this.lastRoadKey = key;
         this.roads.rebuild(g);
         this.rails.rebuild(g);
+        this.lights.rebuild(g);
       }
     }
     if (this.dirty.buildings || heights) {
@@ -248,6 +265,7 @@ export class CityRenderer {
     if (carsMoving) this.cars.update(dt);
     this.cars.group.visible = carsMoving;
     this.props.update(dt);
+    this.updateDayNight(dt);
     this.updateShadow();
     this.renderer.render(this.scene, this.rig.camera);
     this.fpsAcc += dt;
@@ -264,7 +282,7 @@ export class CityRenderer {
     const d = this.rig.dist;
     const span = Math.min(1600, Math.max(120, d * 1.3));
     // 太陽はやや低めにして、影を長く出す（立体感のため）
-    const dir = new THREE.Vector3(-0.62, 0.52, 0.42).normalize();
+    const dir = this.sunDir;
     this.sun.position.copy(t).addScaledVector(dir, span * 2);
     this.sun.target.position.copy(t);
     const cam = this.sun.shadow.camera;
@@ -276,6 +294,45 @@ export class CityRenderer {
     cam.far = span * 4;
     cam.updateProjectionMatrix();
     // 遠くからは影を省く
-    this.sun.castShadow = this.quality.shadows && d < 1800;
+    this.sun.castShadow = this.quality.shadows && d < 1800 && this.night < 0.75;
+  }
+
+  // 1日の長さ（実時間の秒）
+  static DAY_SECONDS = 480;
+  private lastNightKey = -1;
+  private updateDayNight(dt: number) {
+    if (this.dayMode === 'auto') {
+      if (this.timeRunning()) this.timeOfDay = (this.timeOfDay + dt / CityRenderer.DAY_SECONDS) % 1;
+    } else this.timeOfDay = this.dayMode === 'day' ? 0.4 : 0.95;
+    const tod = this.timeOfDay;
+    // 太陽の高さ（6時に昇り、18時に沈む）
+    const elev = Math.sin((tod - 0.25) * Math.PI * 2);
+    const day = smooth(-0.1, 0.22, elev);
+    const night = 1 - day;
+    const key = Math.round(tod * 2000);
+    if (key === this.lastNightKey) return;
+    this.lastNightKey = key;
+    this.night = night;
+    // 夕方・朝方は赤っぽく
+    const dusk = Math.max(0, 1 - Math.abs(elev) / 0.3) * day;
+    // 太陽の向き：東から昇って西へ。影が見やすいように、高さは低めに抑える
+    const az = (tod - 0.25) * Math.PI;
+    const h = day > 0 ? Math.max(0.28, Math.min(0.62, elev)) : 0.6;
+    if (day > 0.02) this.sunDir.set(-Math.cos(az) * 0.8, h, 0.45 - Math.sin(az) * 0.25).normalize();
+    else this.sunDir.set(0.35, 0.7, -0.4).normalize(); // 月明かり
+    const C = (a: number, b: number, t: number) => new THREE.Color(a).lerp(new THREE.Color(b), t);
+    const sunCol = C(0xffeed6, 0xff9a5a, dusk).lerp(new THREE.Color(0x8fa6e8), night);
+    this.sun.color.copy(sunCol);
+    this.sun.intensity = 3.2 * day + 0.55 * night;
+    this.hemi.intensity = 0.85 * day + 0.42 * night;
+    this.hemi.color.copy(C(0xcfe0f2, 0xf0c0a0, dusk).lerp(new THREE.Color(0x5a6ea8), night));
+    this.hemi.groundColor.copy(C(0x4f4a3e, 0x1a1c28, night));
+    const sky = C(0xa9cbe6, 0xe8a27c, dusk).lerp(new THREE.Color(0x0c1528), night);
+    (this.scene.background as THREE.Color).copy(sky);
+    this.scene.fog!.color.copy(sky);
+    this.renderer.toneMappingExposure = 1.15 - 0.1 * night;
+    shared.uNight.value = smooth(0.25, 0.85, night);
+    this.lights.setNight(smooth(0.35, 0.9, night));
+    this.cars.setNight(smooth(0.35, 0.9, night));
   }
 }

@@ -1255,3 +1255,80 @@ export function railReachEdge(g: Grid): Uint8Array {
   }
   return reach;
 }
+
+// ---------------- 地形の編集 ----------------
+export type TerrainOp = 'raise' | 'lower' | 'level';
+export const TERRAIN_STEP = 3; // 1回で上げ下げする高さ（m）
+export const TERRAIN_MIN = -24, TERRAIN_MAX = 160;
+const TERRAIN_COST = 2; // 頂点 1つを 1m 動かす費用（円）
+
+export interface TerrainPlan {
+  changes: Map<number, number>; // 頂点の番号 → 新しい高さ
+  cells: number[]; // 変わるマス（表示用）
+  locked: number[]; // 道路や建物があって動かせないマス
+  cost: number;
+}
+
+// 道路・線路・建物のあるマスに接する頂点は動かさない
+function vertexLocked(g: Grid, vx: number, vy: number) {
+  for (const [cx, cy] of [[vx - 1, vy - 1], [vx, vy - 1], [vx - 1, vy], [vx, vy]]) {
+    if (!g.inb(cx, cy)) continue;
+    const i = g.idx(cx, cy);
+    if (g.road[i] || g.up[i] || g.bldg[i] || g.rail[i] || g.erail[i] || g.mono[i] || g.pline[i]) return true;
+  }
+  return false;
+}
+
+// 範囲の頂点を上げる・下げる（まわり 2 頂点はなだらかにする）、または始点の高さにそろえる
+export function planTerrain(g: Grid, op: TerrainOp, sx: number, sy: number, ex: number, ey: number): TerrainPlan {
+  const r = normRect(sx, sy, ex, ey, g.n);
+  const V = g.n + 1;
+  const changes = new Map<number, number>();
+  const target = g.cellH(Math.max(0, Math.min(g.n - 1, sx)), Math.max(0, Math.min(g.n - 1, sy)));
+  const ring = op === 'level' ? 0 : 2;
+  for (let vy = r.y0 - ring; vy <= r.y1 + 1 + ring; vy++)
+    for (let vx = r.x0 - ring; vx <= r.x1 + 1 + ring; vx++) {
+      if (vx < 0 || vy < 0 || vx > g.n || vy > g.n) continue;
+      if (vertexLocked(g, vx, vy)) continue;
+      const h = g.vh(vx, vy);
+      let nh: number;
+      if (op === 'level') nh = target;
+      else {
+        // 範囲からの距離（頂点の数）で、上げ下げの量を弱める
+        const dx = Math.max(r.x0 - vx, vx - (r.x1 + 1), 0), dy = Math.max(r.y0 - vy, vy - (r.y1 + 1), 0);
+        const k = 1 - Math.max(dx, dy) / (ring + 1);
+        nh = h + (op === 'raise' ? 1 : -1) * TERRAIN_STEP * k;
+      }
+      nh = Math.max(TERRAIN_MIN, Math.min(TERRAIN_MAX, nh));
+      if (Math.abs(nh - h) > 0.01) changes.set(vy * V + vx, nh);
+    }
+  let cost = 0;
+  for (const [v, nh] of changes) cost += Math.abs(nh - g.heights[v]) * TERRAIN_COST;
+  const cells: number[] = [], locked: number[] = [];
+  for (let y = r.y0; y <= r.y1; y++)
+    for (let x = r.x0; x <= r.x1; x++) {
+      const i = g.idx(x, y);
+      if (g.road[i] || g.up[i] || g.bldg[i] || g.rail[i] || g.erail[i] || g.mono[i] || g.pline[i]) locked.push(i);
+      else cells.push(i);
+    }
+  return { changes, cells, locked, cost: Math.round(cost) };
+}
+
+export function applyTerrain(g: Grid, plan: TerrainPlan) {
+  const V = g.n + 1;
+  const touched = new Set<number>();
+  for (const [v, nh] of plan.changes) {
+    g.heights[v] = nh;
+    const vx = v % V, vy = (v / V) | 0;
+    for (const [cx, cy] of [[vx - 1, vy - 1], [vx, vy - 1], [vx - 1, vy], [vx, vy]]) if (g.inb(cx, cy)) touched.add(g.idx(cx, cy));
+  }
+  // 水に沈んだマスのゾーンと木はなくなる
+  for (const i of touched) {
+    const x = i % g.n, y = (i / g.n) | 0;
+    if (g.isWater(x, y)) {
+      g.zone[i] = 0;
+      g.zden[i] = 0;
+      g.tree[i] = 0;
+    }
+  }
+}

@@ -98,12 +98,14 @@ const hud: Hud = new Hud(game, renderer, tools, {
       cars: s.cars,
       pixelRatio: s.lowRes ? 1 : Math.min(2, window.devicePixelRatio || 1),
     });
+    renderer.dayMode = s.dayNight ?? 'auto';
     storeSettings(s);
   },
   startNew: (o) => startWith(() => game.newCity(o)),
 });
 
 Object.assign(hud.settings, loadSettings());
+renderer.timeRunning = () => inGame && game.speed > 0;
 hud.applySettings();
 
 tools.onResult = (_ok, msg) => hud.showToast(msg, true);

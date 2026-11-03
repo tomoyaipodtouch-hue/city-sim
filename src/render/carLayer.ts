@@ -62,6 +62,10 @@ class Fleet {
 export class CarLayer {
   group = new THREE.Group();
   private fleets: Fleet[];
+  // 夜は車が暗くなりすぎないように、少し光らせる（ライトの代わり）
+  setNight(k: number) {
+    for (const f of this.fleets) (f.mesh.material as THREE.MeshLambertMaterial).emissive.setRGB(0.22 * k, 0.2 * k, 0.16 * k);
+  }
   private grid: Grid | null = null;
   private traffic: Float32Array | null = null;
   private cong: Float32Array | null = null;

@@ -1,6 +1,6 @@
 // ツールの定義と、ドラッグ中のプレビュー・確定
 import { BUS_STOP_COST, CIVIC, CivicId, DENSITY_NAMES, LINES, LineKind, ROADS, RoadType, ZoneType, ZONE_COST, ZONE_NAMES, POWER_LINE_COST, RAMP_COST } from '../sim/defs';
-import { normRect, planBulldoze, planBusStop, planCloverleaf, planTransitLine, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone } from '../sim/plan';
+import { normRect, planBulldoze, planBusStop, planCloverleaf, planTransitLine, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone, planTerrain, TERRAIN_STEP, TerrainOp } from '../sim/plan';
 import type { Command } from '../sim/world';
 import type { GameClient } from '../game';
 import type { CityRenderer } from '../render/renderer';
@@ -110,8 +110,9 @@ export const TOOL_GROUPS: ToolGroup[] = [
   },
   {
     id: 'terrain', name: '地形', icon: 'terrain', items: [
-      { name: '地面を上げる・下げる', note: '今後追加', disabled: true },
-      { name: '平らにする', note: '今後追加', disabled: true },
+      { tool: 'terrain:raise', name: '地面を上げる', note: `${TERRAIN_STEP}m ずつ` },
+      { tool: 'terrain:lower', name: '地面を下げる', note: `${TERRAIN_STEP}m ずつ` },
+      { tool: 'terrain:level', name: '平らにする', note: '始点の高さにそろえる' },
     ],
   },
   { id: 'bulldoze', name: '取り壊し', icon: 'bulldoze', tool: 'bulldoze' },
@@ -208,6 +209,15 @@ export class ToolController {
       if (!plan.cells.length) return { text: `${w}×${h}　指定できる場所がありません`, bad: true };
       return { text: `${w}×${h}　${zone ? yen(plan.cost) : 'ゾーン解除'}`, bad: false };
     }
+    if (t.startsWith('terrain:')) {
+      const op = t.split(':')[1] as TerrainOp;
+      const plan = planTerrain(g, op, d.x0, d.y0, x, y);
+      const lk = new Set(plan.locked);
+      pv.setTiles(g, [...plan.cells, ...plan.locked], (i) => (lk.has(i) ? 0xe5534b : op === 'raise' ? 0xc9a26b : op === 'lower' ? 0x6b8fc9 : 0xb8c46b));
+      pv.setPath(g, []);
+      if (!plan.changes.size) return { text: plan.locked.length ? '道路や建物があるところは変えられません' : 'これ以上は変えられません', bad: true };
+      return { text: `${yen(plan.cost)}${plan.locked.length ? '（赤いマスは変わりません）' : ''}`, bad: false };
+    }
     if (t === 'bulldoze') {
       const rect = normRect(d.x0, d.y0, x, y, g.n);
       const plan = planBulldoze(g, rect, (id) => this.game.buildings.get(id));
@@ -275,6 +285,7 @@ export class ToolController {
       const [, z, den] = t.split(':');
       cmd = { t: 'zone', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1, zone: Number(z) as ZoneType, den: Number(den) };
     } else if (t === 'dezone') cmd = { t: 'zone', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1, zone: ZoneType.None, den: 0 };
+    else if (t.startsWith('terrain:')) cmd = { t: 'terrain', op: t.split(':')[1] as TerrainOp, x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1 };
     else if (t === 'bulldoze') cmd = { t: 'bulldoze', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1 };
     else if (t.startsWith('plop:')) cmd = { t: 'plop', id: t.split(':')[1] as CivicId, x: d.x1, y: d.y1 };
     else if (t === 'ramp') cmd = { t: 'ramp', x: d.x1, y: d.y1 };
@@ -287,7 +298,7 @@ export class ToolController {
       if (cmd.t === 'road' || cmd.t === 'pline' || cmd.t === 'ramp' || cmd.t === 'diamond' || cmd.t === 'clover' || cmd.t === 'transit') sfx.road();
       else if (cmd.t === 'busstop') sfx.plop();
       else if (cmd.t === 'zone') sfx.zone();
-      else if (cmd.t === 'bulldoze') sfx.bulldoze();
+      else if (cmd.t === 'bulldoze' || cmd.t === 'terrain') sfx.bulldoze();
       else sfx.plop();
       if (res.msg) this.onResult?.(false, res.msg);
     } else {

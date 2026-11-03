@@ -80,6 +80,28 @@ describe('stage 2a roads', () => {
     expect(w.g.flow[north] & 1).toBe(0);
   });
 
+  it('terrain tools raise, lower and level the ground but not under roads', () => {
+    const w = new World(32);
+    w.g.heights.fill(6);
+    w.funds = 1e6;
+    w.exec({ t: 'road', x0: 2, y0: 10, x1: 20, y1: 10, road: RoadType.Street });
+    const roadH = w.g.vh(10, 10);
+    expect(w.exec({ t: 'terrain', op: 'raise', x0: 5, y0: 5, x1: 8, y1: 12 }).ok).toBe(true);
+    expect(w.g.vh(6, 6)).toBeCloseTo(9);
+    expect(w.g.vh(6, 10)).toBeCloseTo(roadH); // 道路の頂点は動かない
+    expect(w.g.vh(11, 6)).toBeGreaterThan(6); // まわりはなだらか
+    expect(w.g.vh(11, 6)).toBeLessThan(9);
+    // 下げて水にすると、ゾーンがなくなる
+    w.exec({ t: 'zone', x0: 20, y0: 20, x1: 22, y1: 22, zone: ZoneType.R, den: 0 });
+    for (let k = 0; k < 4; k++) w.exec({ t: 'terrain', op: 'lower', x0: 20, y0: 20, x1: 22, y1: 22 });
+    expect(w.g.isWater(21, 21)).toBe(true);
+    expect(w.g.zone[w.g.idx(21, 21)]).toBe(0);
+    // 平らにする：始点の高さにそろう
+    expect(w.exec({ t: 'terrain', op: 'level', x0: 4, y0: 4, x1: 9, y1: 6 }).ok).toBe(true);
+    const h0 = w.g.vh(5, 5);
+    expect(w.g.vh(9, 5)).toBeCloseTo(h0);
+  });
+
   it('builds a bridge across water', () => {
     const w = new World(32);
     const V = 33;

@@ -54,6 +54,7 @@ export interface Settings {
   cars: boolean;
   sound: boolean;
   fps: boolean;
+  dayNight: 'auto' | 'day' | 'night';
 }
 
 export interface HudActions {
@@ -93,7 +94,7 @@ export class Hud {
   private infoCell: { x: number; y: number } | null = null;
   private hidden = false;
   private barEls: Record<string, HTMLElement> = {};
-  settings: Settings = { shadows: true, lowRes: false, cars: true, sound: true, fps: false };
+  settings: Settings = { shadows: true, lowRes: false, cars: true, sound: true, fps: false, dayNight: 'auto' };
 
   constructor(private game: GameClient, private r: CityRenderer, private tools: ToolController, private act: HudActions) {
     this.root = document.getElementById('ui')!;
@@ -782,7 +783,21 @@ export class Hud {
 
   private renderSettings(body: HTMLElement) {
     body.innerHTML = '';
-    const items: [keyof Settings, string, string][] = [
+    // 昼と夜
+    const dn = el('div', 'row', '<div><div>昼と夜</div><div class="desc">「自動」は時間が進んでいる間、約8分で1日が回ります</div></div>');
+    const seg = el('div', 'seg');
+    for (const [v, label] of [['auto', '自動'], ['day', '昼だけ'], ['night', '夜だけ']] as const) {
+      const b = el('button', this.settings.dayNight === v ? 'on' : '', label);
+      b.onclick = () => {
+        this.settings.dayNight = v;
+        for (const c of seg.children) c.classList.toggle('on', c === b);
+        this.applySettings();
+      };
+      seg.append(b);
+    }
+    dn.append(seg);
+    body.append(dn);
+    const items: [Exclude<keyof Settings, 'dayNight'>, string, string][] = [
       ['shadows', '影', '建物や木の影を表示します。オフにすると動作が軽くなります'],
       ['lowRes', '解像度を下げる', '画面の細かさを下げて、動作を軽くします'],
       ['cars', '車の表示', '道路を走る車を表示します'],

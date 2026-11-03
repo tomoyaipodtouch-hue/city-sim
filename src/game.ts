@@ -88,7 +88,9 @@ export class GameClient {
   load(data: SaveData) {
     this.post({ t: 'load', data });
   }
+  speed = 0;
   setSpeed(s: number) {
+    this.speed = s;
     this.post({ t: 'speed', s });
   }
   exec(cmd: Command): Promise<CmdResult> {
