@@ -10,8 +10,9 @@ export class CameraRig {
   camera: THREE.PerspectiveCamera;
   target = new THREE.Vector3();
   dist = 520;
-  yaw = Math.PI / 4;
-  yawTarget = Math.PI / 4;
+  // 0 = グリッドが画面に対して縦横にまっすぐ見える向き
+  yaw = 0;
+  yawTarget = 0;
   private size = 2048;
 
   constructor(aspect: number) {

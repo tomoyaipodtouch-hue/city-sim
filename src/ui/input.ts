@@ -114,7 +114,7 @@ export class Input {
       if (da < -Math.PI) da += Math.PI * 2;
       this.g0.rotAcc += da;
       if (Math.abs(this.g0.rotAcc) > 0.55) {
-        this.r.rig.rotate(this.g0.rotAcc > 0 ? -1 : 1);
+        this.r.rig.rotate(this.g0.rotAcc > 0 ? 1 : -1);
         this.g0.rotAcc = 0;
       }
       this.g0.dist = dist;
