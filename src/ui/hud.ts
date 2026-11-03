@@ -3,7 +3,7 @@ import type { GameClient } from '../game';
 import type { CityRenderer } from '../render/renderer';
 import { DATA_VIEWS, DataView } from '../render/overlay';
 import { ToolController, TOOL_GROUPS, PreviewInfo } from './tools';
-import { CIVIC, CivicId, DENSITY_NAMES, DIFFICULTY, GROW, GROW_KINDS, GrowKind, ROADS, TAX_LABELS, ZONE_NAMES } from '../sim/defs';
+import { CIVIC, CivicId, DENSITY_NAMES, DIFFICULTY, isHighway, GROW, GROW_KINDS, GrowKind, ROADS, TAX_LABELS, ZONE_NAMES } from '../sim/defs';
 import { BState } from '../sim/world';
 import type { Stats } from '../sim/world';
 import { sfx, soundSettings } from '../sound';
@@ -104,7 +104,7 @@ export class Hud {
     this.setInGame(false);
     setInterval(() => {
       if (this.settings.fps) this.fpsEl.textContent = `${this.r.fps} fps`;
-      if (this.infoCell && !this.info.classList.contains('hidden')) this.renderInfo();
+      if (this.infoCell && !this.info.classList.contains('hidden') && !this.junctionOpen) this.renderInfo();
     }, 1000);
   }
 
@@ -380,20 +380,30 @@ export class Hud {
           rows.push([isR ? '住人' : '働く人', `${num(b.occ)} / ${num(b.cap)}`]);
           rows.push(['密度', DENSITY_NAMES[b.den] + (b.floors ? `・${b.floors}階建て` : '')]);
           rows.push(['電力', b.powered ? 'あり' : '<span class="neg">なし</span>'], ['水道', b.watered ? 'あり' : '<span class="neg">なし</span>']);
+          if (b.customers !== undefined && b.state === BState.Normal) rows.push(['買い物客', `${Math.round(b.customers * 100)}%`]);
+          if (b.freight !== undefined && b.state === BState.Normal) rows.push(['貨物の輸送', b.freight >= 0.95 ? `できている（${(b.freightTime ?? 0).toFixed(0)} 分）` : `<span class="neg">${Math.round(b.freight * 100)}%</span>`]);
           if (isR && b.state === BState.Normal) {
             rows.push(['職のある人', `${Math.round(b.employed * 100)}%`]);
             rows.push(['通勤時間', b.commute ? `${b.commute.toFixed(0)} 分` : '-']);
           }
         }
       }
-    } else if (g.road[i]) {
-      const def = ROADS[g.road[i]];
-      title = def.name;
-      const vol = m ? m.traffic[i] : 0;
-      const ratio = vol / def.capacity;
-      rows.push(['交通量', `${num(vol)} 台/日`], ['容量', `${num(def.capacity)} 台/日`]);
-      rows.push(['混雑度', `${Math.round(ratio * 100)}%${meter(ratio, ratio > 1 ? 'var(--bad)' : ratio > 0.7 ? 'var(--warn)' : 'var(--good)')}`]);
-      rows.push(['制限速度', `${def.speedKmh} km/h`]);
+    } else if (g.road[i] || g.up[i]) {
+      const N = g.n * g.n;
+      const levels: [number, number][] = [];
+      if (g.road[i]) levels.push([g.road[i], i]);
+      if (g.up[i]) levels.push([g.up[i], i + N]);
+      title = levels.map(([t]) => ROADS[t].name).join(' ／ ');
+      for (const [t, node] of levels) {
+        const def = ROADS[t];
+        const vol = m ? m.traffic[node] : 0;
+        const ratio = vol / def.capacity;
+        const pre = levels.length > 1 ? `${def.name}：` : '';
+        rows.push([`${pre}交通量`, `${num(vol)} 台/日`]);
+        rows.push([`${pre}混雑度`, `${Math.round(ratio * 100)}%${meter(ratio, ratio > 1 ? 'var(--bad)' : ratio > 0.7 ? 'var(--warn)' : 'var(--good)')}`]);
+      }
+      rows.push(['制限速度', levels.map(([t]) => `${ROADS[t].speedKmh} km/h`).join(' ／ ')]);
+      if (m && m.jctl[i]) rows.push(['交差点', CTL_NAMES[m.jctl[i]] + (g.ictl[i] === 0 ? '（自動）' : '')]);
     } else if (g.isWater(c.x, c.y)) {
       title = '水域';
     } else if (g.zone[i]) {
@@ -409,6 +419,64 @@ export class Hud {
     rows.push(['場所', `${c.x}, ${c.y}`]);
     this.info.innerHTML = `<h4><span>${title}</span><button class="x">✕</button></h4><table>${rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('')}</table>`;
     this.info.querySelector<HTMLElement>('.x')!.onclick = () => this.info.classList.add('hidden');
+    // 交差点の設定（地上の一般道で、3方向以上につながっている場所）
+    this.junctionOpen = false;
+    if (g.road[i] && !isHighway(g.road[i]) && g.road[i] !== 7) {
+      let deg = 0;
+      for (let d = 0; d < 8; d++) if (g.conn[i] & (1 << d)) deg++;
+      if (deg >= 3) {
+        this.junctionOpen = true;
+        this.info.append(this.junctionPanel(i));
+      }
+    }
+  }
+
+  private junctionOpen = false;
+
+  private junctionPanel(cell: number): HTMLElement {
+    const g = this.game.grid!;
+    const box = el('div', 'jpanel');
+    const state = { ctl: g.ictl[cell], split: g.isplit[cell], flags: g.iflags[cell] };
+    const send = () => {
+      void this.game.exec({ t: 'junction', cell, ctl: state.ctl, split: state.split, flags: state.flags });
+    };
+    box.append(el('h5', '', '交差点の設定'));
+    const seg = el('div', 'seg wrap');
+    CTL_NAMES.forEach((name, k) => {
+      const b = el('button', state.ctl === k ? 'on' : '', name);
+      b.onclick = () => {
+        sfx.click();
+        state.ctl = k;
+        seg.querySelectorAll('button').forEach((x) => x.classList.remove('on'));
+        b.classList.add('on');
+        splitRow.classList.toggle('hidden', k !== 3);
+        send();
+      };
+      seg.append(b);
+    });
+    box.append(seg);
+    const splitRow = el('div', 'jrow' + (state.ctl === 3 ? '' : ' hidden'));
+    splitRow.innerHTML = `<span>信号の時間配分</span><span class="muted">南北</span><input type="range" min="10" max="90" step="5" value="${state.split}"><span class="muted">東西</span>`;
+    splitRow.querySelector('input')!.onchange = (e) => {
+      state.split = Number((e.target as HTMLInputElement).value);
+      send();
+    };
+    box.append(splitRow);
+    const flags: [number, string][] = [[1, '左折レーン'], [2, '右折レーン'], [4, '左折禁止'], [8, '右折禁止'], [16, '直進のみ']];
+    const fl = el('div', 'chips-inline');
+    for (const [bit, name] of flags) {
+      const b = el('button', 'chip' + (state.flags & bit ? ' on' : ''), name);
+      b.onclick = () => {
+        sfx.click();
+        state.flags ^= bit;
+        b.classList.toggle('on', !!(state.flags & bit));
+        send();
+      };
+      fl.append(b);
+    }
+    box.append(fl);
+    box.append(el('p', 'muted', '「自動」は交通量に合わせて、信号なし・一時停止・信号を切り替えます。'));
+    return box;
   }
 
   // ---------------- シート ----------------
@@ -694,6 +762,8 @@ export class Hud {
     right.append(form);
   }
 }
+
+const CTL_NAMES = ['自動', '信号なし', '一時停止', '信号', 'ラウンドアバウト'];
 
 const LEGENDS: Partial<Record<DataView, string>> = {
   traffic: '少ない<i class="grad" style="background:linear-gradient(90deg,#3cc85a,#f0dc3c,#f07828,#c81e28)"></i>渋滞',
