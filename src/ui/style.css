@@ -12,9 +12,10 @@
   --r: #49c25a;
   --c: #4a8ff0;
   --i: #e9b52a;
-  --sl: env(safe-area-inset-left, 0px);
-  --sr: env(safe-area-inset-right, 0px);
-  --sb: env(safe-area-inset-bottom, 0px);
+  /* ノッチやホームバーの余白は、iPhone の指定より小さめにして UI を端に寄せる */
+  --sl: calc(env(safe-area-inset-left, 0px) * 0.4);
+  --sr: calc(env(safe-area-inset-right, 0px) * 0.4);
+  --sb: calc(env(safe-area-inset-bottom, 0px) * 0.5);
   --st: env(safe-area-inset-top, 0px);
   --bar: 46px;
   --news: 22px;

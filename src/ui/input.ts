@@ -87,7 +87,7 @@ export class Input {
     this.r.kick();
     if (this.mode === 'tool') {
       const over = this.hooks.isOverCancel(e.clientX, e.clientY);
-      const c = this.r.pick(e.clientX, e.clientY);
+      const c = over ? null : this.r.pick(e.clientX, e.clientY);
       if (c && (c.x !== this.lastCell.x || c.y !== this.lastCell.y)) {
         this.lastCell = { x: c.x, y: c.y };
         const info = this.tools.update(c.x, c.y);
@@ -129,9 +129,11 @@ export class Input {
     this.ptrs.delete(e.pointerId);
     if (!p) return;
     if (this.mode === 'tool') {
+      // キャンセル枠を隠す前に、枠の上で指を離したかを判定する
+      const cancelled = this.hooks.isOverCancel(e.clientX, e.clientY);
       this.hooks.onDragUI(false);
       this.hooks.onPreview(null, 0, 0, false);
-      if (this.hooks.isOverCancel(e.clientX, e.clientY)) {
+      if (cancelled) {
         this.tools.cancel();
         this.hooks.onCancelled();
       } else void this.tools.commit();
