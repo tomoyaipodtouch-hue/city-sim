@@ -4,7 +4,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { Grid } from '../sim/grid';
 import { CELL, DX, DY, opp } from '../sim/constants';
 import { LINES, LineKind, ROADS } from '../sim/defs';
-import { RailLayer } from './railLayer';
+import { RailLayer, TRACK_GAP } from './railLayer';
 import { ROAD_LIFT } from './roadLayer';
 
 const MAX_CARS = 1500;
@@ -257,7 +257,8 @@ export class CarLayer {
         tx /= tl;
         tz /= tl;
         // 右側通行。一方通行・大通り・高速道路は2車線を使い分ける
-        const lane = line ? 0 : def.oneWay ? (c.lane ? 1 : -1) * def.width * 0.2 : (def.width / 2) * 0.48;
+        // 電車は複線の、進む向きの右側の線路を走る
+        const lane = line ? TRACK_GAP : def.oneWay ? (c.lane ? 1 : -1) * def.width * 0.2 : (def.width / 2) * 0.48;
         this.v.set(x - tz * lane, h, z + tx * lane);
         this.q.setFromAxisAngle(this.up, Math.atan2(tx, tz));
         this.mtx.compose(this.v, this.q, this.s);

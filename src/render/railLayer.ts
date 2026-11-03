@@ -22,6 +22,9 @@ interface P {
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
+// 複線の、中心から片側の線路までの距離（m）
+export const TRACK_GAP = 2.1;
+
 export class RailLayer {
   group = new THREE.Group();
   private solid: THREE.Mesh;
@@ -73,16 +76,19 @@ export class RailLayer {
       }
     };
     // 帯の両側の縦の面
-    const sides = (pts: P[], half: number, y0: number, y1: number, c: THREE.Color) => {
+    const sides = (pts: P[], half: number, y0: number, y1: number, c: THREE.Color, off = 0) => {
       for (let k = 0; k + 1 < pts.length; k++) {
         const a = pts[k], b = pts[k + 1];
         const dx = b.x - a.x, dz = b.z - a.z, l = Math.hypot(dx, dz) || 1;
         const px = -dz / l, pz = dx / l;
-        for (const s of [-1, 1]) B.wall(a.x + s * px * half, a.z + s * pz * half, a.h + y0, a.h + y1, b.x + s * px * half, b.z + s * pz * half, b.h + y0, b.h + y1, c);
+        for (const s of [-1, 1]) {
+          const o = off + s * half;
+          B.wall(a.x + px * o, a.z + pz * o, a.h + y0, a.h + y1, b.x + px * o, b.z + pz * o, b.h + y0, b.h + y1, c);
+        }
       }
     };
-    // 枕木
-    const sleepers = (pts: P[], dy: number) => {
+    // 枕木（off = 線路の中心の横のずれ）
+    const sleepers = (pts: P[], dy: number, off = 0) => {
       let acc = 0;
       for (let k = 0; k + 1 < pts.length; k++) {
         const a = pts[k], b = pts[k + 1];
@@ -91,7 +97,7 @@ export class RailLayer {
         const ux = dx / l, uz = dz / l, px = -uz, pz = ux;
         for (let s = (0.8 - (acc % 0.8)) % 0.8; s < l; s += 0.8) {
           const cx = a.x + ux * s, cz = a.z + uz * s, h = lerp(a.h, b.h, s / l) + dy;
-          const q = [[-0.13, -1.3], [0.13, -1.3], [0.13, 1.3], [-0.13, 1.3]].map(([f, o]) => B.v(cx + ux * f + px * o, h, cz + uz * f + pz * o, COL.sleeper));
+          const q = [[-0.13, off - 1.3], [0.13, off - 1.3], [0.13, off + 1.3], [-0.13, off + 1.3]].map(([f, o]) => B.v(cx + ux * f + px * o, h, cz + uz * f + pz * o, COL.sleeper));
           B.tri(q[0], q[1], q[2]);
           B.tri(q[0], q[2], q[3]);
         }
@@ -128,35 +134,46 @@ export class RailLayer {
         } else for (const a of arms) paths.push([{ x: cx, z: cz, h: ch }, { x: a.ex, z: a.ez, h: a.eh }]);
         const ground = g.cellH(x, y);
         for (const pts of paths) {
+          // 複線：上り線と下り線を、中心から左右に TRACK_GAP ずつずらして並べる
+          const T = TRACK_GAP;
           if (kind === 'sub') {
-            strip(U, pts, 0, 4.5, 0, COL.tube);
+            strip(U, pts, -T, 3.2, 0, COL.tube);
+            strip(U, pts, T, 3.2, 0, COL.tube);
             continue;
           }
           if (kind === 'rail') {
             if (!g.road[i]) {
-              strip(B, pts, 0, 4.6, 0.05, COL.ballast);
-              sides(pts, 2.3, -0.4, 0.05, COL.ballast);
-              sleepers(pts, 0.12);
+              strip(B, pts, 0, 9.0, 0.05, COL.ballast);
+              sides(pts, 4.5, -0.4, 0.05, COL.ballast);
+              sleepers(pts, 0.12, -T);
+              sleepers(pts, 0.12, T);
             }
-            strip(B, pts, -0.72, 0.14, 0.3, COL.steel);
-            strip(B, pts, 0.72, 0.14, 0.3, COL.steel);
+            for (const o of [-T, T]) {
+              strip(B, pts, o - 0.72, 0.14, 0.3, COL.steel);
+              strip(B, pts, o + 0.72, 0.14, 0.3, COL.steel);
+            }
           } else if (kind === 'erail') {
-            strip(B, pts, 0, 5.4, 0, COL.concrete);
-            sides(pts, 2.7, -1.1, 0.9, COL.concrete);
-            sleepers(pts, 0.1);
-            strip(B, pts, -0.72, 0.14, 0.28, COL.steel);
-            strip(B, pts, 0.72, 0.14, 0.28, COL.steel);
+            strip(B, pts, 0, 9.6, 0, COL.concrete);
+            sides(pts, 4.8, -1.1, 0.9, COL.concrete);
+            for (const o of [-T, T]) {
+              sleepers(pts, 0.1, o);
+              strip(B, pts, o - 0.72, 0.14, 0.28, COL.steel);
+              strip(B, pts, o + 0.72, 0.14, 0.28, COL.steel);
+            }
           } else {
-            // モノレール：コンクリートの桁（軌道けた）
-            strip(B, pts, 0, 0.9, 0, COL.beam);
-            sides(pts, 0.45, -1.5, 0, COL.beam);
+            // モノレール：コンクリートの桁（軌道けた）を2本
+            for (const o of [-T, T]) {
+              strip(B, pts, o, 0.9, 0, COL.beam);
+              sides(pts, 0.45, -1.5, 0, COL.beam, o);
+            }
           }
         }
         // 橋脚（マスの中心に1本）
-        if (kind === 'erail' && ch - ground > 2) B.box(cx - 0.8, ground - 0.5, cz - 0.8, cx + 0.8, ch - 1.1, cz + 0.8, COL.concrete);
+        if (kind === 'erail' && ch - ground > 2) B.box(cx - 1.0, ground - 0.5, cz - 1.0, cx + 1.0, ch - 1.1, cz + 1.0, COL.concrete);
         if (kind === 'mono' && ch - ground > 2) {
+          // T字の柱の上に、2本の桁を載せる
           B.box(cx - 0.6, ground - 0.5, cz - 0.6, cx + 0.6, ch - 2.4, cz + 0.6, COL.beam);
-          B.box(cx - 1.1, ch - 2.4, cz - 1.1, cx + 1.1, ch - 1.5, cz + 1.1, COL.beam);
+          B.box(cx - TRACK_GAP - 0.7, ch - 2.4, cz - TRACK_GAP - 0.7, cx + TRACK_GAP + 0.7, ch - 1.5, cz + TRACK_GAP + 0.7, COL.beam);
         }
       }
     }
