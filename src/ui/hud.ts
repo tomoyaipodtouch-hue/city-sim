@@ -3,7 +3,7 @@ import type { GameClient } from '../game';
 import type { CityRenderer } from '../render/renderer';
 import { DATA_VIEWS, DataView } from '../render/overlay';
 import { ToolController, TOOL_GROUPS, PreviewInfo } from './tools';
-import { CIVIC, CivicId, DENSITY_NAMES, DIFFICULTY, isHighway, GROW, GROW_KINDS, GrowKind, ROADS, TAX_LABELS, ZONE_NAMES } from '../sim/defs';
+import { CIVIC, CivicId, DENSITY_NAMES, DIFFICULTY, isHighway, LINES, GROW, GROW_KINDS, GrowKind, ROADS, TAX_LABELS, ZONE_NAMES } from '../sim/defs';
 import { BState } from '../sim/world';
 import type { Stats } from '../sim/world';
 import { sfx, soundSettings } from '../sound';
@@ -370,6 +370,14 @@ export class Hud {
           if (def.power) rows.push(['発電量', `${def.power} MW`]);
           if (def.water) rows.push(['給水量', `${def.water}`], ['電力', b.powered ? 'あり' : '<span class="neg">なし</span>']);
           if (def.pollution) rows.push(['大気汚染', def.pollution > 20 ? 'ひどい' : 'ややある']);
+          if (def.transit && m) {
+            // 駅のまわりの線路（バス停は道路）の乗客数
+            const N = g.n * g.n;
+            const l = def.transit === 'bus' ? 0 : ['rail', 'erail', 'mono', 'sub'].indexOf(def.transit) + 1;
+            let v = 0;
+            for (let yy = b.y - 1; yy <= b.y + b.h; yy++) for (let xx = b.x - 1; xx <= b.x + b.w; xx++) if (g.inb(xx, yy)) v = Math.max(v, m.riders[l * N + g.idx(xx, yy)]);
+            rows.push(['近くの乗客数', `${num(v)} 人/日`]);
+          }
           rows.push(['維持費', `${yen(def.upkeep)}/月`]);
         } else {
           const def = GROW[b.type as GrowKind];
@@ -404,6 +412,14 @@ export class Hud {
       }
       rows.push(['制限速度', levels.map(([t]) => `${ROADS[t].speedKmh} km/h`).join(' ／ ')]);
       if (m && m.jctl[i]) rows.push(['交差点', CTL_NAMES[m.jctl[i]] + (g.ictl[i] === 0 ? '（自動）' : '')]);
+    } else if (g.rail[i] || g.erail[i] || g.mono[i]) {
+      const kinds = (['rail', 'erail', 'mono'] as const).filter((k) => g[k][i]);
+      title = kinds.map((k) => LINES[k].name).join(' ／ ');
+      if (m) for (const k of kinds) rows.push([`${LINES[k].name}の乗客`, `${num(m.riders[(['rail', 'erail', 'mono', 'sub'].indexOf(k) + 1) * g.n * g.n + i])} 人/日`]);
+    }
+    if (!bid && !g.road[i] && !g.up[i] && g.sub[i] && m) rows.push(['地下鉄の乗客', `${num(m.riders[4 * g.n * g.n + i])} 人/日`]);
+    if (bid || g.road[i] || g.up[i] || g.rail[i] || g.erail[i] || g.mono[i]) {
+      // 上で処理済み
     } else if (g.isWater(c.x, c.y)) {
       title = '水域';
     } else if (g.zone[i]) {
@@ -535,6 +551,8 @@ export class Hud {
             <tr><td>人口</td><td>${num(s.population)} 人</td></tr>
             <tr><td>雇用</td><td>${num(s.jobs)} 人分</td></tr>
             <tr><td>失業率</td><td>${Math.round(unemp * 100)}%</td></tr>
+            <tr><td>通勤の交通手段</td><td>車 ${Math.round((s.modeShare?.car ?? 0) * 100)}%・公共交通 ${Math.round((s.modeShare?.transit ?? 0) * 100)}%・徒歩 ${Math.round((s.modeShare?.walk ?? 0) * 100)}%</td></tr>
+            <tr><td>公共交通の乗客</td><td>${num(s.transitRiders ?? 0)} 人/日</td></tr>
             <tr><td>平均通勤時間</td><td>${s.avgCommute ? s.avgCommute.toFixed(1) + ' 分' : '-'}</td></tr>
             <tr><td>電力（使用 / 発電）</td><td class="${s.powerDemand > s.powerSupply ? 'neg' : ''}">${num(s.powerDemand)} / ${num(s.powerSupply)} MW</td></tr>
             <tr><td>水道（使用 / 給水）</td><td class="${s.waterDemand > s.waterSupply ? 'neg' : ''}">${num(s.waterDemand)} / ${num(s.waterSupply)}</td></tr>
@@ -769,6 +787,7 @@ const LEGENDS: Partial<Record<DataView, string>> = {
   traffic: '少ない<i class="grad" style="background:linear-gradient(90deg,#3cc85a,#f0dc3c,#f07828,#c81e28)"></i>渋滞',
   landValue: '低い<i class="grad" style="background:linear-gradient(90deg,#5a3c8c,#3c78c8,#46be78,#f0dc50,#fa8c3c)"></i>高い',
   pollution: 'きれい<i class="grad" style="background:linear-gradient(90deg,rgba(200,190,120,.2),#aa783c,#783c28)"></i>汚い',
+  transit: '少ない<i class="grad" style="background:linear-gradient(90deg,#78c8ff,#3c6ef0,#963cdc)"></i>多い（乗客数）',
   power: '<span style="color:#fadc3c">■</span> 電力あり　<span style="color:#dc3232">■</span> 電力なし',
   water: '<span style="color:#3c96f0">■</span> 水あり　<span style="color:#dc463c">■</span> 水なし',
   zones: '<span style="color:var(--r)">■</span> 住宅　<span style="color:var(--c)">■</span> 商業　<span style="color:var(--i)">■</span> 工業',

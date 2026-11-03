@@ -5,6 +5,7 @@ import { CELL } from '../sim/constants';
 import type { Building, Maps } from '../sim/world';
 import { TerrainLayer } from './terrainLayer';
 import { RoadLayer } from './roadLayer';
+import { RailLayer } from './railLayer';
 import { BuildingLayer } from './buildingLayer';
 import { TreeLayer } from './treeLayer';
 import { CarLayer } from './carLayer';
@@ -24,6 +25,8 @@ export class CityRenderer {
   rig: CameraRig;
   terrain: TerrainLayer | null = null;
   roads = new RoadLayer();
+  rails = new RailLayer();
+  underground = false;
   buildings = new BuildingLayer();
   trees = new TreeLayer();
   cars = new CarLayer();
@@ -66,7 +69,7 @@ export class CityRenderer {
     this.sun.shadow.bias = -0.0006;
     this.sun.shadow.normalBias = 0.6;
     this.scene.add(this.sun, this.sun.target);
-    this.scene.add(this.roads.group, this.buildings.group, this.trees.group, this.cars.group, this.preview.mesh, this.preview.line);
+    this.scene.add(this.roads.group, this.rails.group, this.buildings.group, this.trees.group, this.cars.group, this.preview.mesh, this.preview.line);
     this.resize();
     window.addEventListener('resize', () => this.resize());
     requestAnimationFrame(this.loop);
@@ -130,13 +133,35 @@ export class CityRenderer {
       this.roads.jctl = m.jctl;
       this.dirty.grid = true;
     }
-    if (this.grid) this.cars.setData(this.grid, m.traffic, m.congestion, m.freight);
+    if (this.grid) this.cars.setData(this.grid, m.traffic, m.congestion, m.freight, m.riders);
     this.kick();
   }
 
   setDataView(v: DataView) {
     this.dataView = v;
     this.dirty.overlay = true;
+    this.kick();
+  }
+
+  // 地下の画面：地上を透かして、地下鉄の線路を見せる
+  setUnderground(on: boolean) {
+    if (this.underground === on) return;
+    this.underground = on;
+    this.rails.setUnderground(on);
+    this.cars.showSubway = on;
+    const fade = (m: THREE.Material | THREE.Material[] | undefined, op: number) => {
+      for (const mm of Array.isArray(m) ? m : m ? [m] : []) {
+        mm.transparent = op < 1;
+        mm.opacity = op;
+        mm.depthWrite = op >= 1;
+        mm.needsUpdate = true;
+      }
+    };
+    if (this.terrain) fade((this.terrain.mesh as THREE.Mesh).material, on ? 0.35 : 1);
+    this.buildings.group.traverse((o) => fade((o as THREE.Mesh).material, on ? 0.2 : 1));
+    fade(this.buildings.material, on ? 0.2 : 1);
+    this.roads.group.traverse((o) => fade((o as THREE.Mesh).material, on ? 0.35 : 1));
+    this.trees.group.visible = !on;
     this.kick();
   }
 
@@ -175,6 +200,7 @@ export class CityRenderer {
       if (key !== this.lastRoadKey || heights) {
         this.lastRoadKey = key;
         this.roads.rebuild(g);
+        this.rails.rebuild(g);
       }
     }
     if (this.dirty.buildings || heights) {
@@ -194,7 +220,8 @@ export class CityRenderer {
     const mix = (v: number) => { h = Math.imul(h ^ v, 16777619); };
     const N = g.n * g.n;
     for (let i = 0; i < N; i++) {
-      if (!(g.road[i] | g.up[i] | g.pline[i])) continue;
+      if (!(g.road[i] | g.up[i] | g.pline[i] | g.rail[i] | g.erail[i] | g.mono[i] | g.sub[i])) continue;
+      mix(g.rail[i] | (g.erail[i] << 8) | (g.mono[i] << 16) | (g.sub[i] << 24));
       mix(i); mix(g.road[i]); mix(g.conn[i]); mix(g.up[i]); mix(g.conn1[i]); mix(g.pline[i]); mix(Math.round(g.upH[i] * 4)); mix(Math.round(g.deck[i] * 4)); mix(Math.round(g.lift[i] * 4));
     }
     if (this.roads.jctl.length) for (let i = 0; i < N; i++) if (this.roads.jctl[i]) { mix(i); mix(this.roads.jctl[i]); }

@@ -1133,8 +1133,9 @@ export function planTransitLine(g: Grid, path: LinePath, kind: LineKind): Transi
     } else {
       // 高架：上空の道路とは重ねられない
       if (g.up[i]) { bad.add(i); why('高架の道路と重なっています'); }
+      // 高架鉄道（8m）とモノレール（11m）は高さが違うので交差できる。ただし同じ向きに重ねて引くことはできない
       const other = kind === 'erail' ? g.mono : g.erail;
-      if (other[i]) { bad.add(i); why('ほかの高架の線路と重なっています'); }
+      if (other[i] && (other[i] & ((1 << d) | (1 << opp(d))))) { bad.add(i); why('ほかの高架の線路と重なっています'); }
     }
   }
   for (let k = 0; k < dirs.length; k++) {

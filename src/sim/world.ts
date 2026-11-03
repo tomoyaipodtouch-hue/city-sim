@@ -977,7 +977,7 @@ export class World {
     const jobsAt = new Map<number, Destination[]>();
     const shopsAt = new Map<number, Destination[]>();
     // 所得が低いほど車を持たない人が多い（車を使うときの追加時間で表す）
-    const CAR_PENALTY: Record<string, number> = { R1: 7, R2: 2.5, R3: 0 };
+    const CAR_PENALTY: Record<string, number> = { R1: 4, R2: 1.5, R3: 0 };
     const addOrigin = (m: Map<number, Origin>, cell: number, id: number, trips: number, carPenalty = 0) => {
       const key = cell * 4 + Math.round(carPenalty);
       let o = m.get(key);

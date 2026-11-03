@@ -187,7 +187,8 @@ export interface TripOptions {
 export const LAYER = { walk: 2, bus: 3, rail: 4, erail: 5, mono: 6, sub: 7 } as const;
 export const LINE_LAYER: Record<LineKind, number> = { rail: 4, erail: 5, mono: 6, sub: 7 };
 export const LAYERS = 8;
-const WALK_MPM = 80; // 歩く速さ（m/分）
+// 歩く速さ（m/分）。実際は 80m/分 くらいだが、人は長く歩くのを嫌うので、半分の速さとして扱う
+const WALK_MPM = 40;
 
 export interface TransitModel {
   walkable: Uint8Array; // 歩ける道路のマス（地上の一般の道路）

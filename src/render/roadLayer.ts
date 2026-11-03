@@ -55,7 +55,7 @@ function asphaltTexture(): THREE.CanvasTexture {
 }
 
 // 頂点を貯めてメッシュにするための入れ物
-class Buf {
+export class Buf {
   P: number[] = [];
   N: number[] = [];
   C: number[] = [];

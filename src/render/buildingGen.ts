@@ -114,6 +114,11 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     case 'park_s': park(mb, f, rng, tf, false); break;
     case 'park_l': park(mb, f, rng, tf, true); break;
     case 'plaza': plaza(mb, f, rng, tf); break;
+    case 'busstop': busStop(mb, f); break;
+    case 'station': station(mb, f, 0); break;
+    case 'el_station': station(mb, f, 8); break;
+    case 'mono_station': station(mb, f, 11); break;
+    case 'sub_station': subwayEntrance(mb, f); break;
   }
   mb.abandoned = false;
 }
@@ -572,4 +577,48 @@ function tower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, o
   mb.box(-3, podium ? 4.3 : 3, pz1, 3, (podium ? 4.3 : 3) + 0.3, pz1 + 2.2, PALETTE.dark);
   tf(-f.W / 2 + 1.6, f.D / 2 - 1.0, 0.75);
   tf(f.W / 2 - 1.6, f.D / 2 - 1.0, 0.75);
+}
+
+// ---------------- 公共交通 ----------------
+function busStop(mb: MeshBuilder, f: LotFrame) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.09, PALETTE.pavement);
+  const z = f.D / 2 - 2.5;
+  // 屋根つきの待合所とベンチ、標識
+  for (const x of [-2.2, 2.2]) mb.box(x - 0.08, 0, z - 0.9, x + 0.08, 2.6, z - 0.75, PALETTE.steel);
+  mb.box(-2.4, 0, z - 1.0, 2.4, 2.4, z - 0.92, PALETTE.glass);
+  mb.box(-2.6, 2.6, z - 1.2, 2.6, 2.8, z + 0.6, PALETTE.steel);
+  mb.box(-1.6, 0, z - 0.8, 1.6, 0.5, z - 0.3, PALETTE.wood);
+  mb.box(3.2, 0, z + 0.8, 3.32, 3, z + 0.92, PALETTE.steel);
+  mb.box(2.9, 2.4, z + 0.8, 3.62, 3.1, z + 0.95, PALETTE.accent[2]);
+}
+
+// 駅：駅舎と、線路の高さのホーム（地上の駅は lift = 0）
+function station(mb: MeshBuilder, f: LotFrame, lift: number) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.09, PALETTE.pavement);
+  const wall = lift ? PALETTE.white : PALETTE.shopWall[2];
+  // 駅舎
+  mb.box(-f.W / 2 + 2, 0, 0, f.W / 2 - 2, 6, f.D / 2 - 3, wall, PAT.shop, PALETTE.steel);
+  mb.box(-f.W / 2 + 1, 6, -1, f.W / 2 - 1, 6.5, f.D / 2 - 2, PALETTE.steel);
+  mb.box(-3, 4.6, f.D / 2 - 3, 3, 5.6, f.D / 2 - 2.8, PALETTE.accent[2]);
+  // ホームと屋根
+  const ph = lift ? lift - 0.4 : 1.0;
+  if (lift) {
+    for (const x of [-f.W / 2 + 3, 0, f.W / 2 - 3]) mb.box(x - 0.5, 0, -f.D / 2 + 3, x + 0.5, ph, -f.D / 2 + 4, PALETTE.concrete);
+    mb.box(-f.W / 2 + 1.5, 0, -2, -f.W / 2 + 4.5, ph + 3, 1, wall, PAT.office, PALETTE.steel);
+  }
+  mb.box(-f.W / 2 + 0.6, ph - 0.6, -f.D / 2 + 1.2, f.W / 2 - 0.6, ph, -f.D / 2 + 5.5, PALETTE.concrete);
+  for (const x of [-f.W / 2 + 2, 0, f.W / 2 - 2]) mb.box(x - 0.12, ph, -f.D / 2 + 3.2, x + 0.12, ph + 3.2, -f.D / 2 + 3.5, PALETTE.steel);
+  mb.box(-f.W / 2 + 0.6, ph + 3.2, -f.D / 2 + 1.5, f.W / 2 - 0.6, ph + 3.5, -f.D / 2 + 5.2, PALETTE.roof[3]);
+}
+
+function subwayEntrance(mb: MeshBuilder, f: LotFrame) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.09, PALETTE.pavement);
+  // 地下への階段の囲いと屋根、目印の柱
+  mb.box(-2.2, 0, -3, -1.9, 1.1, 3, PALETTE.steel);
+  mb.box(1.9, 0, -3, 2.2, 1.1, 3, PALETTE.steel);
+  mb.ground(-1.9, -3, 1.9, 3, 0.05, PALETTE.dark);
+  mb.box(-2.4, 2.6, -3.2, 2.4, 2.9, 1.5, PALETTE.glass);
+  for (const [x, z] of [[-2.3, -3], [2.3, -3], [-2.3, 1.4], [2.3, 1.4]]) mb.box(x - 0.08, 0, z - 0.08, x + 0.08, 2.6, z + 0.08, PALETTE.steel);
+  mb.box(3.2, 0, 3, 3.45, 3.6, 3.25, PALETTE.steel);
+  mb.box(2.9, 3.6, 2.9, 3.75, 4.5, 3.35, PALETTE.accent[0]);
 }

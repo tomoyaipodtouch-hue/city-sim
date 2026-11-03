@@ -312,6 +312,6 @@ describe('stage 3a transit', () => {
     const s = w.stats;
     console.log(`transit: pop=${s.population} riders=${s.transitRiders} share=${JSON.stringify(s.modeShare)} ${ms.toFixed(1)} ms/month`);
     expect(s.population).toBeGreaterThan(500);
-    expect(s.transitRiders).toBeGreaterThan(50);
+    expect(s.transitRiders).toBeGreaterThan(20);
   });
 });

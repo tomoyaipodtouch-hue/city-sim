@@ -3,12 +3,13 @@ import { Grid } from '../sim/grid';
 import { ROADS } from '../sim/defs';
 import type { Maps } from '../sim/world';
 
-export type DataView = 'none' | 'zones' | 'traffic' | 'landValue' | 'pollution' | 'power' | 'water';
+export type DataView = 'none' | 'zones' | 'traffic' | 'transit' | 'landValue' | 'pollution' | 'power' | 'water';
 
 export const DATA_VIEWS: { id: DataView; name: string }[] = [
   { id: 'none', name: '通常' },
   { id: 'zones', name: 'ゾーン' },
   { id: 'traffic', name: '交通量' },
+  { id: 'transit', name: '公共交通' },
   { id: 'landValue', name: '地価' },
   { id: 'pollution', name: '大気汚染' },
   { id: 'power', name: '電力' },
@@ -57,6 +58,17 @@ export function buildOverlay(out: Uint8Array, g: Grid, maps: Maps | null, view: 
           const ratio = Math.max(r0, r1);
           [r, gg, b] = ramp(ratio / 1.2, TRAFFIC_RAMP);
           a = maps.traffic[i] + maps.traffic[i + N] > 0.5 ? 230 : 90;
+        } else if (!water) {
+          r = gg = b = 20;
+          a = 90;
+        }
+      } else if (view === 'transit') {
+        // バス・鉄道などの乗客数（いちばん多い路線）
+        let v = 0;
+        for (let l = 0; l < 5; l++) v = Math.max(v, maps.riders[l * N + i]);
+        if (v > 0.5) {
+          [r, gg, b] = ramp(Math.min(1, v / 1500), [[120, 200, 255], [60, 110, 240], [150, 60, 220]]);
+          a = 230;
         } else if (!water) {
           r = gg = b = 20;
           a = 90;

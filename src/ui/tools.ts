@@ -1,6 +1,6 @@
 // ツールの定義と、ドラッグ中のプレビュー・確定
-import { CIVIC, CivicId, DENSITY_NAMES, ROADS, RoadType, ZoneType, ZONE_COST, ZONE_NAMES, POWER_LINE_COST, RAMP_COST } from '../sim/defs';
-import { normRect, planBulldoze, planCloverleaf, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone } from '../sim/plan';
+import { CIVIC, CivicId, DENSITY_NAMES, LINES, LineKind, ROADS, RoadType, ZoneType, ZONE_COST, ZONE_NAMES, POWER_LINE_COST, RAMP_COST } from '../sim/defs';
+import { normRect, planBulldoze, planCloverleaf, planTransitLine, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone } from '../sim/plan';
 import type { Command } from '../sim/world';
 import type { GameClient } from '../game';
 import type { CityRenderer } from '../render/renderer';
@@ -74,10 +74,16 @@ export const TOOL_GROUPS: ToolGroup[] = [
   },
   {
     id: 'transit', name: '公共交通', icon: 'transit', items: [
-      { name: 'バス停', note: '今後追加', disabled: true },
-      { name: '鉄道・地下鉄', note: '今後追加', disabled: true },
-      { name: '高架鉄道・モノレール', note: '今後追加', disabled: true },
-      { name: 'フェリー・空港・港', note: '今後追加', disabled: true },
+      { tool: 'plop:busstop', name: CIVIC.busstop.name, note: yen(CIVIC.busstop.cost) },
+      { tool: 'line:rail', name: '鉄道の線路', note: `${yen(LINES.rail.cost)}/マス` },
+      { tool: 'plop:station', name: CIVIC.station.name, note: yen(CIVIC.station.cost) },
+      { tool: 'line:erail', name: '高架鉄道の線路', note: `${yen(LINES.erail.cost)}/マス` },
+      { tool: 'plop:el_station', name: CIVIC.el_station.name, note: yen(CIVIC.el_station.cost) },
+      { tool: 'line:mono', name: 'モノレールの線路', note: `${yen(LINES.mono.cost)}/マス` },
+      { tool: 'plop:mono_station', name: CIVIC.mono_station.name, note: yen(CIVIC.mono_station.cost) },
+      { tool: 'line:sub', name: '地下鉄の線路', note: `${yen(LINES.sub.cost)}/マス` },
+      { tool: 'plop:sub_station', name: CIVIC.sub_station.name, note: yen(CIVIC.sub_station.cost) },
+      { name: 'フェリー・空港・港・貨物駅', note: '今後追加', disabled: true },
     ],
   },
   {
@@ -116,6 +122,8 @@ export class ToolController {
     this.drag = null;
     this.r.preview.clear();
     this.r.setShowGrid(!!t && t !== 'query');
+    // 地下鉄の線路と駅のツールでは、地下の画面にする
+    this.r.setUnderground(t === 'line:sub' || t === 'plop:sub_station');
   }
 
   get isDragTool() {
@@ -150,6 +158,15 @@ export class ToolController {
       if (path.cells.length < 2) return { text: 'ドラッグして道路を引く', bad: false };
       const extra = plan.bridgeCells ? `（橋 ${plan.bridgeCells} マス）` : '';
       return plan.ok ? { text: `${yen(plan.cost)}${extra}`, bad: false } : { text: plan.reason || '引けません', bad: true };
+    }
+    if (t.startsWith('line:')) {
+      const kind = t.split(':')[1] as LineKind;
+      const path = planLine(g, d.x0, d.y0, x, y);
+      const plan = planTransitLine(g, path, kind);
+      pv.setTiles(g, path.cells, (i) => (plan.bad.has(i) ? 0xe5534b : 0xffd27a));
+      pv.setPath(g, path.cells);
+      if (path.cells.length < 2) return { text: 'ドラッグして線路を引く', bad: false };
+      return plan.ok ? { text: yen(plan.cost), bad: false } : { text: plan.reason || '引けません', bad: true };
     }
     if (t === 'pline') {
       const path = planLine(g, d.x0, d.y0, x, y);
@@ -222,6 +239,10 @@ export class ToolController {
       if (d.x0 === d.x1 && d.y0 === d.y1) return;
       cmd = { t: 'road', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1, road: Number(t.split(':')[1]) as RoadType };
     } else if (t === 'pline') cmd = { t: 'pline', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1 };
+    else if (t.startsWith('line:')) {
+      if (d.x0 === d.x1 && d.y0 === d.y1) return;
+      cmd = { t: 'transit', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1, kind: t.split(':')[1] as LineKind };
+    }
     else if (t.startsWith('zone:')) {
       const [, z, den] = t.split(':');
       cmd = { t: 'zone', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1, zone: Number(z) as ZoneType, den: Number(den) };
@@ -234,7 +255,7 @@ export class ToolController {
     if (!cmd) return;
     const res = await this.game.exec(cmd);
     if (res.ok) {
-      if (cmd.t === 'road' || cmd.t === 'pline' || cmd.t === 'ramp' || cmd.t === 'diamond' || cmd.t === 'clover') sfx.road();
+      if (cmd.t === 'road' || cmd.t === 'pline' || cmd.t === 'ramp' || cmd.t === 'diamond' || cmd.t === 'clover' || cmd.t === 'transit') sfx.road();
       else if (cmd.t === 'zone') sfx.zone();
       else if (cmd.t === 'bulldoze') sfx.bulldoze();
       else sfx.plop();
