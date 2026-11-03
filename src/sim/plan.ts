@@ -1024,15 +1024,18 @@ export function planPlop(g: Grid, id: CivicId, cx: number, cy: number): PlopPlan
       sum += g.cellH(xx, yy);
     }
   }
-  if (hi - lo > 10) reason = reason || '地面の傾きが大きすぎます';
-  // 駅・停留所は、線路と道路に接している必要がある
-  if (!reason && def.transit) {
+  // 水辺の施設は川岸の斜面に置くことが多いので、より傾いた土地でも造成して置ける
+  if (hi - lo > (def.waterfront ? 22 : 10)) reason = reason || '地面の傾きが大きすぎます';
+  // 駅・停留所・フェリー乗り場・港・貨物駅は、線路や水辺、道路に接している必要がある
+  if (!reason && (def.transit || def.waterfront || def.freightRail || def.airport)) {
     const around: number[] = [];
     for (let yy = y - 1; yy <= y + def.h; yy++)
       for (let xx = x - 1; xx <= x + def.w; xx++) if (g.inb(xx, yy) && !(xx >= x && xx < x + def.w && yy >= y && yy < y + def.h)) around.push(g.idx(xx, yy));
     const localRoad = (i: number) => g.road[i] !== 0 && !isHighway(g.road[i]) && g.road[i] !== RoadType.Ramp;
     if (!around.some(localRoad)) reason = '道路に接するように置いてください';
-    else if (def.transit !== 'bus') {
+    else if (def.waterfront && !around.some((i) => g.isWater(i % g.n, (i / g.n) | 0))) reason = '水辺に置いてください';
+    else if (def.freightRail && !around.some((i) => g.rail[i])) reason = '鉄道の線路に接するように置いてください';
+    else if (def.transit && def.transit !== 'bus') {
       const mask = g[def.transit];
       const near = def.transit === 'sub' ? [...around, ...cells] : around;
       if (!near.some((i) => mask[i])) reason = `${LINES[def.transit].name}の線路に接するように置いてください`;
@@ -1194,4 +1197,61 @@ export function planBusStop(g: Grid, x: number, y: number): BusStopPlan {
   const t = g.road[i];
   if (!t || isHighway(t) || t === RoadType.Ramp) return fail('一般の道路の上に置いてください');
   return { ok: true, cell: i, remove: false, reason: '', cost: BUS_STOP_COST };
+}
+
+// ---- 水域 ----
+// 水のマスをつながりごとに番号をつける（-1 = 陸）。edge は、マップの端に届いている水域の番号
+export function labelWater(g: Grid): { label: Int32Array; edge: Set<number> } {
+  const n = g.n;
+  const label = new Int32Array(n * n).fill(-1);
+  const edge = new Set<number>();
+  let id = 0;
+  const q: number[] = [];
+  for (let i = 0; i < n * n; i++) {
+    if (label[i] >= 0 || !g.isWater(i % n, (i / n) | 0)) continue;
+    label[i] = id;
+    q.push(i);
+    while (q.length) {
+      const c = q.pop()!;
+      const x = c % n, y = (c / n) | 0;
+      if (x === 0 || y === 0 || x === n - 1 || y === n - 1) edge.add(id);
+      for (let d = 0; d < 8; d += 2) {
+        const nx = x + DX[d], ny = y + DY[d];
+        if (!g.inb(nx, ny)) continue;
+        const j = ny * n + nx;
+        if (label[j] >= 0 || !g.isWater(nx, ny)) continue;
+        label[j] = id;
+        q.push(j);
+      }
+    }
+    id++;
+  }
+  return { label, edge };
+}
+
+// 地上の鉄道・高架鉄道のうち、マップの端までつながっているマス
+export function railReachEdge(g: Grid): Uint8Array {
+  const n = g.n;
+  const reach = new Uint8Array(n * n);
+  const q: number[] = [];
+  for (let i = 0; i < n * n; i++) {
+    const x = i % n, y = (i / n) | 0;
+    if ((x === 0 || y === 0 || x === n - 1 || y === n - 1) && (g.rail[i] || g.erail[i])) {
+      reach[i] = 1;
+      q.push(i);
+    }
+  }
+  while (q.length) {
+    const c = q.pop()!;
+    const x = c % n, y = (c / n) | 0;
+    const m = g.rail[c] | g.erail[c];
+    for (let d = 0; d < 8; d++) {
+      if (!(m & (1 << d))) continue;
+      const nx = x + DX[d], ny = y + DY[d];
+      if (!g.inb(nx, ny)) continue;
+      const j = ny * n + nx;
+      if (!reach[j]) { reach[j] = 1; q.push(j); }
+    }
+  }
+  return reach;
 }

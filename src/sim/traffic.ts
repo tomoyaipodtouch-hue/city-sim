@@ -197,6 +197,10 @@ export interface TransitModel {
   walkToLine: Map<number, number[]>; // 徒歩のノード → 線のノード
   lineToWalk: Map<number, number[]>; // 線のノード → 徒歩のノード
   any: boolean; // 公共交通が1つでもあるか
+  walkLinks: Map<number, [number, number][]>; // 旅客フェリー：徒歩のノード → [徒歩のノード, 分]
+  carLinks: Map<number, [number, number][]>; // カーフェリー：車のノード → [車のノード, 分]
+  carToExt: Map<number, number>; // カーフェリーで隣の都市へ：車のノード → 分
+  railToExt: boolean; // 鉄道・高架鉄道がマップの端から隣の都市へ行ける
 }
 
 export function buildTransitModel(
@@ -225,7 +229,7 @@ export function buildTransitModel(
       }
     }
   }
-  return { walkable, busStop, walkToLine, lineToWalk, any: stations.length > 0 };
+  return { walkable, busStop, walkToLine, lineToWalk, any: stations.length > 0, walkLinks: new Map(), carLinks: new Map(), carToExt: new Map(), railToExt: true };
 }
 
 export interface ModeStats {
@@ -374,6 +378,13 @@ export function assignTrips(
           relax(v, t + edgeMinutes(g, u, d, congestion) + jd, u, d);
         });
         if (extFree > 0 && isEdge(cell)) relax(EXT, t + extPenalty(u), u, -1);
+        if (transit && u < N) {
+          // カーフェリー
+          const fl = transit.carLinks.get(u);
+          if (fl) for (const [v, m] of fl) relax(v, t + m, u, -1);
+          const fe = transit.carToExt.get(u);
+          if (fe !== undefined && extFree > 0) relax(EXT, t + fe, u, -1);
+        }
         continue;
       }
       const T = transit!;
@@ -388,6 +399,8 @@ export function assignTrips(
           relax(LAYER.walk * N + j, t + (isDiag(d) ? CELL * 1.414 : CELL) / WALK_MPM, u, d);
         }
         if (T.busStop[cell]) relax(LAYER.bus * N + cell, t + BUS_WAIT, u, -1);
+        const ferries = T.walkLinks.get(u);
+        if (ferries) for (const [v, m] of ferries) relax(v, t + m, u, -1);
         const lines = T.walkToLine.get(u);
         if (lines) for (const ln of lines) relax(ln, t + lineWait[Math.floor(ln / N)], u, -1);
         continue;
@@ -411,6 +424,8 @@ export function assignTrips(
       }
       const exits = T.lineToWalk.get(u);
       if (exits) for (const wn of exits) relax(wn, t + 0.5, u, -1);
+      // 鉄道・高架鉄道は、マップの端から隣の都市へ行ける
+      if (T.railToExt && (layer === LAYER.rail || layer === LAYER.erail) && extFree > 0 && isEdge(cell)) relax(EXT, t + 10, u, -1);
     }
     // 建物ごとに配分（同じ建物が複数の出発グループに入ることがあるので足し合わせる）
     const ratio = o.trips > 0 ? got / o.trips : 0;

@@ -6,6 +6,7 @@ import type { Building, Maps } from '../sim/world';
 import { TerrainLayer } from './terrainLayer';
 import { RoadLayer } from './roadLayer';
 import { RailLayer } from './railLayer';
+import { PropsLayer } from './propsLayer';
 import { BuildingLayer } from './buildingLayer';
 import { TreeLayer } from './treeLayer';
 import { CarLayer } from './carLayer';
@@ -26,6 +27,7 @@ export class CityRenderer {
   terrain: TerrainLayer | null = null;
   roads = new RoadLayer();
   rails = new RailLayer();
+  props = new PropsLayer();
   underground = false;
   buildings = new BuildingLayer();
   trees = new TreeLayer();
@@ -69,7 +71,7 @@ export class CityRenderer {
     this.sun.shadow.bias = -0.0006;
     this.sun.shadow.normalBias = 0.6;
     this.scene.add(this.sun, this.sun.target);
-    this.scene.add(this.roads.group, this.rails.group, this.buildings.group, this.trees.group, this.cars.group, this.preview.mesh, this.preview.line);
+    this.scene.add(this.roads.group, this.rails.group, this.props.group, this.buildings.group, this.trees.group, this.cars.group, this.preview.mesh, this.preview.line);
     this.resize();
     window.addEventListener('resize', () => this.resize());
     requestAnimationFrame(this.loop);
@@ -205,6 +207,7 @@ export class CityRenderer {
     }
     if (this.dirty.buildings || heights) {
       if (this.buildings.update(g, this.buildingList, heights)) this.dirty.trees = true;
+      this.props.setBuildings(g, this.buildingList);
     }
     if (this.dirty.trees) this.trees.rebuild(g, this.buildings.allTrees());
     if (this.dirty.overlay) {
@@ -243,8 +246,8 @@ export class CityRenderer {
     if (!carsMoving && this.idleFrames > 30 && this.idleFrames % 10 !== 0) return;
     this.rig.update(dt, this.grid);
     if (carsMoving) this.cars.update(dt);
-    else this.cars.group.visible = false;
-    if (carsMoving) this.cars.group.visible = true;
+    this.cars.group.visible = carsMoving;
+    this.props.update(dt);
     this.updateShadow();
     this.renderer.render(this.scene, this.rig.camera);
     this.fpsAcc += dt;

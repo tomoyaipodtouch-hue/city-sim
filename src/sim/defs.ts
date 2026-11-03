@@ -155,7 +155,8 @@ export const BUS_STOP_COST = 150;
 export const BUS_STOP_UPKEEP = 15;
 export const FARE = 1.0; // 1日の乗客1人あたりの、月の運賃収入
 
-export type CivicId = 'coal' | 'gas' | 'pump' | 'tower' | 'park_s' | 'park_l' | 'plaza' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station';
+export type CivicId = 'coal' | 'gas' | 'pump' | 'tower' | 'park_s' | 'park_l' | 'plaza' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station'
+  | 'ferry_p' | 'ferry_c' | 'seaport' | 'airport_s' | 'airport_l' | 'freight_st';
 
 export interface CivicDef {
   id: CivicId;
@@ -170,6 +171,11 @@ export interface CivicDef {
   park?: number; // 地価への効果
   needsPower?: boolean;
   transit?: 'bus' | LineKind; // 公共交通の駅・停留所
+  ferry?: 'passenger' | 'car'; // フェリー乗り場
+  waterfront?: boolean; // 水辺に置く必要がある
+  seaport?: boolean;
+  airport?: number; // 空港の規模（1 = 小, 2 = 大）
+  freightRail?: boolean; // 貨物駅
   desc: string;
 }
 
@@ -186,6 +192,12 @@ export const CIVIC: Record<CivicId, CivicDef> = {
   el_station: { id: 'el_station', name: '高架鉄道の駅', w: 2, h: 2, cost: 4000, upkeep: 70, transit: 'erail', desc: '高架鉄道の線路と道路の両方に接するように置く' },
   mono_station: { id: 'mono_station', name: 'モノレールの駅', w: 2, h: 2, cost: 5000, upkeep: 80, transit: 'mono', desc: 'モノレールの線路と道路の両方に接するように置く' },
   sub_station: { id: 'sub_station', name: '地下鉄の駅', w: 1, h: 1, cost: 3500, upkeep: 70, transit: 'sub', desc: '地下鉄の線路の上か隣に、道路に接するように置く' },
+  ferry_p: { id: 'ferry_p', name: '旅客フェリー乗り場', w: 2, h: 2, cost: 3000, upkeep: 60, ferry: 'passenger', waterfront: true, desc: '水辺に、道路に接するように置く。同じ水域の乗り場どうしが航路で結ばれる' },
+  ferry_c: { id: 'ferry_c', name: 'カーフェリー乗り場', w: 3, h: 3, cost: 6000, upkeep: 110, ferry: 'car', waterfront: true, desc: '車ごと乗れるフェリー。水域がマップの端まで続いていれば、隣の都市へも行ける' },
+  seaport: { id: 'seaport', name: '港', w: 4, h: 4, cost: 25000, upkeep: 300, seaport: true, waterfront: true, pollution: 6, desc: '工業の需要が上がり、トラックが荷物を運べる。水域がマップの端まで続いている必要がある' },
+  airport_s: { id: 'airport_s', name: '空港（小）', w: 4, h: 10, cost: 30000, upkeep: 350, airport: 1, pollution: 4, desc: '商業とオフィスの需要が上がる。周りは騒音で地価が下がる' },
+  airport_l: { id: 'airport_l', name: '空港（大）', w: 7, h: 16, cost: 90000, upkeep: 900, airport: 2, pollution: 10, desc: '商業とオフィスの需要が大きく上がる。周りは騒音で地価が下がる' },
+  freight_st: { id: 'freight_st', name: '貨物駅', w: 3, h: 2, cost: 8000, upkeep: 120, freightRail: true, desc: '線路と道路に接するように置く。線路がマップの端まで続いていれば、トラックの荷物を鉄道で運ぶ' },
 };
 
 export const DIFFICULTY = [

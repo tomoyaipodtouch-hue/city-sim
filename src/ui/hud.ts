@@ -378,6 +378,7 @@ export class Hud {
             for (let yy = b.y - 1; yy <= b.y + b.h; yy++) for (let xx = b.x - 1; xx <= b.x + b.w; xx++) if (g.inb(xx, yy)) v = Math.max(v, m.riders[l * N + g.idx(xx, yy)]);
             rows.push(['近くの乗客数', `${num(v)} 人/日`]);
           }
+          if (b.note) rows.push(['状態', b.note]);
           rows.push(['維持費', `${yen(def.upkeep)}/月`]);
         } else {
           const def = GROW[b.type as GrowKind];

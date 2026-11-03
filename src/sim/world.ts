@@ -8,8 +8,9 @@ import {
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
 import {
-  applyCloverleaf, applyDiamond, applyRamp, applyTransitLine, hasSurfaceLine, planBusStop, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
+  applyCloverleaf, applyDiamond, applyRamp, applyTransitLine, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
 } from './plan';
+import { CELL } from './constants';
 import { assignTrips, buildJunctions, buildTransitModel, congestionFactor, Destination, LAYER, Origin } from './traffic';
 
 export enum BState {
@@ -40,6 +41,7 @@ export interface Building {
   customers?: number; // 買い物客の充足率（商業）
   freight?: number; // 貨物を運べた割合（工業）
   freightTime?: number; // 貨物の輸送時間（分）
+  note?: string; // 公共施設の状態（情報の画面に出す）
   employed: number; // 職のある住人の割合（住宅）
   badMonths: number;
 }
@@ -359,7 +361,7 @@ export class World {
         this.heightVersion++;
         const b: Building = {
           id: this.nextId++, civic: true, type: c.id, x: plan.x, y: plan.y, w: def.w, h: def.h,
-          face: this.findFace(plan.x, plan.y, def.w, def.h), seed: this.rng.int(1e9), den: 0, cap: 0, occ: 0,
+          face: def.waterfront ? this.waterFace(plan.x, plan.y, def.w, def.h) : this.findFace(plan.x, plan.y, def.w, def.h), seed: this.rng.int(1e9), den: 0, cap: 0, occ: 0,
           state: BState.Normal, stateDays: 0, powered: false, watered: false, floors: 0, commute: 0, employed: 1, badMonths: 0,
         };
         this.placeBuilding(b);
@@ -526,6 +528,24 @@ export class World {
     if (has(x + w, y - 1)) return 6;
     if (has(x - 1, y - 1)) return 6;
     return 2;
+  }
+
+  // 水辺の施設は、裏側（桟橋や岸壁）が水のほうを向くようにする
+  private waterFace(x: number, y: number, w: number, h: number): number {
+    const g = this.g;
+    const wet = (cx: number, cy: number) => (g.inb(cx, cy) && g.isWater(cx, cy) ? 1 : 0);
+    const score = [0, 0, 0, 0, 0, 0, 0, 0];
+    for (let k = 0; k < h; k++) {
+      score[0] += wet(x + w, y + k);
+      score[4] += wet(x - 1, y + k);
+    }
+    for (let k = 0; k < w; k++) {
+      score[2] += wet(x + k, y + h);
+      score[6] += wet(x + k, y - 1);
+    }
+    let best = 2, bs = -1;
+    for (const d of [0, 2, 4, 6]) if (score[d] > bs) { bs = score[d]; best = d; }
+    return (best + 4) & 7;
   }
 
   // 敷地の周りにある道路マス
@@ -1055,6 +1075,65 @@ export class World {
     for (let i = 0; i < N; i++) if (g.bstop[i] && g.road[i]) roadStops.push(i);
     if (roadStops.length) stations.push({ kind: 'bus', roadCells: roadStops, lineCells: [] });
     const tm = buildTransitModel(g, stations);
+    // ---- フェリー・港・貨物駅 ----
+    const water = labelWater(g);
+    const railEdge = railReachEdge(g);
+    const freightAt = new Map<number, Destination[]>();
+    const terminals: { b: Building; kind: 'passenger' | 'car'; body: number; road: number }[] = [];
+    let airportBoost = 0, seaportBoost = 0;
+    for (const b of this.buildings.values()) {
+      if (!b.civic) continue;
+      const def = CIVIC[b.type as CivicId];
+      if (!def.ferry && !def.seaport && !def.freightRail && !def.airport) continue;
+      const acc = this.accessCells(b);
+      // 隣の水域
+      let body = -1;
+      for (let yy = b.y - 1; yy <= b.y + b.h && body < 0; yy++)
+        for (let xx = b.x - 1; xx <= b.x + b.w; xx++) if (g.inb(xx, yy) && water.label[g.idx(xx, yy)] >= 0) { body = water.label[g.idx(xx, yy)]; break; }
+      if (!acc.length) { b.note = '道路に接していません'; continue; }
+      if (def.ferry) {
+        terminals.push({ b, kind: def.ferry, body, road: acc[0] });
+      } else if (def.seaport) {
+        if (body >= 0 && water.edge.has(body)) {
+          for (const c of acc) (freightAt.get(c) ?? freightAt.set(c, []).get(c)!).push({ id: b.id, free: 1e9 });
+          seaportBoost += 0.25;
+          b.note = '外洋につながっている';
+        } else b.note = '<span class="neg">水域がマップの端までつながっていません</span>';
+      } else if (def.freightRail) {
+        let ok = false;
+        for (let yy = b.y - 1; yy <= b.y + b.h; yy++) for (let xx = b.x - 1; xx <= b.x + b.w; xx++) if (g.inb(xx, yy) && railEdge[g.idx(xx, yy)]) ok = true;
+        if (ok) {
+          for (const c of acc) (freightAt.get(c) ?? freightAt.set(c, []).get(c)!).push({ id: b.id, free: 1e9 });
+          b.note = '鉄道で隣の都市へ荷物を運んでいる';
+        } else b.note = '<span class="neg">線路がマップの端までつながっていません</span>';
+      } else if (def.airport) {
+        airportBoost += def.airport === 2 ? 0.35 : 0.15;
+        b.note = b.powered ? '運航中' : '<span class="neg">電力がないので運航していません</span>';
+        if (!b.powered) airportBoost -= def.airport === 2 ? 0.35 : 0.15;
+      }
+    }
+    // 同じ水域にある、同じ種類の乗り場どうしを航路で結ぶ
+    for (const A of terminals) {
+      let routes = 0;
+      for (const B of terminals) {
+        if (A === B || A.kind !== B.kind || A.body < 0 || A.body !== B.body) continue;
+        const dist = Math.hypot(A.b.x - B.b.x, A.b.y - B.b.y) * CELL;
+        if (A.kind === 'passenger') {
+          const m = dist / 420 + 8; // 25km/h、待ち8分
+          const from = LAYER.walk * N + A.road, to = LAYER.walk * N + B.road;
+          (tm.walkLinks.get(from) ?? tm.walkLinks.set(from, []).get(from)!).push([to, m]);
+        } else {
+          const m = dist / 330 + 10; // 20km/h、待ち10分
+          (tm.carLinks.get(A.road) ?? tm.carLinks.set(A.road, []).get(A.road)!).push([B.road, m]);
+        }
+        routes++;
+      }
+      const toNeighbor = A.kind === 'car' && A.body >= 0 && water.edge.has(A.body);
+      if (toNeighbor) tm.carToExt.set(A.road, 25);
+      A.b.note = A.body < 0 ? '<span class="neg">水辺に接していません</span>' : `航路 ${routes} 本${toNeighbor ? '・隣の都市への航路あり' : ''}`;
+    }
+    this.airportBoost = airportBoost;
+    this.seaportBoost = seaportBoost;
     const rc = assignTrips(g, [...commuters.values()], jobsAt, cong, junctions, rnd, { externalCap: external, maxMinutes: 80, weight: 1 }, tm);
     const rs = assignTrips(g, [...shoppers.values()], shopsAt, cong, junctions, rnd, { externalCap: this.neighborConnected ? pop * 0.03 : 0, maxMinutes: 30, weight: 0.5 }, tm);
     // 公共交通の乗客数（バス、鉄道、高架鉄道、モノレール、地下鉄の順に N マスずつ）
@@ -1066,7 +1145,8 @@ export class World {
     this.transitRiders = Math.round(rc.modes.transit + rs.modes.transit);
     const tot = Math.max(1, rc.modes.car + rc.modes.transit + rc.modes.walk);
     this.modeShare = { car: rc.modes.car / tot, transit: rc.modes.transit / tot, walk: rc.modes.walk / tot };
-    const rf = assignTrips(g, [...trucks.values()], new Map(), cong, junctions, rnd, { externalCap: 1e9, externalOnly: true, carOnly: true, maxMinutes: 90, weight: 2.5 });
+    // 貨物：隣の都市（道路・高速道路）、港、貨物駅のうち近いところへ
+    const rf = assignTrips(g, [...trucks.values()], freightAt, cong, junctions, rnd, { externalCap: 1e9, externalOnly: freightAt.size === 0, carOnly: true, maxMinutes: 90, weight: 2.5 });
     // 交通量と混雑度（前の月と平均してなめらかにする）
     for (let v = 0; v < 2 * N; v++) {
       const t = g.nodeType(v);
@@ -1129,6 +1209,8 @@ export class World {
   }
   junctionCtl: Uint8Array = new Uint8Array(0);
   transitRiders = 0; // 1日の公共交通の乗客数
+  private airportBoost = 0;
+  private seaportBoost = 0;
   modeShare = { car: 0, transit: 0, walk: 0 };
   static readonly CTL_AUTO = Ctl.Auto;
   tripStats = { shopping: 0, freight: 0, trucks: 0 };
@@ -1173,6 +1255,10 @@ export class World {
       raw[k] = want[k] > 0 ? (want[k] - capK[k]) / Math.max(60, want[k] * 0.5) : -0.3;
       raw[k] += unemployment * 1.2;
     }
+    // 空港と港
+    for (const k of ['CS2', 'CS3', 'CO2', 'CO3'] as const) raw[k] += this.airportBoost;
+    raw.CS1 += this.airportBoost * 0.5;
+    for (const k of ['ID', 'IM'] as const) raw[k] += this.seaportBoost;
     raw.R1 -= unemployment * 1.5;
     raw.R2 -= unemployment * 1.5;
     raw.R3 -= unemployment * 1.5;

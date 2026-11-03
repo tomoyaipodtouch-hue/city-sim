@@ -83,7 +83,12 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { tool: 'plop:mono_station', name: CIVIC.mono_station.name, note: yen(CIVIC.mono_station.cost) },
       { tool: 'line:sub', name: '地下鉄の線路', note: `${yen(LINES.sub.cost)}/マス` },
       { tool: 'plop:sub_station', name: CIVIC.sub_station.name, note: yen(CIVIC.sub_station.cost) },
-      { name: 'フェリー・空港・港・貨物駅', note: '今後追加', disabled: true },
+      { tool: 'plop:freight_st', name: CIVIC.freight_st.name, note: yen(CIVIC.freight_st.cost) },
+      { tool: 'plop:ferry_p', name: CIVIC.ferry_p.name, note: yen(CIVIC.ferry_p.cost) },
+      { tool: 'plop:ferry_c', name: CIVIC.ferry_c.name, note: yen(CIVIC.ferry_c.cost) },
+      { tool: 'plop:seaport', name: CIVIC.seaport.name, note: yen(CIVIC.seaport.cost) },
+      { tool: 'plop:airport_s', name: CIVIC.airport_s.name, note: yen(CIVIC.airport_s.cost) },
+      { tool: 'plop:airport_l', name: CIVIC.airport_l.name, note: yen(CIVIC.airport_l.cost) },
     ],
   },
   {

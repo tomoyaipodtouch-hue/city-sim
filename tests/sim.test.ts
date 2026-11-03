@@ -315,3 +315,48 @@ describe('stage 3a transit', () => {
     expect(s.transitRiders).toBeGreaterThan(20);
   });
 });
+
+describe('stage 3b water and air', () => {
+  // 西と東の陸地を、南北に流れる川（x=44..51）で分けたマップ
+  const island = () => {
+    const w = new World(96);
+    const V = 97;
+    for (let y = 0; y < V; y++) for (let x = 0; x < V; x++) w.g.heights[y * V + x] = x >= 44 && x <= 52 ? -4 : 8;
+    w.sandbox = true;
+    return w;
+  };
+  const ok = (w: World, c: Parameters<World['exec']>[0]) => {
+    const r = w.exec(c);
+    if (!r.ok) throw new Error(`${c.t}: ${r.msg}`);
+    return r;
+  };
+
+  it('car ferries connect land areas across water', { timeout: 60000 }, () => {
+    const w = island();
+    ok(w, { t: 'road', x0: 10, y0: 40, x1: 40, y1: 40, road: RoadType.Road });
+    ok(w, { t: 'road', x0: 56, y0: 40, x1: 86, y1: 40, road: RoadType.Road });
+    ok(w, { t: 'zone', x0: 10, y0: 41, x1: 38, y1: 44, zone: ZoneType.R, den: 0 });
+    ok(w, { t: 'zone', x0: 58, y0: 41, x1: 86, y1: 44, zone: ZoneType.I, den: 0 });
+    ok(w, { t: 'plop', id: 'ferry_c', x: 41, y: 38 });
+    ok(w, { t: 'plop', id: 'ferry_c', x: 54, y: 38 });
+    for (const x of [20, 70]) {
+      ok(w, { t: 'plop', id: 'coal', x, y: 37 });
+      ok(w, { t: 'plop', id: 'pump', x: x + 6, y: 38 });
+    }
+    for (let m = 0; m < 36; m++) for (let d = 0; d < 30; d++) w.stepDay();
+    const fb = [...w.buildings.values()].find((b) => b.type === 'ferry_c')!;
+    console.log(`ferry: pop=${w.stats.population} employed=${w.stats.employed} note=${fb.note}`);
+    expect(fb.note).toContain('航路 1 本');
+    expect(w.stats.employed).toBeGreaterThan(50);
+  });
+
+  it('a seaport on open water raises industrial demand and takes freight', () => {
+    const w = island();
+    ok(w, { t: 'road', x0: 10, y0: 40, x1: 40, y1: 40, road: RoadType.Road });
+    const before = w.exec({ t: 'plop', id: 'seaport', x: 40, y: 42 });
+    expect(before.ok, before.msg).toBe(true);
+    for (let m = 0; m < 2; m++) for (let d = 0; d < 30; d++) w.stepDay();
+    const port = [...w.buildings.values()].find((b) => b.type === 'seaport')!;
+    expect(port.note).toContain('外洋');
+  });
+});

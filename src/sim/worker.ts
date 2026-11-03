@@ -86,6 +86,8 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     }
   } catch (err) {
     post({ t: 'error', msg: String((err as Error)?.stack || err) });
+    // コマンドの途中で失敗した場合も、画面側が返事を待ち続けないようにする
+    if (m.t === 'cmd') post({ t: 'result', req: m.req, res: { ok: false, msg: 'エラーが発生しました' } });
   }
 };
 

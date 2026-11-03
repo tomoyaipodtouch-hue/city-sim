@@ -119,6 +119,12 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     case 'el_station': station(mb, f, 8); break;
     case 'mono_station': station(mb, f, 11); break;
     case 'sub_station': subwayEntrance(mb, f); break;
+    case 'ferry_p': ferryTerminal(mb, f, false); break;
+    case 'ferry_c': ferryTerminal(mb, f, true); break;
+    case 'seaport': seaport(mb, f, rng); break;
+    case 'airport_s': airport(mb, f, rng, 1); break;
+    case 'airport_l': airport(mb, f, rng, 2); break;
+    case 'freight_st': freightStation(mb, f, rng); break;
   }
   mb.abandoned = false;
 }
@@ -621,4 +627,94 @@ function subwayEntrance(mb: MeshBuilder, f: LotFrame) {
   for (const [x, z] of [[-2.3, -3], [2.3, -3], [-2.3, 1.4], [2.3, 1.4]]) mb.box(x - 0.08, 0, z - 0.08, x + 0.08, 2.6, z + 0.08, PALETTE.steel);
   mb.box(3.2, 0, 3, 3.45, 3.6, 3.25, PALETTE.steel);
   mb.box(2.9, 3.6, 2.9, 3.75, 4.5, 3.35, PALETTE.accent[0]);
+}
+
+// ---------------- 水運と空 ----------------
+// 小さな船（docked = 停泊中）
+export function boat(mb: MeshBuilder, x: number, z: number, len: number, wid: number, car: boolean, y = -0.2) {
+  mb.box(x - wid / 2, y - 1, z - len / 2, x + wid / 2, y + 1.6, z + len / 2, PALETTE.white);
+  mb.box(x - wid / 2 + 0.2, y + 1.6, z - len / 2 + 0.6, x + wid / 2 - 0.2, y + 1.75, z + len / 2 - 0.6, car ? PALETTE.dark : PALETTE.pavement);
+  mb.box(x - wid / 2 + 0.6, y + 1.6, z - len / 4, x + wid / 2 - 0.6, y + (car ? 5 : 4), z + len / 6, PALETTE.white, PAT.apartment);
+  mb.box(x - wid / 2 + 0.1, y + 0.6, z - len / 2, x + wid / 2 - 0.1, y + 1.0, z + len / 2, PALETTE.accent[2]);
+}
+
+function ferryTerminal(mb: MeshBuilder, f: LotFrame, car: boolean) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.09, car ? PALETTE.asphalt : PALETTE.pavement);
+  // 待合所（道路側）
+  mb.box(-f.W / 2 + 2, 0, 1, f.W / 2 - 2, car ? 6 : 5, f.D / 2 - 2, PALETTE.white, PAT.shop, PALETTE.roof[3]);
+  mb.box(-3, 4, f.D / 2 - 2, 3, 4.8, f.D / 2 - 1.8, PALETTE.accent[2]);
+  // 桟橋（水側に張り出す）
+  const pw = car ? 6 : 3;
+  mb.box(-pw / 2, -3, -f.D / 2 - 14, pw / 2, 0.4, -f.D / 2 + 1, PALETTE.concrete);
+  for (const z of [-f.D / 2 - 12, -f.D / 2 - 6]) for (const x of [-pw / 2, pw / 2]) mb.box(x - 0.3, -6, z - 0.3, x + 0.3, 0.4, z + 0.3, PALETTE.concrete);
+  if (car) for (let x = -f.W / 2 + 2; x < f.W / 2 - 2; x += 2.8) mb.ground(x, -f.D / 2 + 1, x + 0.15, 0, 0.12, PALETTE.white);
+}
+
+function seaport(mb: MeshBuilder, f: LotFrame, rng: Rng) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.concrete);
+  // 岸壁（水側）
+  mb.box(-f.W / 2, -4, -f.D / 2 - 4, f.W / 2, 0.3, -f.D / 2 + 0.5, PALETTE.concrete);
+  // コンテナの山
+  const cols = [0xc0392b, 0x2e6da4, 0xd9a400, 0x4c7a3b, 0x7f8c8d, 0xd35400].map((h) => new THREE.Color(h));
+  for (let row = 0; row < 4; row++)
+    for (let k = 0; k < 6; k++) {
+      const x = -f.W / 2 + 6 + k * 8, z = -6 + row * 5;
+      const hgt = 1 + rng.int(3);
+      for (let lv = 0; lv < hgt; lv++) mb.box(x, lv * 2.6, z, x + 6, lv * 2.6 + 2.5, z + 2.4, rng.pick(cols));
+    }
+  // 岸壁クレーン（ガントリークレーン）2基
+  for (const cx of [-f.W / 4, f.W / 4]) {
+    for (const x of [cx - 5, cx + 5]) for (const z of [-f.D / 2 + 1, -f.D / 2 + 9]) mb.box(x - 0.5, 0, z - 0.5, x + 0.5, 26, z + 0.5, PALETTE.accent[0]);
+    mb.box(cx - 6, 26, -f.D / 2 - 18, cx + 6, 28.5, -f.D / 2 + 12, PALETTE.accent[0]);
+  }
+  // 倉庫
+  mb.box(-f.W / 2 + 3, 0, f.D / 2 - 14, f.W / 2 - 3, 9, f.D / 2 - 3, PALETTE.indWall[1], PAT.dock, PALETTE.steel);
+  // 停泊中の貨物船
+  mb.box(-f.W / 2 + 4, -2, -f.D / 2 - 14, f.W / 2 - 4, 3, -f.D / 2 - 5, PALETTE.dark);
+  for (let k = 0; k < 5; k++) mb.box(-f.W / 2 + 6 + k * 9, 3, -f.D / 2 - 13, -f.W / 2 + 13 + k * 9, 5.5, -f.D / 2 - 6, rng.pick(cols));
+  mb.box(f.W / 2 - 10, 3, -f.D / 2 - 13, f.W / 2 - 5, 12, -f.D / 2 - 6, PALETTE.white, PAT.apartment);
+}
+
+// 飛行機（停まっているもの）
+export function plane(mb: MeshBuilder, x: number, z: number, s: number, y = 0) {
+  mb.cylinder(x, z, y + 2.2 * s, y + 2.2 * s + 0.01, 0.01, 4, PALETTE.white);
+  mb.box(x - 1.6 * s, y + 1.2 * s, z - 14 * s, x + 1.6 * s, y + 4.2 * s, z + 14 * s, PALETTE.white);
+  mb.box(x - 14 * s, y + 2.0 * s, z - 2 * s, x + 14 * s, y + 2.5 * s, z + 3 * s, PALETTE.white);
+  mb.box(x - 5 * s, y + 3.0 * s, z - 14 * s, x + 5 * s, y + 3.4 * s, z - 11 * s, PALETTE.white);
+  mb.box(x - 0.2 * s, y + 4.2 * s, z - 14 * s, x + 0.2 * s, y + 9 * s, z - 10.5 * s, PALETTE.accent[2]);
+  for (const sx of [-6, 6]) mb.box(x + sx * s - 0.9 * s, y + 0.6 * s, z - 1 * s, x + sx * s + 0.9 * s, y + 2.1 * s, z + 3 * s, PALETTE.steel);
+}
+
+function airport(mb: MeshBuilder, f: LotFrame, rng: Rng, size: number) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.06, PALETTE.lawn2);
+  // 滑走路（奥行き方向）と中心線
+  const rw = size === 2 ? 22 : 16;
+  const rx = -f.W / 2 + rw / 2 + 4;
+  mb.ground(rx - rw / 2, -f.D / 2 + 3, rx + rw / 2, f.D / 2 - 3, 0.1, PALETTE.asphalt);
+  for (let z = -f.D / 2 + 8; z < f.D / 2 - 8; z += 12) mb.ground(rx - 0.4, z, rx + 0.4, z + 6, 0.14, PALETTE.white);
+  for (const z of [-f.D / 2 + 4, f.D / 2 - 9]) for (let k = -3; k <= 3; k++) if (k) mb.ground(rx + k * (rw / 8) - 0.5, z, rx + k * (rw / 8) + 0.5, z + 5, 0.14, PALETTE.white);
+  // 誘導路とエプロン
+  const ax0 = rx + rw / 2 + 4, ax1 = f.W / 2 - 2;
+  mb.ground(rx + rw / 2, -f.D / 4, ax0, -f.D / 4 + 8, 0.1, PALETTE.asphalt);
+  mb.ground(ax0, -f.D / 2 + 10, ax1, f.D / 2 - 30, 0.1, PALETTE.pavement);
+  // ターミナルと管制塔（道路側）
+  mb.box(ax0, 0, f.D / 2 - 28, ax1, size === 2 ? 14 : 9, f.D / 2 - 4, PALETTE.white, PAT.office, PALETTE.steel);
+  mb.cylinder(ax1 - 6, f.D / 2 - 34, 0, size === 2 ? 34 : 24, 2, 10, PALETTE.white);
+  mb.box(ax1 - 9, size === 2 ? 34 : 24, f.D / 2 - 37, ax1 - 3, (size === 2 ? 34 : 24) + 4, f.D / 2 - 31, PALETTE.glass);
+  // 停まっている飛行機
+  const n = size === 2 ? 3 : 1;
+  for (let k = 0; k < n; k++) plane(mb, (ax0 + ax1) / 2, -f.D / 2 + 26 + k * 34, size === 2 ? 1.0 : 0.7);
+  void rng;
+}
+
+function freightStation(mb: MeshBuilder, f: LotFrame, rng: Rng) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.concrete);
+  // 側線
+  for (const z of [-f.D / 2 + 3, -f.D / 2 + 7]) mb.ground(-f.W / 2 + 0.5, z - 1.2, f.W / 2 - 0.5, z + 1.2, 0.12, PALETTE.dirt);
+  const cols = [0xc0392b, 0x2e6da4, 0xd9a400, 0x4c7a3b].map((h) => new THREE.Color(h));
+  for (let k = 0; k < 6; k++) mb.box(-f.W / 2 + 3 + k * 7.5, 0, 2, -f.W / 2 + 9 + k * 7.5, 2.5 * (1 + rng.int(2)), 4.4, rng.pick(cols));
+  // 門型クレーン
+  for (const x of [-f.W / 2 + 4, f.W / 2 - 4]) for (const z of [-f.D / 2 + 1, 6]) mb.box(x - 0.4, 0, z - 0.4, x + 0.4, 12, z + 0.4, PALETTE.accent[3]);
+  mb.box(-f.W / 2 + 3.5, 12, -f.D / 2 + 0.5, f.W / 2 - 3.5, 13.5, 6.5, PALETTE.accent[3]);
+  mb.box(-6, 0, 8, 6, 5, f.D / 2 - 1.5, PALETTE.indWall[0], PAT.dock, PALETTE.steel);
 }
