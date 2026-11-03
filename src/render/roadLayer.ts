@@ -22,6 +22,8 @@ const COL = {
   concrete: new THREE.Color(0xb3afa6),
   signal: new THREE.Color(0x3a3d40),
   island: new THREE.Color(0x5f8f44),
+  glass: new THREE.Color(0x8fb4c9),
+  busSign: new THREE.Color(0x2f86d0),
   asphalt: new THREE.Color(0x55585c),
   asphaltHw: new THREE.Color(0x4a4d51),
   asphaltStreet: new THREE.Color(0x5e6064),
@@ -391,6 +393,33 @@ export class RoadLayer {
       const k = arms.length;
       const ctl = level === 0 && this.jctl.length === NC ? this.jctl[i] : 0;
       const asph = t === RoadType.Street ? COL.asphaltStreet : isHighway(t) ? COL.asphaltHw : COL.asphalt;
+
+      // バス停：歩道に待合所、車道の端に停車スペースの印
+      if (level === 0 && g.bstop[i] && arms.length) {
+        const a0 = arms.find((q) => !isDiag(q.d)) ?? arms[0];
+        const ux = a0.ux, uz = a0.uz, px = -uz, pz = ux;
+        const hw = w / 2, so = hw + Math.max(sw, 1.2) * 0.55;
+        const at = (s2: number, o: number): [number, number] => [cx + ux * s2 + px * o, cz + uz * s2 + pz * o];
+        // 停車スペース（黄色の枠）
+        const box: [number, number][] = [at(-4.5, hw - 2.8), at(4.5, hw - 2.8), at(4.5, hw - 0.4), at(-4.5, hw - 0.4)];
+        for (let e = 0; e < 4; e++) {
+          const [x0, z0] = box[e], [x1, z1] = box[(e + 1) % 4];
+          line([{ x: x0, z: z0, h: ch, hw: 0, sw: 0, t }, { x: x1, z: z1, h: ch, hw: 0, sw: 0, t }], () => 0, COL.yellow, 0.18);
+        }
+        // 待合所
+        const [sx, sz] = at(0, so);
+        const y0 = ch + 0.16;
+        for (const s2 of [-1.4, 1.4]) {
+          const [qx, qz] = at(s2, so + 0.5);
+          O.box(qx - 0.06, y0, qz - 0.06, qx + 0.06, y0 + 2.5, qz + 0.06, COL.signal);
+        }
+        const [bx0, bz0] = at(-1.5, so + 0.55), [bx1, bz1] = at(1.5, so + 0.55);
+        O.wall(bx0, bz0, y0, y0 + 2.3, bx1, bz1, y0, y0 + 2.3, COL.glass);
+        O.box(Math.min(sx - 1.6, sx + 1.6), y0 + 2.5, Math.min(sz - 1.6, sz + 1.6), Math.max(sx - 1.6, sx + 1.6), y0 + 2.65, Math.max(sz - 1.6, sz + 1.6), COL.signal);
+        const [gx, gz] = at(2.4, so - 0.2);
+        O.box(gx - 0.05, y0, gz - 0.05, gx + 0.05, y0 + 2.8, gz + 0.05, COL.signal);
+        O.box(gx - 0.35, y0 + 2.3, gz - 0.35, gx + 0.35, y0 + 3.0, gz + 0.35, COL.busSign);
+      }
 
       if (k === 0) {
         disc(cx, cz, ch, w / 2, asph);

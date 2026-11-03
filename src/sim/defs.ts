@@ -151,6 +151,8 @@ export const LINES: Record<LineKind, LineDef> = {
   sub: { kind: 'sub', name: '地下鉄', speedKmh: 55, cost: 200, upkeep: 1.2, lift: -9, wait: 3 },
 };
 export const BUS_WAIT = 5; // バスの平均の待ち時間（分）
+export const BUS_STOP_COST = 150;
+export const BUS_STOP_UPKEEP = 15;
 export const FARE = 1.0; // 1日の乗客1人あたりの、月の運賃収入
 
 export type CivicId = 'coal' | 'gas' | 'pump' | 'tower' | 'park_s' | 'park_l' | 'plaza' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station';

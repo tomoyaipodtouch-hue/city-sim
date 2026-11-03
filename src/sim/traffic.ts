@@ -300,8 +300,8 @@ export function assignTrips(
     if (remaining <= 0) continue;
     if (totalFree <= 0) {
       for (const b of o.buildings) {
-        served.set(b.id, 0);
-        time.set(b.id, 0);
+        if (!served.has(b.id)) served.set(b.id, 0);
+        if (!time.has(b.id)) time.set(b.id, 0);
       }
       continue;
     }
@@ -412,15 +412,21 @@ export function assignTrips(
       const exits = T.lineToWalk.get(u);
       if (exits) for (const wn of exits) relax(wn, t + 0.5, u, -1);
     }
-    // 建物ごとに配分
+    // 建物ごとに配分（同じ建物が複数の出発グループに入ることがあるので足し合わせる）
     const ratio = o.trips > 0 ? got / o.trips : 0;
     const avg = got > 0 ? timeAcc / got : 0;
     for (const b of o.buildings) {
-      served.set(b.id, b.trips * ratio);
-      time.set(b.id, avg);
+      const k = b.trips * ratio;
+      served.set(b.id, (served.get(b.id) || 0) + k);
+      time.set(b.id, (time.get(b.id) || 0) + k * avg);
     }
     sumTime += timeAcc;
     sumTrips += got;
+  }
+  // 所要時間は、人数で重みをつけた平均にする
+  for (const [id, sum] of time) {
+    const k = served.get(id) || 0;
+    time.set(id, k > 0 ? sum / k : 0);
   }
   return { volume, served, time, filled, external, avgTime: sumTrips ? sumTime / sumTrips : 0, modes };
 }

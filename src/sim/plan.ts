@@ -1,7 +1,7 @@
 // ツールの計画（プレビューと実行の両方で使う）
 import { Grid } from './grid';
 import { DX, DY, MAX_ROAD_GRADE, CELL, WATER_LEVEL, dirOf, isDiag, opp } from './constants';
-import { ROADS, RoadType, ZoneType, ZONE_COST, POWER_LINE_COST, CIVIC, CivicId, BRIDGE_COST_MUL, MAX_BRIDGE, OVERPASS_LIFT, RAMP_COST, isHighway, LINES, LineKind } from './defs';
+import { ROADS, RoadType, ZoneType, ZONE_COST, POWER_LINE_COST, CIVIC, CivicId, BRIDGE_COST_MUL, MAX_BRIDGE, OVERPASS_LIFT, RAMP_COST, isHighway, LINES, LineKind, BUS_STOP_COST } from './defs';
 
 export interface LinePath {
   cells: number[]; // マスの番号
@@ -1176,4 +1176,22 @@ export function removeTransitAt(g: Grid, i: number) {
     }
     mask[i] = 0;
   }
+}
+
+// ---- バス停（道路に重ねて置く） ----
+export interface BusStopPlan {
+  ok: boolean;
+  cell: number;
+  remove: boolean; // すでにあるバス停を外す
+  reason: string;
+  cost: number;
+}
+export function planBusStop(g: Grid, x: number, y: number): BusStopPlan {
+  const fail = (reason: string): BusStopPlan => ({ ok: false, cell: -1, remove: false, reason, cost: 0 });
+  if (!g.inb(x, y)) return fail('マップの外です');
+  const i = g.idx(x, y);
+  if (g.bstop[i]) return { ok: true, cell: i, remove: true, reason: '', cost: 0 };
+  const t = g.road[i];
+  if (!t || isHighway(t) || t === RoadType.Ramp) return fail('一般の道路の上に置いてください');
+  return { ok: true, cell: i, remove: false, reason: '', cost: BUS_STOP_COST };
 }

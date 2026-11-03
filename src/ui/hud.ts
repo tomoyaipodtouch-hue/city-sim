@@ -411,6 +411,7 @@ export class Hud {
         rows.push([`${pre}混雑度`, `${Math.round(ratio * 100)}%${meter(ratio, ratio > 1 ? 'var(--bad)' : ratio > 0.7 ? 'var(--warn)' : 'var(--good)')}`]);
       }
       rows.push(['制限速度', levels.map(([t]) => `${ROADS[t].speedKmh} km/h`).join(' ／ ')]);
+      if (g.bstop[i]) rows.push(['バス停', m ? `あり（バスの乗客 ${num(m.riders[i])} 人/日）` : 'あり']);
       if (m && m.jctl[i]) rows.push(['交差点', CTL_NAMES[m.jctl[i]] + (g.ictl[i] === 0 ? '（自動）' : '')]);
     } else if (g.rail[i] || g.erail[i] || g.mono[i]) {
       const kinds = (['rail', 'erail', 'mono'] as const).filter((k) => g[k][i]);

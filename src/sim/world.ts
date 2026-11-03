@@ -3,12 +3,12 @@ import { Grid, GRID_U8, GRID_F32, Ctl } from './grid';
 import { Rng } from './rng';
 import { DAYS_PER_MONTH, DX, DY } from './constants';
 import {
-  CIVIC, CivicId, DEFAULT_TAX, DIFFICULTY, isHighway, LineKind, LINES, FARE, GROW, GROW_KINDS, GrowKind, IND_DENSITY_MUL, maxFloorsFor, POWER_LINE_UPKEEP, ROADS, RoadType,
+  CIVIC, CivicId, DEFAULT_TAX, DIFFICULTY, isHighway, LineKind, LINES, FARE, BUS_STOP_UPKEEP, GROW, GROW_KINDS, GrowKind, IND_DENSITY_MUL, maxFloorsFor, POWER_LINE_UPKEEP, ROADS, RoadType,
   ZONE_KINDS, ZoneType,
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
 import {
-  applyCloverleaf, applyDiamond, applyRamp, applyTransitLine, hasSurfaceLine, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
+  applyCloverleaf, applyDiamond, applyRamp, applyTransitLine, hasSurfaceLine, planBusStop, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
 } from './plan';
 import { assignTrips, buildJunctions, buildTransitModel, congestionFactor, Destination, LAYER, Origin } from './traffic';
 
@@ -135,6 +135,7 @@ export type Command =
   | { t: 'diamond'; x: number; y: number }
   | { t: 'clover'; x: number; y: number }
   | { t: 'transit'; x0: number; y0: number; x1: number; y1: number; kind: LineKind }
+  | { t: 'busstop'; x: number; y: number }
   | { t: 'junction'; cell: number; ctl: number; split: number; flags: number };
 
 const emptyKinds = (v: number) => Object.fromEntries(GROW_KINDS.map((k) => [k, v])) as Record<GrowKind, number>;
@@ -384,6 +385,19 @@ export class World {
         this.afterGridChange();
         return { ok: true, cost: plan.cost };
       }
+      case 'busstop': {
+        const plan = planBusStop(g, c.x, c.y);
+        if (!plan.ok) return { ok: false, msg: plan.reason };
+        if (plan.remove) {
+          g.bstop[plan.cell] = 0;
+          this.afterGridChange();
+          return { ok: true, msg: 'バス停を外しました' };
+        }
+        if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
+        g.bstop[plan.cell] = 1;
+        this.afterGridChange();
+        return { ok: true, cost: plan.cost };
+      }
       case 'transit': {
         const path = planLine(g, c.x0, c.y0, c.x1, c.y1);
         const plan = planTransitLine(g, path, c.kind);
@@ -449,6 +463,7 @@ export class World {
     g.conn[i] = 0;
     g.flow[i] = 0;
     g.deck[i] = 0;
+    g.bstop[i] = 0;
     g.up[i] = 0;
     g.conn1[i] = 0;
     g.flow1[i] = 0;
@@ -976,8 +991,9 @@ export class World {
     const trucks = new Map<number, Origin>();
     const jobsAt = new Map<number, Destination[]>();
     const shopsAt = new Map<number, Destination[]>();
-    // 所得が低いほど車を持たない人が多い（車を使うときの追加時間で表す）
-    const CAR_PENALTY: Record<string, number> = { R1: 4, R2: 1.5, R3: 0 };
+    // 車を持たない人の割合（所得が低いほど多い）。車を持たない人は、公共交通か徒歩しか使えない
+    const NO_CAR: Record<string, number> = { R1: 0.4, R2: 0.15, R3: 0.05 };
+    const NO_CAR_PENALTY = 999;
     const addOrigin = (m: Map<number, Origin>, cell: number, id: number, trips: number, carPenalty = 0) => {
       const key = cell * 4 + Math.round(carPenalty);
       let o = m.get(key);
@@ -999,9 +1015,12 @@ export class World {
       if (!acc.length) continue;
       const cell = acc[b.seed % acc.length];
       if (def.zone === ZoneType.R) {
-        const cp = CAR_PENALTY[b.type] ?? 0;
-        addOrigin(commuters, cell, b.id, Math.round(b.occ * 0.5), cp);
-        addOrigin(shoppers, cell, b.id, Math.round(b.occ * 0.2), cp);
+        const f = NO_CAR[b.type] ?? 0;
+        const workers = b.occ * 0.5, shop = b.occ * 0.2;
+        addOrigin(commuters, cell, b.id, Math.round(workers * (1 - f)), 0);
+        addOrigin(commuters, cell, b.id, Math.round(workers * f), NO_CAR_PENALTY);
+        addOrigin(shoppers, cell, b.id, Math.round(shop * (1 - f)), 0);
+        addOrigin(shoppers, cell, b.id, Math.round(shop * f), NO_CAR_PENALTY);
       } else {
         addDest(jobsAt, acc, { id: b.id, free: b.cap });
         if (b.type === 'CS1' || b.type === 'CS2' || b.type === 'CS3') addDest(shopsAt, acc, { id: b.id, free: b.cap * 6 });
@@ -1031,6 +1050,10 @@ export class World {
       }
       stations.push({ kind: def.transit, roadCells, lineCells });
     }
+    // 道路に重ねたバス停
+    const roadStops: number[] = [];
+    for (let i = 0; i < N; i++) if (g.bstop[i] && g.road[i]) roadStops.push(i);
+    if (roadStops.length) stations.push({ kind: 'bus', roadCells: roadStops, lineCells: [] });
     const tm = buildTransitModel(g, stations);
     const rc = assignTrips(g, [...commuters.values()], jobsAt, cong, junctions, rnd, { externalCap: external, maxMinutes: 80, weight: 1 }, tm);
     const rs = assignTrips(g, [...shoppers.values()], shopsAt, cong, junctions, rnd, { externalCap: this.neighborConnected ? pop * 0.03 : 0, maxMinutes: 30, weight: 0.5 }, tm);
@@ -1221,6 +1244,7 @@ export class World {
       if (g.road[i]) exp.道路 += ROADS[g.road[i]].upkeep;
       if (g.up[i]) exp.道路 += ROADS[g.up[i]].upkeep;
       for (const k of ['rail', 'erail', 'mono', 'sub'] as const) if (g[k][i]) exp.公共交通 += LINES[k].upkeep;
+      if (g.bstop[i]) exp.公共交通 += BUS_STOP_UPKEEP;
       if (g.pline[i]) exp.電力 += POWER_LINE_UPKEEP;
     }
     let income = 0, expense = 0;
