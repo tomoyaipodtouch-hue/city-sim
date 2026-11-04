@@ -24,6 +24,7 @@
   --tool: 58px;
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 html, body {
   margin: 0; height: 100%; overflow: hidden; background: #0f151c; color: var(--fg);
   font-family: "M PLUS 1", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
@@ -234,3 +235,6 @@ button:disabled { opacity: 0.38; cursor: default; }
 #demo-band { position: fixed; left: 0; right: 0; top: 0; height: calc(var(--st) + 7px); z-index: 30; pointer-events: none;
   background: repeating-linear-gradient(-45deg, #f2c200 0 12px, #1a1a1a 12px 24px); box-shadow: 0 1px 4px rgba(0,0,0,0.4); display: none; }
 #demo-band.on { display: block; }
+
+/* メニューの中の文字は、すべてタブ（予算など）と同じ大きさにする */
+.sheet-b, .sheet-b * { font-size: var(--fs-m) !important; }
