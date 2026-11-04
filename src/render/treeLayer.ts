@@ -6,7 +6,7 @@ import { CELL } from '../sim/constants';
 import { hash2 } from '../sim/rng';
 import type { TreeSpot } from './buildingGen';
 
-const MAX_TREES = 24000;
+const MAX_TREES = 64000;
 
 function colored(geo: THREE.BufferGeometry, color: number) {
   const c = new THREE.Color(color);
@@ -83,56 +83,56 @@ function coniferGeo() {
   return mergeGeometries([trunk.toNonIndexed(), ...tiers])!;
 }
 
+// 木は 24×24 マスの区画ごとに分けて描く（画面の外の区画は描かない）。
+// 遠くから見るときは、形を簡単にし、本数を間引く
+const CHUNK = 24;
+
 export class TreeLayer {
   group = new THREE.Group();
-  private meshes: THREE.InstancedMesh[];
   private near = [broadleafGeo(), coniferGeo()];
   private far = [broadleafFar(), coniferFar()];
+  private mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  private chunks: { meshes: THREE.InstancedMesh[]; totals: number[] }[] = [];
   private lodFar = false;
+  private keep = 1;
+  private shadows = true;
 
-  // ズームに合わせて、木の形の細かさを切り替える
+  // ズームに合わせて、木の形の細かさと本数を切り替える
   setLod(dist: number) {
-    const far = dist > 900;
-    if (far === this.lodFar) return;
+    const far = dist > 450;
+    const keep = dist > 2600 ? 0.1 : dist > 1800 ? 0.16 : dist > 1100 ? 0.3 : dist > 700 ? 0.55 : 1;
+    const shadows = dist < 600;
+    if (far === this.lodFar && keep === this.keep && shadows === this.shadows) return;
     this.lodFar = far;
-    this.meshes.forEach((m, k) => (m.geometry = (far ? this.far : this.near)[k]));
-  }
-
-  constructor() {
-    const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
-    this.meshes = this.near.map((g) => {
-      const m = new THREE.InstancedMesh(g, mat, MAX_TREES);
-      m.castShadow = true;
-      m.receiveShadow = true;
-      m.count = 0;
-      m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-      m.setColorAt(0, new THREE.Color());
-      m.frustumCulled = false;
-      this.group.add(m);
-      return m;
-    });
+    this.keep = keep;
+    this.shadows = shadows;
+    for (const c of this.chunks)
+      c.meshes.forEach((m, k) => {
+        m.geometry = (far ? this.far : this.near)[k];
+        m.count = Math.ceil(c.totals[k] * keep);
+        m.castShadow = shadows;
+      });
   }
 
   rebuild(g: Grid, extra: TreeSpot[]) {
     const n = g.n;
-    const counts = [0, 0];
+    for (const c of this.chunks) for (const m of c.meshes) { this.group.remove(m); m.dispose(); }
+    this.chunks = [];
+    const cn = Math.ceil(n / CHUNK);
+    // 区画ごとに [種類][行列とシード]
+    const lists: { m: number[]; seed: number[] }[][] = Array.from({ length: cn * cn }, () => [{ m: [], seed: [] }, { m: [], seed: [] }]);
     const mtx = new THREE.Matrix4();
     const q = new THREE.Quaternion();
     const up = new THREE.Vector3(0, 1, 0);
-    const col = new THREE.Color();
-    // 広葉樹は明るい緑から黄緑、少しだけ赤みのある木も。針葉樹は濃い緑
-    const greens = [0x4f7a32, 0x5d8a3a, 0x3f6b2b, 0x6a9443, 0x56803a, 0x7a9a3c, 0x4a7040, 0x8a9a44, 0x5e7f2f, 0x6f8a36].map((c) => new THREE.Color(c));
-    const darkGreens = [0x2f5a32, 0x3a6338, 0x2c4f2e, 0x355c3c, 0x41663a].map((c) => new THREE.Color(c));
+    const v = new THREE.Vector3(), sc = new THREE.Vector3();
     const put = (kind: number, x: number, y: number, z: number, s: number, seed: number) => {
-      const m = this.meshes[kind];
-      const k = counts[kind];
-      if (k >= MAX_TREES) return;
+      const cx = Math.min(cn - 1, Math.max(0, Math.floor(x / CELL / CHUNK))), cz = Math.min(cn - 1, Math.max(0, Math.floor(z / CELL / CHUNK)));
+      const L = lists[cz * cn + cx][kind];
+      if (L.seed.length >= MAX_TREES) return;
       q.setFromAxisAngle(up, seed * 6.28);
-      mtx.compose(new THREE.Vector3(x, y, z), q, new THREE.Vector3(s, s * (0.85 + seed * 0.3), s));
-      m.setMatrixAt(k, mtx);
-      col.copy(kind === 0 ? greens[Math.floor(seed * 97) % greens.length] : darkGreens[Math.floor(seed * 89) % darkGreens.length]);
-      m.setColorAt(k, col);
-      counts[kind]++;
+      mtx.compose(v.set(x, y, z), q, sc.set(s, s * (0.85 + seed * 0.3), s));
+      L.m.push(...mtx.elements);
+      L.seed.push(seed);
     };
     for (let y = 0; y < n; y++)
       for (let x = 0; x < n; x++) {
@@ -150,10 +150,36 @@ export class TreeLayer {
         }
       }
     for (const t of extra) put(t.kind, t.x, t.y, t.z, t.s, hash2(Math.floor(t.x), Math.floor(t.z), 4));
-    this.meshes.forEach((m, k) => {
-      m.count = counts[k];
-      m.instanceMatrix.needsUpdate = true;
-      if (m.instanceColor) m.instanceColor.needsUpdate = true;
-    });
+    // 広葉樹は明るい緑から黄緑、針葉樹は濃い緑
+    const greens = [0x4f7a32, 0x5d8a3a, 0x3f6b2b, 0x6a9443, 0x56803a, 0x7a9a3c, 0x4a7040, 0x8a9a44, 0x5e7f2f, 0x6f8a36].map((c) => new THREE.Color(c));
+    const darkGreens = [0x2f5a32, 0x3a6338, 0x2c4f2e, 0x355c3c, 0x41663a].map((c) => new THREE.Color(c));
+    const col = new THREE.Color();
+    for (const L of lists) {
+      if (!L[0].seed.length && !L[1].seed.length) continue;
+      const meshes: THREE.InstancedMesh[] = [];
+      const totals: number[] = [];
+      L.forEach((list, kind) => {
+        const cnt = list.seed.length;
+        const m = new THREE.InstancedMesh((this.lodFar ? this.far : this.near)[kind], this.mat, Math.max(1, cnt));
+        // 間引くときに場所が偏らないよう、並びを混ぜる（シードの順）
+        const order = list.seed.map((_, k) => k).sort((a2, b2) => ((list.seed[a2] * 7919) % 1) - ((list.seed[b2] * 7919) % 1));
+        order.forEach((src, k) => {
+          mtx.fromArray(list.m, src * 16);
+          m.setMatrixAt(k, mtx);
+          const sd = list.seed[src];
+          col.copy(kind === 0 ? greens[Math.floor(sd * 97) % greens.length] : darkGreens[Math.floor(sd * 89) % darkGreens.length]);
+          m.setColorAt(k, col);
+        });
+        m.computeBoundingSphere();
+        if (m.boundingSphere) m.boundingSphere.radius += 12;
+        m.count = Math.ceil(cnt * this.keep);
+        m.castShadow = this.shadows;
+        m.receiveShadow = true;
+        this.group.add(m);
+        meshes.push(m);
+        totals.push(cnt);
+      });
+      this.chunks.push({ meshes, totals });
+    }
   }
 }

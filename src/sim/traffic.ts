@@ -251,6 +251,8 @@ export interface RoadGraph {
   min: Float32Array; // 道路の移動時間（分）
   jslot: Int32Array; // 交差点のマス → 待ち時間の表の番号（-1 = 交差点ではない）
   jdel: Float32Array; // [slot*64 + 入ってきた向き*8 + 出ていく向き] の待ち時間（-1 = 通れない）
+  edge: Uint8Array; // マップの端のマス
+  extPen: Float32Array; // 隣の都市へ出るときの時間（ノードごと）
 }
 
 export function buildRoadGraph(g: Grid, congestion: Float32Array, junctions: JunctionModel): RoadGraph {
@@ -273,7 +275,11 @@ export function buildRoadGraph(g: Grid, congestion: Float32Array, junctions: Jun
   const jdel = new Float32Array(cells.length * 64);
   for (let k = 0; k < cells.length; k++)
     for (let din = 0; din < 8; din++) for (let dout = 0; dout < 8; dout++) jdel[k * 64 + din * 8 + dout] = junctionDelay(g, junctions, cells[k], din, dout);
-  return { off, to: Int32Array.from(tmpTo), dir: Int8Array.from(tmpDir), min: Float32Array.from(tmpMin), jslot, jdel };
+  const edge = new Uint8Array(N);
+  for (let k = 0; k < n; k++) edge[k] = edge[(n - 1) * n + k] = edge[k * n] = edge[k * n + n - 1] = 1;
+  const extPen = new Float32Array(M);
+  for (let v = 0; v < M; v++) extPen[v] = isHighway(g.nodeType(v)) ? 6 : 14;
+  return { off, to: Int32Array.from(tmpTo), dir: Int8Array.from(tmpDir), min: Float32Array.from(tmpMin), jslot, jdel, edge, extPen };
 }
 
 // 探索に使う作業用の配列（毎回作り直さない）
@@ -332,10 +338,7 @@ export function assignTrips(
     [order[i], order[j]] = [order[j], order[i]];
   }
 
-  const edge = new Uint8Array(N);
-  for (let i = 0; i < n; i++) edge[i] = edge[(n - 1) * n + i] = edge[i * n] = edge[i * n + n - 1] = 1;
-  const extPen = new Float32Array(2 * N);
-  for (let v = 0; v < 2 * N; v++) extPen[v] = isHighway(g.nodeType(v)) ? 6 : 14;
+  const { edge, extPen } = G;
   const lineMask = [null, null, null, null, g.rail, g.erail, g.mono, g.sub] as (Uint8Array | null)[];
   const lineMin = [0, 0, 0, 0, LINES.rail, LINES.erail, LINES.mono, LINES.sub].map((d) => (typeof d === 'number' ? 0 : CELL / ((d.speedKmh * 1000) / 60)));
   const lineWait = [0, 0, 0, 0, LINES.rail.wait, LINES.erail.wait, LINES.mono.wait, LINES.sub.wait];

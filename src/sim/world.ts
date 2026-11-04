@@ -186,6 +186,7 @@ export class World {
   // 変更の通知用
   gridVersion = 1;
   heightVersion = 1;
+  private waterCache: { v: number; w: ReturnType<typeof labelWater> } | null = null;
   buildingVersion = 1;
   mapsVersion = 1;
 
@@ -1190,7 +1191,9 @@ export class World {
     if (roadStops.length) stations.push({ kind: 'bus', roadCells: roadStops, lineCells: [] });
     const tm = buildTransitModel(g, stations);
     // ---- フェリー・港・貨物駅 ----
-    const water = labelWater(g);
+    // 水域の番号づけは、地形が変わったときだけやり直す
+    if (this.waterCache?.v !== this.heightVersion) this.waterCache = { v: this.heightVersion, w: labelWater(g) };
+    const water = this.waterCache.w;
     const railEdge = railReachEdge(g);
     const freightAt = new Map<number, Destination[]>();
     const terminals: { b: Building; kind: 'passenger' | 'car'; body: number; road: number }[] = [];

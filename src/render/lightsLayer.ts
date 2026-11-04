@@ -34,7 +34,7 @@ export class StreetLights {
     this.pools = new THREE.InstancedMesh(
       new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ map: tex, color: 0xffb870, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.5, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -12 }),
-      8192 * 2,
+      8192 * 6,
     );
     this.pools.count = 0;
     this.lamps.frustumCulled = this.pools.frustumCulled = false;

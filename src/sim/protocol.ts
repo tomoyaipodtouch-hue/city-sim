@@ -8,6 +8,7 @@ export interface NewCityOpts {
   style: MapStyle;
   difficulty: number;
   sandbox: boolean;
+  n?: number; // マップの広さ（128 = 中、256 = 大）
 }
 
 export type ToWorker =

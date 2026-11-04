@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { Grid } from '../sim/grid';
 import { CELL } from '../sim/constants';
 
-const MAX = 128 * 128;
+const MAX = 256 * 256;
 
 export class PreviewLayer {
   mesh: THREE.InstancedMesh;

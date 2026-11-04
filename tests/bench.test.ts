@@ -59,3 +59,25 @@ describe.skipIf(!on)('bench2', () => {
     }
   });
 });
+describe.skipIf(!on)('bench3', () => {
+  it('256 map', { timeout: 600000 }, async () => {
+    const { buildTestCity } = await import('./helpers');
+    const t0 = performance.now();
+    const w = World.create({ name: 'b', seed: 12345, style: 'river', difficulty: 1, sandbox: false, n: 256 });
+    console.log(`create 256: ${(performance.now() - t0).toFixed(0)}ms`);
+    buildTestCity(w);
+    const times: Record<string, number> = {};
+    const proto = Object.getPrototypeOf(w);
+    for (const k of Object.getOwnPropertyNames(proto)) {
+      const f = proto[k];
+      if (typeof f !== 'function' || k === 'constructor' || k === 'stepDay' || k === 'monthly') continue;
+      (w as unknown as Record<string, unknown>)[k] = function (this: World, ...a: unknown[]) { const t = performance.now(); const r = f.apply(this, a); times[k] = (times[k] || 0) + performance.now() - t; return r; };
+    }
+    for (let y = 1; y <= 5; y++) {
+      const t1 = performance.now();
+      for (let d = 0; d < 360; d++) w.stepDay();
+      if (y === 5) console.log(JSON.stringify(Object.entries(times).filter(([, v]) => v > 20).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, Math.round(v / 60)])));
+      console.log(`Z${y} pop=${w.stats.population} ${((performance.now() - t1) / 12).toFixed(1)}ms/month`);
+    }
+  });
+});

@@ -19,13 +19,16 @@ export class CameraRig {
     this.camera = new THREE.PerspectiveCamera(38, aspect, 2, 12000);
   }
 
+  // 一番遠くまで離れたときの距離（マップが大きいほど遠くまで）
+  maxDist = MAX_DIST;
   setMap(n: number) {
     this.size = n * CELL;
+    this.maxDist = MAX_DIST * Math.max(1, n / 128) * 0.85 + (n > 128 ? 0 : MAX_DIST * 0.15);
     this.target.set(this.size / 2, 0, this.size / 2);
   }
 
   get pitch() {
-    const t = Math.log(this.dist / MIN_DIST) / Math.log(MAX_DIST / MIN_DIST);
+    const t = Math.min(1, Math.log(this.dist / MIN_DIST) / Math.log(MAX_DIST / MIN_DIST));
     // 近づいたときも地面がつぶれすぎないよう、真上寄りの角度にする（近く 48°〜遠く 72°）
     return THREE.MathUtils.degToRad(Math.max(18, Math.min(86, 48 + t * 24 + this.pitchOffset)));
   }
@@ -65,7 +68,7 @@ export class CameraRig {
 
   // anchor（地面の点）を中心に拡大・縮小
   zoom(factor: number, anchor?: THREE.Vector3 | null) {
-    const nd = Math.max(MIN_DIST, Math.min(MAX_DIST, this.dist * factor));
+    const nd = Math.max(MIN_DIST, Math.min(this.maxDist, this.dist * factor));
     const real = nd / this.dist;
     if (anchor) {
       this.target.x = anchor.x + (this.target.x - anchor.x) * real;

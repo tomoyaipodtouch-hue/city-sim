@@ -33,17 +33,19 @@ export function generateTerrain(g: Grid, seed: number, style: MapStyle) {
   const rng = new Rng(seed);
   const V = n + 1;
   const h = g.heights;
+  // 大きなマップでも、山や谷の大きさ（m）は変えない
+  const S = n / 128;
 
   // 基本の起伏
   for (let y = 0; y < V; y++) {
     for (let x = 0; x < V; x++) {
       const u = x / n, v = y / n;
-      const base = fbm(u * 3.2, v * 3.2, seed);
-      const hills = fbm(u * 7 + 10, v * 7 + 10, seed + 7, 4);
+      const base = fbm(u * 3.2 * S, v * 3.2 * S, seed);
+      const hills = fbm(u * 7 * S + 10, v * 7 * S + 10, seed + 7, 4);
       let e = (base - 0.45) * 70 + (hills - 0.5) * 18 + 14;
       // マップ中央は少しなだらかに
       const cx = u - 0.5, cy = v - 0.5;
-      const centerFlat = Math.max(0, 1 - Math.sqrt(cx * cx + cy * cy) * 2.2);
+      const centerFlat = Math.max(0, 1 - Math.sqrt(cx * cx + cy * cy) * 2.2 * (S > 1 ? 0.8 : 1));
       e = e * (1 - centerFlat * 0.55) + 12 * centerFlat * 0.55;
       h[y * V + x] = e;
     }
@@ -56,7 +58,7 @@ export function generateTerrain(g: Grid, seed: number, style: MapStyle) {
       for (let x = 0; x < V; x++) {
         const t = [x / n, y / n, 1 - x / n, 1 - y / n][side];
         const wobble = (fbm(x / 18, y / 18, seed + 99, 3) - 0.5) * 0.18;
-        const d = t + wobble - 0.22;
+        const d = (t + wobble / S - 0.22 / S) * S;
         if (d < 0.12) {
           const k = Math.max(0, Math.min(1, d / 0.12));
           h[y * V + x] = h[y * V + x] * smooth(k) + (-14 + d * 60) * (1 - smooth(k));
@@ -90,7 +92,7 @@ export function generateTerrain(g: Grid, seed: number, style: MapStyle) {
   }
 
   if (style === 'lakes') {
-    for (let k = 0; k < 3; k++) {
+    for (let k = 0; k < Math.round(3 * S * S); k++) {
       const lx = rng.range(0.15, 0.85) * n, ly = rng.range(0.15, 0.85) * n, r = rng.range(5, 10);
       for (let y = 0; y < V; y++) {
         for (let x = 0; x < V; x++) {

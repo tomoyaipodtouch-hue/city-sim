@@ -901,7 +901,7 @@ export class Hud {
 
   private showNewForm() {
     const right = this.title.querySelector('.menu')!;
-    const state = { style: 'river' as MapStyle, difficulty: 1, sandbox: false };
+    const state = { style: 'river' as MapStyle, difficulty: 1, sandbox: false, n: 128 };
     const form = el('div', 'form');
     const seg = (items: [string, string][], cur: string, on: (v: string) => void) => {
       const s = el('div', 'seg');
@@ -924,6 +924,8 @@ export class Hud {
     nameWrap.append(name);
     const terr = el('div', '', '<label>地形</label>');
     terr.append(seg([['river', '川'], ['coast', '海岸'], ['lakes', '湖']], 'river', (v) => (state.style = v as MapStyle)));
+    const size = el('div', '', '<label>マップの広さ</label>');
+    size.append(seg([['128', '中（2km）'], ['256', '大（4km）']], '128', (v) => (state.n = Number(v))));
     const diff = el('div', '', '<label>難易度</label>');
     diff.append(seg(DIFFICULTY.map((d, i) => [String(i), d.name] as [string, string]).concat([['sb', 'サンドボックス']]), '1', (v) => {
       state.sandbox = v === 'sb';
@@ -934,10 +936,10 @@ export class Hud {
     back.onclick = () => void this.showTitle();
     const go = el('button', 'btn pri', 'この設定で始める');
     go.onclick = () => {
-      this.act.startNew({ name: name.value.trim() || '新しい街', seed: Math.floor(Math.random() * 1e9), style: state.style, difficulty: state.difficulty, sandbox: state.sandbox });
+      this.act.startNew({ name: name.value.trim() || '新しい街', seed: Math.floor(Math.random() * 1e9), style: state.style, difficulty: state.difficulty, sandbox: state.sandbox, n: state.n });
     };
     btns.append(back, go);
-    form.append(nameWrap, terr, diff, btns);
+    form.append(nameWrap, terr, size, diff, btns);
     right.innerHTML = '';
     right.append(form);
   }
