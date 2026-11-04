@@ -195,6 +195,9 @@ const PC = {
   post: new THREE.Color(0x8f969c),
   bridge: new THREE.Color(0xd9dcdf),
   glass: new THREE.Color(0x8fb4c9),
+  hallWall: new THREE.Color(0xeeeeea),
+  hallGlass: new THREE.Color(0x6f93ab),
+  hallBand: new THREE.Color(0x2f86d0),
 };
 
 export class StationLayer {
@@ -262,10 +265,27 @@ export class StationLayer {
           for (const a of [-half * 0.5, half * 0.5]) obox(cx, cz, ux, uz, a - 0.15, a + 0.15, s * 5.9 - 0.15, s * 5.9 + 0.15, top, top + 3.4, PC.post);
           const r0 = s * 3.9, r1 = s * 6.9;
           obox(cx, cz, ux, uz, -half, half, Math.min(r0, r1), Math.max(r0, r1), top + 3.4, top + 3.6, PC.roof);
-          // 高架のホームを支える柱
-          if (elevated) obox(cx, cz, ux, uz, -0.5, 0.5, s * 5.6 - 0.5, s * 5.6 + 0.5, ground - 0.5, top - 0.5, PC.slab);
         }
-        if (c === bridgeCell) {
+        if (elevated) {
+          // 高架下の駅舎：線路の真下に、ガラスの1階と白い壁、色の帯。ホームの床までを1つのかたまりにする
+          const hallTop = top - 0.5;
+          obox(cx, cz, ux, uz, -half, half, -6.6, 6.6, ground - 0.5, ground + 0.4, PC.slab);
+          obox(cx, cz, ux, uz, -half, half, -6.4, 6.4, ground + 0.4, ground + 3.8, PC.hallGlass);
+          // 線路の下は床版の下まで、ホームの下はホームの床まで
+          obox(cx, cz, ux, uz, -half, half, -3.7, 3.7, ground + 3.8, H - 1.3, PC.hallWall);
+          for (const s of [-1, 1]) obox(cx, cz, ux, uz, -half, half, Math.min(s * 3.7, s * 6.7), Math.max(s * 3.7, s * 6.7), ground + 3.8, hallTop, PC.hallWall);
+          obox(cx, cz, ux, uz, -half, half, -6.75, 6.75, ground + 4.4, ground + 4.9, PC.hallBand);
+          // 1階の柱（ガラスの区切り）
+          for (const a of [-half * 0.66, 0, half * 0.66]) for (const s of [-1, 1]) obox(cx, cz, ux, uz, a - 0.25, a + 0.25, s * 6.45 - 0.2, s * 6.45 + 0.2, ground + 0.4, ground + 3.8, PC.hallWall);
+          // 入口のひさし（駅前広場の側）
+          if (c === bridgeCell) {
+            const side = Math.sign((bx - cx) * -uz + (bz - cz) * ux) || 1;
+            const o0 = side * 6.7, o1 = side * 9.6;
+            obox(cx, cz, ux, uz, -4, 4, Math.min(o0, o1), Math.max(o0, o1), ground + 3.6, ground + 3.9, PC.roof);
+            obox(cx, cz, ux, uz, -3.2, 3.2, side * 6.72 - 0.05, side * 6.72 + 0.05, ground + 4.9, ground + 6.0, PC.hallBand);
+          }
+        }
+        if (c === bridgeCell && !elevated) {
           // 跨線橋：両側のホームの階段の塔と、線路をまたぐ通路
           const by = top + 6.0;
           obox(cx, cz, ux, uz, -1.3, 1.3, -7.0, 7.0, by, by + 2.4, PC.bridge);

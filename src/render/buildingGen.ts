@@ -1330,19 +1330,27 @@ function busStop(mb: MeshBuilder, f: LotFrame) {
 // 駅：駅舎と、線路の高さのホーム（地上の駅は lift = 0）
 function station(mb: MeshBuilder, f: LotFrame, lift: number) {
   mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.09, PALETTE.pavement);
-  const wall = lift ? PALETTE.white : PALETTE.shopWall[2];
+  if (lift) {
+    // 高架駅：駅舎は線路の下（railLayer の StationLayer）。敷地は駅前広場（ロータリー、植え込み、時計の柱）
+    mb.ground(-f.W / 2 + 2, -f.D / 2 + 4, f.W / 2 - 2, f.D / 2 - 2, 0.11, PALETTE.asphalt);
+    mb.cylinder(0, 1, 0, 0.5, Math.min(f.W, f.D) * 0.18, 16, PALETTE.hedge, PALETTE.lawn2);
+    mb.box(-0.2, 0.5, 0.8, 0.2, 5, 1.2, PALETTE.steel);
+    mb.box(-0.6, 4.4, 0.6, 0.6, 5.4, 1.4, PALETTE.white);
+    // 屋根つきの歩道（線路の側へ）
+    mb.box(-f.W / 2 + 1, 2.9, -f.D / 2 + 0.3, f.W / 2 - 1, 3.1, -f.D / 2 + 3.5, PALETTE.roof[3]);
+    for (const x of [-f.W / 2 + 1.5, 0, f.W / 2 - 1.5]) mb.box(x - 0.1, 0, -f.D / 2 + 3.2, x + 0.1, 2.9, -f.D / 2 + 3.4, PALETTE.steel);
+    // バス・タクシー乗り場の印
+    for (let x = -f.W / 2 + 3; x < f.W / 2 - 3; x += 3) mb.ground(x, f.D / 2 - 4, x + 0.15, f.D / 2 - 2.5, 0.13, PALETTE.white);
+    return;
+  }
+  const wall = PALETTE.shopWall[2];
   // 駅舎
   mb.box(-f.W / 2 + 2, 0, 0, f.W / 2 - 2, 6, f.D / 2 - 3, wall, PAT.shop, PALETTE.steel);
   mb.box(-f.W / 2 + 1, 6, -1, f.W / 2 - 1, 6.5, f.D / 2 - 2, PALETTE.steel);
   mb.box(-3, 4.6, f.D / 2 - 3, 3, 5.6, f.D / 2 - 2.8, PALETTE.accent[2]);
   // ホームは線路の側に、上り・下りの両方を描く（railLayer の StationLayer）。駅舎からホームへの通路だけ置く
-  const ph = lift ? lift - 0.4 : 1.0;
-  if (lift) {
-    for (const x of [-f.W / 2 + 3, f.W / 2 - 3]) mb.box(x - 0.5, 0, -f.D / 2 + 1, x + 0.5, ph, -f.D / 2 + 2, PALETTE.concrete);
-    mb.box(-f.W / 2 + 1.5, 0, -2, -f.W / 2 + 4.5, ph + 3, 1, wall, PAT.office, PALETTE.steel);
-  }
-  mb.box(-3, ph - 0.4, -f.D / 2 + 0.3, 3, ph, 0, PALETTE.concrete);
-  mb.box(-3, ph + 2.8, -f.D / 2 + 0.3, 3, ph + 3.0, 0, PALETTE.roof[3]);
+  mb.box(-3, 0.6, -f.D / 2 + 0.3, 3, 1.0, 0, PALETTE.concrete);
+  mb.box(-3, 3.8, -f.D / 2 + 0.3, 3, 4.0, 0, PALETTE.roof[3]);
 }
 
 function subwayEntrance(mb: MeshBuilder, f: LotFrame) {
