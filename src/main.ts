@@ -1,4 +1,5 @@
 // Pocket Metro の起動
+import { bgm, bgmSettings } from './bgm';
 import './ui/style.css';
 import { GameClient } from './game';
 import { CityRenderer } from './render/renderer';
@@ -100,6 +101,9 @@ const hud: Hud = new Hud(game, renderer, tools, {
       pixelRatio: s.lowRes ? 1 : Math.min(2, window.devicePixelRatio || 1),
     });
     renderer.dayMode = s.dayNight ?? 'auto';
+    bgmSettings.enabled = s.bgm ?? true;
+    bgmSettings.volume = (s.bgmVol ?? 50) / 100;
+    bgm.applyVolume();
     renderer.rig.pitchOffset = s.camPitch ?? 0;
     renderer.kick();
     storeSettings(s);
@@ -173,3 +177,14 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
 
 // 開発用
 (window as unknown as Record<string, unknown>).__pm = { game, renderer, tools, hud };
+
+// BGM：最初に画面をさわったときに始める（iPhone は操作のあとでないと音を出せない）
+const startBgm = () => {
+  bgm.start();
+  window.removeEventListener('pointerdown', startBgm);
+};
+window.addEventListener('pointerdown', startBgm);
+bgm.onSong = (name) => (hud.nowPlaying = name);
+setInterval(() => (bgm.night = renderer.nightAmount > 0.6), 2000);
+
+(window as unknown as { __bgm: unknown }).__bgm = { Bgm: (bgm.constructor as unknown), SONGS: 0 };

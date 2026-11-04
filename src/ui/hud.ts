@@ -55,6 +55,8 @@ export interface Settings {
   sound: boolean;
   fps: boolean;
   hq: boolean;
+  bgm: boolean;
+  bgmVol: number; // 0..100
   dayNight: 'auto' | 'day' | 'night';
   camPitch: number; // カメラの角度のずれ（度）。マイナスで地面に近く（横から）、プラスで真上寄り
 }
@@ -96,7 +98,8 @@ export class Hud {
   private infoCell: { x: number; y: number } | null = null;
   private hidden = false;
   private barEls: Record<string, HTMLElement> = {};
-  settings: Settings = { shadows: true, lowRes: false, cars: true, sound: true, fps: false, hq: false, dayNight: 'auto', camPitch: 0 };
+  nowPlaying = '';
+  settings: Settings = { shadows: true, lowRes: false, cars: true, sound: true, fps: false, hq: false, bgm: true, bgmVol: 50, dayNight: 'auto', camPitch: 0 };
 
   constructor(private game: GameClient, private r: CityRenderer, private tools: ToolController, private act: HudActions) {
     this.root = document.getElementById('ui')!;
@@ -800,6 +803,19 @@ export class Hud {
     }
     dn.append(seg);
     body.append(dn);
+    // BGM の音量
+    const bv = el('div', 'row', `<div><div>BGM の音量</div><div class="desc">おだやかなジャズ風の曲が流れます${this.nowPlaying ? `（再生中：${this.nowPlaying}）` : ''}。iPhone の消音スイッチがオンだと鳴りません</div></div>`);
+    const vbox = el('div', 'jrow');
+    vbox.style.minWidth = '190px';
+    vbox.innerHTML = `<input type="range" min="0" max="100" step="5" value="${this.settings.bgmVol ?? 50}"><span class="v">${this.settings.bgmVol ?? 50}</span>`;
+    const vr = vbox.querySelector('input')!, vv = vbox.querySelector('.v')!;
+    vr.oninput = () => {
+      this.settings.bgmVol = Number(vr.value);
+      vv.textContent = vr.value;
+      this.applySettings();
+    };
+    bv.append(vbox);
+    body.append(bv);
     // カメラの角度
     const cp = el('div', 'row', '<div><div>カメラの角度</div><div class="desc">左にすると地面に近い横からの眺め、右にすると真上寄りになります。2本指で画面を上下にスワイプしても変えられます</div></div>');
     const box = el('div', 'jrow');
@@ -814,11 +830,12 @@ export class Hud {
     };
     cp.append(box);
     body.append(cp);
-    const items: [Exclude<keyof Settings, 'dayNight' | 'camPitch'>, string, string][] = [
+    const items: [Exclude<keyof Settings, 'dayNight' | 'camPitch' | 'bgmVol'>, string, string][] = [
       ['hq', '高画質', '夜の窓や街灯の光のにじみ、色の調整、なめらかな輪郭。動作が重くなります'],
       ['shadows', '影', '建物や木の影を表示します。オフにすると動作が軽くなります'],
       ['lowRes', '解像度を下げる', '画面の細かさを下げて、動作を軽くします'],
       ['cars', '車の表示', '道路を走る車を表示します'],
+      ['bgm', 'BGM', ''],
       ['sound', '効果音', ''],
       ['fps', 'フレームレートの表示', '動作の重さを確認するときに使います'],
     ];

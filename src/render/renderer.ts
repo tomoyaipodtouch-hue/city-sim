@@ -51,6 +51,9 @@ export class CityRenderer {
   timeOfDay = 0.36;
   timeRunning: () => boolean = () => false;
   private night = 0;
+  get nightAmount() {
+    return this.night;
+  }
   private sunDir = new THREE.Vector3(-0.62, 0.52, 0.42).normalize();
   lights = new StreetLights();
   sky = new SkyDome();
