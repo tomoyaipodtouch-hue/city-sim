@@ -14,6 +14,7 @@ import { PreviewLayer } from './previewLayer';
 import { CameraRig, pickGround } from './cameraRig';
 import { buildOverlay, DataView } from './overlay';
 import { StreetLights } from './lightsLayer';
+import { SkyDome } from './sky';
 import { shared } from './materials';
 
 export interface Quality {
@@ -49,6 +50,7 @@ export class CityRenderer {
   private night = 0;
   private sunDir = new THREE.Vector3(-0.62, 0.52, 0.42).normalize();
   lights = new StreetLights();
+  sky = new SkyDome();
   grid: Grid | null = null;
   maps: Maps | null = null;
   buildingList: Building[] = [];
@@ -80,7 +82,7 @@ export class CityRenderer {
     this.scene.fog = new THREE.Fog(sky, 1500, 7000);
     // 環境光は弱め、太陽を強めにして、日なたと日かげの差をはっきりさせる
     this.hemi = new THREE.HemisphereLight(0xcfe0f2, 0x4f4a3e, 0.85);
-    this.scene.add(this.hemi, this.lights.points);
+    this.scene.add(this.hemi, this.lights.points, this.sky.mesh);
     this.sun = new THREE.DirectionalLight(0xffeed6, 3.2);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
@@ -267,6 +269,19 @@ export class CityRenderer {
     this.props.update(dt);
     this.updateDayNight(dt);
     this.updateShadow();
+    // 遠くほど空の色に溶け込む（ズームに合わせて霧の距離を変える）
+    const fog = this.scene.fog as THREE.Fog;
+    fog.near = this.rig.dist * 0.9 + 300;
+    fog.far = this.rig.dist * 4.2 + 2600;
+    this.sky.uniforms.uTime.value += dt;
+    if (this.terrain) {
+      const wu = this.terrain.waterUniforms;
+      wu.uTime.value += dt;
+      wu.uSky.value.copy(this.sky.uniforms.uHorizon.value).lerp(this.sky.uniforms.uZenith.value, 0.3);
+      wu.uNight.value = this.night;
+    }
+    this.sky.follow(this.rig.camera);
+    this.trees.setLod(this.rig.dist);
     this.renderer.render(this.scene, this.rig.camera);
     this.fpsAcc += dt;
     this.fpsN++;
@@ -330,6 +345,12 @@ export class CityRenderer {
     const sky = C(0xa9cbe6, 0xe8a27c, dusk).lerp(new THREE.Color(0x0c1528), night);
     (this.scene.background as THREE.Color).copy(sky);
     this.scene.fog!.color.copy(sky);
+    const su = this.sky.uniforms;
+    su.uHorizon.value.copy(sky);
+    su.uZenith.value.copy(C(0x4f86cc, 0x5a6aa8, dusk).lerp(new THREE.Color(0x030812), night));
+    su.uSunColor.value.copy(C(0xfff2d8, 0xffa060, dusk));
+    su.uDay.value = day;
+    if (day > 0.02) su.uSunDir.value.set(-Math.cos(az), Math.max(-0.05, elev), 0.45 - Math.sin(az) * 0.25).normalize();
     this.renderer.toneMappingExposure = 1.15 - 0.1 * night;
     shared.uNight.value = smooth(0.25, 0.85, night);
     this.lights.setNight(smooth(0.35, 0.9, night));

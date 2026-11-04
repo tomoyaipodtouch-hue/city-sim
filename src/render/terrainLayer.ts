@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Grid } from '../sim/grid';
 import { CELL, WATER_LEVEL } from '../sim/constants';
 import { hash2 } from '../sim/rng';
+import { createGroundMaterial } from './groundMaterial';
 
 export class TerrainLayer {
   group = new THREE.Group();
@@ -15,6 +16,10 @@ export class TerrainLayer {
   water: THREE.Mesh;
   private n: number;
   overlayMat: THREE.ShaderMaterial;
+  // 水の深さを求めるための地面の高さ（頂点ごと）
+  private heightTex: THREE.DataTexture;
+  private heightData: Uint16Array;
+  waterUniforms = { uTime: { value: 0 }, uHeights: { value: null as THREE.DataTexture | null }, uSky: { value: new THREE.Color(0xa9cbe6) }, uNight: { value: 0 } };
 
   constructor(n: number) {
     this.n = n;
@@ -39,7 +44,7 @@ export class TerrainLayer {
     this.geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     this.geom.setAttribute('color', new THREE.BufferAttribute(col, 3));
     this.geom.setIndex(new THREE.BufferAttribute(idx, 1));
-    this.mesh = new THREE.Mesh(this.geom, new THREE.MeshLambertMaterial({ vertexColors: true }));
+    this.mesh = new THREE.Mesh(this.geom, createGroundMaterial({ vertexColors: true }));
     this.mesh.receiveShadow = true;
     this.group.add(this.mesh);
 
@@ -86,15 +91,57 @@ export class TerrainLayer {
     this.skirt = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ color: 0x6b5a45 }));
     this.group.add(this.skirt);
 
-    // 水面
+    // 水面：深さで色が変わり、波が動き、岸辺に白い波が立つ
     const size = n * CELL;
+    this.heightData = new Uint16Array(V * V);
+    this.heightTex = new THREE.DataTexture(this.heightData, V, V, THREE.RedFormat, THREE.HalfFloatType);
+    this.heightTex.magFilter = this.heightTex.minFilter = THREE.LinearFilter;
+    this.heightTex.needsUpdate = true;
+    this.waterUniforms.uHeights.value = this.heightTex;
     const wg = new THREE.PlaneGeometry(size, size, 1, 1);
     wg.rotateX(-Math.PI / 2);
     wg.translate(size / 2, WATER_LEVEL, size / 2);
-    this.water = new THREE.Mesh(
-      wg,
-      new THREE.MeshPhongMaterial({ color: 0x2b6f96, specular: 0xb0d4e8, shininess: 90, transparent: true, opacity: 0.86 }),
-    );
+    const wm = new THREE.MeshPhongMaterial({ color: 0x2b6f96, specular: 0xd8ecf6, shininess: 140, transparent: true, opacity: 0.9 });
+    const U = this.waterUniforms;
+    wm.onBeforeCompile = (sh) => {
+      Object.assign(sh.uniforms, U);
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWw;')
+        .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWw = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', `#include <common>
+          uniform float uTime, uNight; uniform sampler2D uHeights; uniform vec3 uSky;
+          varying vec3 vWw;
+          float wv(vec2 p, vec2 d, float f, float sp){ return sin(dot(p, d) * f + uTime * sp); }`)
+        .replace('#include <color_fragment>', `#include <color_fragment>
+          vec2 huv = (vWw.xz / ${CELL.toFixed(1)} + 0.5) / ${V.toFixed(1)};
+          bool inside = huv.x > 0.0 && huv.y > 0.0 && huv.x < 1.0 && huv.y < 1.0;
+          float depth = inside ? ${WATER_LEVEL.toFixed(1)} - texture2D(uHeights, huv).r : 20.0;
+          float dk = smoothstep(0.0, 7.0, depth);
+          diffuseColor.rgb = mix(vec3(0.045, 0.17, 0.17), vec3(0.008, 0.045, 0.09), dk);
+          diffuseColor.a = mix(0.5, 0.93, smoothstep(0.0, 3.0, depth));
+          // 岸辺の白い波
+          float foamBand = 1.0 - smoothstep(0.05, 0.9, depth);
+          float foam = foamBand * (0.55 + 0.45 * sin(uTime * 1.3 + depth * 9.0 + vWw.x * 0.11 + vWw.z * 0.07));
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.75, 0.8, 0.82), foam * 0.75);
+          diffuseColor.a = max(diffuseColor.a, foam * 0.9);`)
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+          {
+            vec2 p = vWw.xz;
+            float dx = 0.06 * wv(p, vec2(0.8, 0.6), 0.09, 1.1) + 0.04 * wv(p, vec2(-0.3, 0.95), 0.17, 1.7) + 0.02 * wv(p, vec2(0.6, -0.8), 0.41, 2.6);
+            float dz = 0.06 * wv(p, vec2(0.6, -0.8), 0.08, 0.9) + 0.04 * wv(p, vec2(0.95, 0.3), 0.19, 1.5) + 0.02 * wv(p, vec2(-0.7, -0.7), 0.37, 2.3);
+            vec3 wn = normalize(vec3(dx, 1.0, dz));
+            normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz);
+          }`)
+        .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+          {
+            // 空の映り込み（斜めから見るほど強い）
+            vec3 V = normalize(vViewPosition);
+            float fres = pow(1.0 - max(dot(V, normal), 0.0), 4.0);
+            totalEmissiveRadiance += uSky * fres * 0.55 * (1.0 - uNight * 0.8);
+          }`);
+    };
+    this.water = new THREE.Mesh(wg, wm);
     this.water.renderOrder = 1;
     this.water.receiveShadow = true;
     this.group.add(this.water);
@@ -102,8 +149,9 @@ export class TerrainLayer {
     // マップの外側の地面
     const outside = new THREE.Mesh(
       new THREE.PlaneGeometry(size * 8, size * 8).rotateX(-Math.PI / 2).translate(size / 2, -30, size / 2),
-      new THREE.MeshLambertMaterial({ color: 0x55603f }),
+      createGroundMaterial({ color: 0x5f6e44 }),
     );
+    outside.receiveShadow = true;
     this.group.add(outside);
   }
 
@@ -119,6 +167,7 @@ export class TerrainLayer {
         const vi = y * V + x;
         const h = g.heights[vi];
         pos.setY(vi, h);
+        this.heightData[vi] = THREE.DataUtils.toHalfFloat(h);
         // 傾き
         const hx = g.heights[y * V + Math.min(n, x + 1)] - g.heights[y * V + Math.max(0, x - 1)];
         const hy = g.heights[Math.min(n, y + 1) * V + x] - g.heights[Math.max(0, y - 1) * V + x];
@@ -133,6 +182,7 @@ export class TerrainLayer {
       }
     pos.needsUpdate = true;
     col.needsUpdate = true;
+    this.heightTex.needsUpdate = true;
     this.geom.computeVertexNormals();
     this.geom.computeBoundingSphere();
     this.buildSkirt(g);
