@@ -12,6 +12,7 @@ export class CameraRig {
   dist = 520;
   yaw = Math.PI / 4;
   yawTarget = Math.PI / 4;
+  pitchOffset = 0; // 設定で変えられる角度のずれ（度）
   private size = 2048;
 
   constructor(aspect: number) {
@@ -26,7 +27,7 @@ export class CameraRig {
   get pitch() {
     const t = Math.log(this.dist / MIN_DIST) / Math.log(MAX_DIST / MIN_DIST);
     // 近づいたときも地面がつぶれすぎないよう、真上寄りの角度にする（近く 48°〜遠く 72°）
-    return THREE.MathUtils.degToRad(48 + t * 24);
+    return THREE.MathUtils.degToRad(Math.max(18, Math.min(86, 48 + t * 24 + this.pitchOffset)));
   }
 
   update(dt: number, g: Grid | null) {

@@ -55,6 +55,7 @@ export interface Settings {
   sound: boolean;
   fps: boolean;
   dayNight: 'auto' | 'day' | 'night';
+  camPitch: number; // カメラの角度のずれ（度）。マイナスで地面に近く（横から）、プラスで真上寄り
 }
 
 export interface HudActions {
@@ -94,7 +95,7 @@ export class Hud {
   private infoCell: { x: number; y: number } | null = null;
   private hidden = false;
   private barEls: Record<string, HTMLElement> = {};
-  settings: Settings = { shadows: true, lowRes: false, cars: true, sound: true, fps: false, dayNight: 'auto' };
+  settings: Settings = { shadows: true, lowRes: false, cars: true, sound: true, fps: false, dayNight: 'auto', camPitch: 0 };
 
   constructor(private game: GameClient, private r: CityRenderer, private tools: ToolController, private act: HudActions) {
     this.root = document.getElementById('ui')!;
@@ -798,7 +799,21 @@ export class Hud {
     }
     dn.append(seg);
     body.append(dn);
-    const items: [Exclude<keyof Settings, 'dayNight'>, string, string][] = [
+    // カメラの角度
+    const cp = el('div', 'row', '<div><div>カメラの角度</div><div class="desc">左にすると地面に近い横からの眺め、右にすると真上寄りになります</div></div>');
+    const box = el('div', 'jrow');
+    box.style.minWidth = '190px';
+    const label = (v: number) => (v === 0 ? '標準' : v < 0 ? `横から ${-v}°` : `真上寄り ${v}°`);
+    box.innerHTML = `<input type="range" min="-30" max="15" step="1" value="${this.settings.camPitch ?? 0}"><span class="v">${label(this.settings.camPitch ?? 0)}</span>`;
+    const range = box.querySelector('input')!, val = box.querySelector('.v')!;
+    range.oninput = () => {
+      this.settings.camPitch = Number(range.value);
+      val.textContent = label(this.settings.camPitch);
+      this.applySettings();
+    };
+    cp.append(box);
+    body.append(cp);
+    const items: [Exclude<keyof Settings, 'dayNight' | 'camPitch'>, string, string][] = [
       ['shadows', '影', '建物や木の影を表示します。オフにすると動作が軽くなります'],
       ['lowRes', '解像度を下げる', '画面の細かさを下げて、動作を軽くします'],
       ['cars', '車の表示', '道路を走る車を表示します'],

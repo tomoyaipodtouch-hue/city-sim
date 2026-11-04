@@ -99,6 +99,8 @@ const hud: Hud = new Hud(game, renderer, tools, {
       pixelRatio: s.lowRes ? 1 : Math.min(2, window.devicePixelRatio || 1),
     });
     renderer.dayMode = s.dayNight ?? 'auto';
+    renderer.rig.pitchOffset = s.camPitch ?? 0;
+    renderer.kick();
     storeSettings(s);
   },
   startNew: (o) => startWith(() => game.newCity(o)),
