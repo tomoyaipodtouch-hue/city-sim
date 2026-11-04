@@ -54,6 +54,7 @@ export interface Settings {
   cars: boolean;
   sound: boolean;
   fps: boolean;
+  hq: boolean;
   dayNight: 'auto' | 'day' | 'night';
   camPitch: number; // カメラの角度のずれ（度）。マイナスで地面に近く（横から）、プラスで真上寄り
 }
@@ -95,7 +96,7 @@ export class Hud {
   private infoCell: { x: number; y: number } | null = null;
   private hidden = false;
   private barEls: Record<string, HTMLElement> = {};
-  settings: Settings = { shadows: true, lowRes: false, cars: true, sound: true, fps: false, dayNight: 'auto', camPitch: 0 };
+  settings: Settings = { shadows: true, lowRes: false, cars: true, sound: true, fps: false, hq: false, dayNight: 'auto', camPitch: 0 };
 
   constructor(private game: GameClient, private r: CityRenderer, private tools: ToolController, private act: HudActions) {
     this.root = document.getElementById('ui')!;
@@ -814,6 +815,7 @@ export class Hud {
     cp.append(box);
     body.append(cp);
     const items: [Exclude<keyof Settings, 'dayNight' | 'camPitch'>, string, string][] = [
+      ['hq', '高画質', '夜の窓や街灯の光のにじみ、色の調整、なめらかな輪郭。動作が重くなります'],
       ['shadows', '影', '建物や木の影を表示します。オフにすると動作が軽くなります'],
       ['lowRes', '解像度を下げる', '画面の細かさを下げて、動作を軽くします'],
       ['cars', '車の表示', '道路を走る車を表示します'],

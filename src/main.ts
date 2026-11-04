@@ -96,6 +96,7 @@ const hud: Hud = new Hud(game, renderer, tools, {
     renderer.setQuality({
       shadows: s.shadows,
       cars: s.cars,
+      hq: s.hq,
       pixelRatio: s.lowRes ? 1 : Math.min(2, window.devicePixelRatio || 1),
     });
     renderer.dayMode = s.dayNight ?? 'auto';

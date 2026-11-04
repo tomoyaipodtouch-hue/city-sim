@@ -22,17 +22,21 @@ function glowTexture() {
 export class StreetLights {
   points = new THREE.Group();
   private lamps: THREE.Points;
-  private pools: THREE.Points;
+  private pools: THREE.InstancedMesh;
   private lampMat: THREE.PointsMaterial;
-  private poolMat: THREE.PointsMaterial;
   constructor() {
     const tex = glowTexture();
     const mk = (size: number, color: number) =>
       new THREE.PointsMaterial({ map: tex, size, color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true, fog: true });
     this.lampMat = mk(12, 0xffd9a0);
-    this.poolMat = mk(30, 0xffb870);
     this.lamps = new THREE.Points(new THREE.BufferGeometry(), this.lampMat);
-    this.pools = new THREE.Points(new THREE.BufferGeometry(), this.poolMat);
+    // 路面を照らす光：地面に平らに置いた丸い光（建物や地面に食い込まないように）
+    this.pools = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ map: tex, color: 0xffb870, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.5, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -12 }),
+      8192 * 2,
+    );
+    this.pools.count = 0;
     this.lamps.frustumCulled = this.pools.frustumCulled = false;
     this.points.add(this.pools, this.lamps);
     this.points.visible = false;
@@ -62,17 +66,23 @@ export class StreetLights {
       const cx = (x + 0.5) * CELL + px, cz = (y + 0.5) * CELL + pz;
       const h = g.nodeH(node);
       lamp.push(cx, h + 7.5, cz);
-      pool.push(cx - px * 0.6, h + 1.2, cz - pz * 0.6);
+      pool.push(cx - px * 0.6, h + 0.25, cz - pz * 0.6);
     }
     this.lamps.geometry.dispose();
-    this.pools.geometry.dispose();
     this.lamps.geometry = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(lamp, 3));
-    this.pools.geometry = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pool, 3));
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(11, 1, 11), v = new THREE.Vector3();
+    const cnt = Math.min(this.pools.instanceMatrix.count, pool.length / 3);
+    for (let k = 0; k < cnt; k++) {
+      v.set(pool[k * 3], pool[k * 3 + 1], pool[k * 3 + 2]);
+      this.pools.setMatrixAt(k, m.compose(v, q, sc));
+    }
+    this.pools.count = cnt;
+    this.pools.instanceMatrix.needsUpdate = true;
   }
 
   setNight(k: number) {
     this.points.visible = k > 0.02;
     this.lampMat.opacity = k;
-    this.poolMat.opacity = 0.6 * k;
+    (this.pools.material as THREE.MeshBasicMaterial).opacity = 0.3 * k;
   }
 }

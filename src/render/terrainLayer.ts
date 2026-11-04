@@ -149,7 +149,7 @@ export class TerrainLayer {
     // マップの外側の地面
     const outside = new THREE.Mesh(
       new THREE.PlaneGeometry(size * 8, size * 8).rotateX(-Math.PI / 2).translate(size / 2, -30, size / 2),
-      createGroundMaterial({ color: 0x5f6e44 }),
+      createGroundMaterial({ color: 0x5f6e44 }, false),
     );
     outside.receiveShadow = true;
     this.group.add(outside);

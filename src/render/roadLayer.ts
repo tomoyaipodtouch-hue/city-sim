@@ -6,6 +6,7 @@
 //   3本以上：交差点（角が丸い路面、停止線、横断歩道）
 // 路面、白線・黄線、歩道や壁などの立体物は、それぞれ別のメッシュにまとめる。
 import * as THREE from 'three';
+import { withAO } from './ao';
 import { Grid } from '../sim/grid';
 import { CELL, DX, DY, isDiag } from '../sim/constants';
 import { ROADS, RoadType, isHighway } from '../sim/defs';
@@ -143,10 +144,10 @@ export class RoadLayer {
   jctl: Uint8Array = new Uint8Array(0); // 交差点の制御方式（シミュレーションで決まったもの）
 
   constructor() {
-    const smat = new THREE.MeshLambertMaterial({ vertexColors: true, map: asphaltTexture(), polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
+    const smat = withAO(new THREE.MeshLambertMaterial({ vertexColors: true, map: asphaltTexture(), polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }), 0.32);
     this.surface = new THREE.Mesh(new THREE.BufferGeometry(), smat);
     this.surface.receiveShadow = true;
-    this.marks = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8 }));
+    this.marks = new THREE.Mesh(new THREE.BufferGeometry(), withAO(new THREE.MeshLambertMaterial({ vertexColors: true, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8 }), 0.32));
     this.marks.receiveShadow = true;
     this.solid = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true }));
     this.solid.castShadow = true;

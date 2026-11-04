@@ -1,16 +1,18 @@
 // 地面の質感：頂点の色に、草のむら・細かいざらつき・広い範囲の色の違い（乾いた草地など）を重ねる
 import * as THREE from 'three';
 import { detailTexture, MAT } from './textures';
+import { AO_DECL, aoExpr, aoUniforms } from './ao';
 
-export function createGroundMaterial(params: THREE.MeshLambertMaterialParameters = {}) {
+export function createGroundMaterial(params: THREE.MeshLambertMaterialParameters = {}, ao = true) {
   const m = new THREE.MeshLambertMaterial(params);
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uDetail = { value: detailTexture() };
+    Object.assign(sh.uniforms, aoUniforms);
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vGw;')
       .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvGw = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform highp sampler2DArray uDetail;\nvarying vec3 vGw;')
+      .replace('#include <common>', '#include <common>\nuniform highp sampler2DArray uDetail;\nvarying vec3 vGw;\n' + AO_DECL)
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
@@ -30,9 +32,10 @@ export function createGroundMaterial(params: THREE.MeshLambertMaterialParameters
           float grassy = clamp((c.g - max(c.r, c.b)) * 12.0, 0.0, 1.0); // 緑の地面だけに効かせる
           c = mix(c, c * vec3(1.18, 1.06, 0.78), dry * 0.55 * grassy);
           c = mix(c, c * vec3(0.82, 0.95, 0.78), lush * 0.45 * grassy);
-          diffuseColor.rgb = c;
+          diffuseColor.rgb = c${ao ? ' * ' + aoExpr('vGw', 0.42) : ''};
         }`,
       );
   };
+  m.customProgramCacheKey = () => `ground-${ao ? 1 : 0}`;
   return m;
 }

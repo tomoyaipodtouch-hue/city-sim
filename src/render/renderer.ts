@@ -15,12 +15,15 @@ import { CameraRig, pickGround } from './cameraRig';
 import { buildOverlay, DataView } from './overlay';
 import { StreetLights } from './lightsLayer';
 import { SkyDome } from './sky';
+import { updateAO } from './ao';
+import { PostFX } from './post';
 import { shared } from './materials';
 
 export interface Quality {
   shadows: boolean;
   pixelRatio: number;
   cars: boolean;
+  hq?: boolean; // 高画質（光のにじみ、色の調整）
 }
 
 function smooth(a: number, b: number, x: number) {
@@ -51,6 +54,7 @@ export class CityRenderer {
   private sunDir = new THREE.Vector3(-0.62, 0.52, 0.42).normalize();
   lights = new StreetLights();
   sky = new SkyDome();
+  private post: PostFX | null = null;
   grid: Grid | null = null;
   maps: Maps | null = null;
   buildingList: Building[] = [];
@@ -105,6 +109,8 @@ export class CityRenderer {
       if (m) m.needsUpdate = true;
     });
     this.cars.enabled = this.quality.cars;
+    if (this.quality.hq && !this.post) this.post = new PostFX(this.renderer, this.scene, this.rig.camera);
+    if (!this.quality.hq && this.post) { this.post.dispose(); this.post = null; }
     this.resize();
   }
 
@@ -112,6 +118,7 @@ export class CityRenderer {
     const w = this.canvas.clientWidth || window.innerWidth;
     const h = this.canvas.clientHeight || window.innerHeight;
     this.renderer.setSize(w, h, false);
+    this.post?.setSize(w, h, this.quality.pixelRatio);
     this.rig.camera.aspect = w / h;
     this.rig.camera.updateProjectionMatrix();
     this.kick();
@@ -153,7 +160,7 @@ export class CityRenderer {
       this.roads.jctl = m.jctl;
       this.dirty.grid = true;
     }
-    if (this.grid) this.cars.setData(this.grid, m.traffic, m.congestion, m.freight, m.riders);
+    if (this.grid) this.cars.setData(this.grid, m.traffic, m.congestion, m.freight, m.riders, m.garbage, m.garbageLeft);
     this.kick();
   }
 
@@ -226,6 +233,7 @@ export class CityRenderer {
     }
     if (this.dirty.buildings || heights) {
       if (this.buildings.update(g, this.buildingList, heights)) this.dirty.trees = true;
+      updateAO(g, this.buildingList);
       this.props.setBuildings(g, this.buildingList);
     }
     if (this.dirty.trees) this.trees.rebuild(g, this.buildings.allTrees());
@@ -264,6 +272,7 @@ export class CityRenderer {
     this.idleFrames++;
     if (!carsMoving && this.idleFrames > 30 && this.idleFrames % 10 !== 0) return;
     this.rig.update(dt, this.grid);
+    this.cars.viewDist = this.rig.dist;
     if (carsMoving) this.cars.update(dt);
     this.cars.group.visible = carsMoving;
     this.props.update(dt);
@@ -282,7 +291,10 @@ export class CityRenderer {
     }
     this.sky.follow(this.rig.camera);
     this.trees.setLod(this.rig.dist);
-    this.renderer.render(this.scene, this.rig.camera);
+    if (this.post) {
+      this.post.setNight(this.night);
+      this.post.render(dt);
+    } else this.renderer.render(this.scene, this.rig.camera);
     this.fpsAcc += dt;
     this.fpsN++;
     if (this.fpsAcc > 1) {
