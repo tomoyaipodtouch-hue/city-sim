@@ -12,6 +12,7 @@ interface Chunk {
   key: string;
   mesh: THREE.Mesh | null;
   trees: TreeSpot[];
+  beacons: number[]; // 航空障害灯の位置（x, y, z の並び）
 }
 
 export class BuildingLayer {
@@ -64,17 +65,29 @@ export class BuildingLayer {
       }
       const mb = new MeshBuilder();
       const trees: TreeSpot[] = [];
+      const beacons: number[] = [];
       for (const b of bs) {
         const f = setupLot(mb, b, groundAt, minAt);
+        const v0 = mb.pos.length;
         generateBuilding(mb, b, f, trees);
+        // 高さ 60m を超える建物のいちばん高いところに、航空障害灯を付ける
+        let top = -Infinity, tx = 0, tz = 0;
+        for (let k = v0; k < mb.pos.length; k += 3) if (mb.pos[k + 1] > top) { top = mb.pos[k + 1]; tx = mb.pos[k]; tz = mb.pos[k + 2]; }
+        if (top - f.base > 60) beacons.push(tx, top + 0.6, tz);
       }
       const mesh = new THREE.Mesh(mb.toGeometry(), this.material);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       this.group.add(mesh);
-      this.chunks.set(c, { key, mesh, trees });
+      this.chunks.set(c, { key, mesh, trees, beacons });
     }
     return treesChanged;
+  }
+
+  allBeacons(): number[] {
+    const out: number[] = [];
+    for (const c of this.chunks.values()) out.push(...c.beacons);
+    return out;
   }
 
   allTrees(): TreeSpot[] {

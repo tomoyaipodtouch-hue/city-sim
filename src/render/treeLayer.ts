@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Grid } from '../sim/grid';
 import { CELL } from '../sim/constants';
+import { ROADS, RoadType } from '../sim/defs';
 import { hash2 } from '../sim/rng';
 import type { TreeSpot } from './buildingGen';
 
@@ -150,6 +151,29 @@ export class TreeLayer {
         }
       }
     for (const t of extra) put(t.kind, t.x, t.y, t.z, t.s, hash2(Math.floor(t.x), Math.floor(t.z), 4));
+    // 街路樹：まっすぐな一般道・一方通行・大通り・街路の歩道に、街灯と1マスずつ交互に植える
+    for (let y = 0; y < n; y++)
+      for (let x = 0; x < n; x++) {
+        if (!((x + y) & 1)) continue;
+        const i = y * n + x;
+        const t = g.road[i];
+        if (!(t === RoadType.Street || t === RoadType.Road || t === RoadType.OneWay || t === RoadType.Avenue)) continue;
+        if (g.up[i] || g.deck[i] > 0 || g.lift[i] > 0.3 || g.bstop[i] || g.rail[i]) continue;
+        const m = g.conn[i];
+        const ew = m === ((1 << 0) | (1 << 4)) || m === (1 << 0) || m === (1 << 4);
+        const ns = m === ((1 << 2) | (1 << 6)) || m === (1 << 2) || m === (1 << 6);
+        if (!ew && !ns) continue;
+        const off = ROADS[t].width / 2 + (t === RoadType.Street ? 0.85 : 1.0);
+        for (const sd of [-1, 1]) {
+          // 横のマスが道路（大通りの反対車線など）なら、そちらには植えない
+          const ox = ew ? 0 : sd, oy = ew ? sd : 0;
+          if (g.inb(x + ox, y + oy) && g.road[(y + oy) * n + x + ox]) continue;
+          const hs = hash2(x * 3 + sd, y * 7, 11);
+          if (hs < 0.15) continue;
+          const wx = (x + 0.5) * CELL + ox * off, wz = (y + 0.5) * CELL + oy * off;
+          put(0, wx, g.roadH(i) + 0.45, wz, 0.5 + hs * 0.15, hs);
+        }
+      }
     // 広葉樹は明るい緑から黄緑、針葉樹は濃い緑
     const greens = [0x4f7a32, 0x5d8a3a, 0x3f6b2b, 0x6a9443, 0x56803a, 0x7a9a3c, 0x4a7040, 0x8a9a44, 0x5e7f2f, 0x6f8a36].map((c) => new THREE.Color(c));
     const darkGreens = [0x2f5a32, 0x3a6338, 0x2c4f2e, 0x355c3c, 0x41663a].map((c) => new THREE.Color(c));

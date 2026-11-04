@@ -87,7 +87,7 @@ export class CityRenderer {
     this.scene.fog = new THREE.Fog(sky, 1500, 7000);
     // 環境光は弱め、太陽を強めにして、日なたと日かげの差をはっきりさせる
     this.hemi = new THREE.HemisphereLight(0xcfe0f2, 0x4f4a3e, 0.85);
-    this.scene.add(this.hemi, this.lights.points, this.sky.mesh, this.stationsMesh.mesh);
+    this.scene.add(this.hemi, this.lights.group, this.sky.mesh, this.stationsMesh.mesh);
     this.sun = new THREE.DirectionalLight(0xffeed6, 3.2);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
@@ -232,12 +232,14 @@ export class CityRenderer {
         this.roads.rebuild(g);
         this.rails.rebuild(g);
         this.lights.rebuild(g);
+        this.dirty.trees = true; // 街路樹
         this.stationsMesh.rebuild(g, this.buildingList);
       }
     }
     if (this.dirty.buildings || heights) {
       if (this.buildings.update(g, this.buildingList, heights)) this.dirty.trees = true;
       updateAO(g, this.buildingList);
+      this.lights.setBeacons(this.buildings.allBeacons());
       this.props.setBuildings(g, this.buildingList);
       this.cars.setStations(g, this.buildingList);
       this.stationsMesh.rebuild(g, this.buildingList);
@@ -301,6 +303,7 @@ export class CityRenderer {
       wu.uNight.value = this.night;
     }
     this.sky.follow(this.rig.camera);
+    this.lights.update(now / 1000);
     this.trees.setLod(this.rig.dist);
     if (this.post) {
       this.post.setNight(this.night);

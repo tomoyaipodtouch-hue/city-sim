@@ -346,10 +346,31 @@ function shop(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, tier: number) {
   if (rng.next() < 0.6) mb.quad([-w / 2 + 0.5, 3.2, z1 + 1.4], [w / 2 - 0.5, 3.2, z1 + 1.4], [w / 2 - 0.5, 3.8, z1], [-w / 2 + 0.5, 3.8, z1], accent);
   roofUnits(mb, -w / 2, z0, w / 2, z1, h, rng, 1 + rng.int(3));
   // 駐車場の白線
-  for (let x = -f.W / 2 + 2; x < f.W / 2 - 2; x += 2.8) mb.ground(x, z0 - 5.5, x + 0.15, z0 - 1, 0.12, PALETTE.white);
+  stalls(mb, rng, -f.W / 2 + 2, f.W / 2 - 2, 2.8, z0 - 5.5, z0 - 1, 0.5);
   if (rng.next() < 0.5) tf(-f.W / 2 + 1.5, -f.D / 2 + 1.5, 0.8);
 }
 
+
+
+// ---------------- 駐車場（白線と、停まっている車） ----------------
+const CAR_PAINT = [0xd8d8d8, 0x2b2b2b, 0x9a1d1d, 0x1d3f8a, 0x8a8f96, 0xf2f2f2, 0x3b5d3a, 0xc9a227, 0xb8bcc0, 0x101820, 0x7a1f2b, 0x4a6a8a].map((h) => new THREE.Color(h));
+const CAR_GLASS = new THREE.Color(0x26303a);
+function parkedCar(mb: MeshBuilder, x: number, z0: number, z1: number, rng: Rng) {
+  const len = 4.3, w = 1.8;
+  const front = rng.next() < 0.5; // 前向きか後ろ向きに停める
+  const zc = (z0 + z1) / 2 + (front ? 0.2 : -0.2);
+  const c = rng.pick(CAR_PAINT);
+  mb.box(x - w / 2, 0.3, zc - len / 2, x + w / 2, 0.95, zc + len / 2, c);
+  const cz = zc + (front ? -0.25 : 0.25);
+  mb.box(x - w / 2 + 0.1, 0.95, cz - 1.05, x + w / 2 - 0.1, 1.45, cz + 1.05, CAR_GLASS, PAT.none, c);
+}
+// 区画の線（x0..x1 を step ごと、奥行き z0..z1）と、fill の割合で車を停める
+function stalls(mb: MeshBuilder, rng: Rng, x0: number, x1: number, step: number, z0: number, z1: number, fill: number, y = 0.12) {
+  for (let x = x0; x < x1; x += step) {
+    mb.ground(x, z0, x + 0.14, z1, y, PALETTE.white);
+    if (x + step < x1 + 0.01 && rng.next() < fill) parkedCar(mb, x + step / 2 + 0.07, z0, z1, rng);
+  }
+}
 
 // ---------------- 細かい部品 ----------------
 // 屋上の給水タンク：脚の上に円筒、円すいの屋根、たが（帯）
@@ -443,8 +464,8 @@ function stripMall(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
   }
   mb.box(-5, h, z1 - 0.4, 5, h + 2.4, z1, wall, PAT.none, C(0xe9e4d6));
   // 駐車場の白線と、道路沿いの看板の柱
-  for (let x = -f.W / 2 + 2; x < f.W / 2 - 2; x += 2.7) mb.ground(x, z1 + 5, x + 0.14, z1 + 10, 0.12, PALETTE.white);
-  for (let x = -f.W / 2 + 2; x < f.W / 2 - 2; x += 2.7) mb.ground(x, f.D / 2 - 6.5, x + 0.14, f.D / 2 - 1.5, 0.12, PALETTE.white);
+  stalls(mb, rng, -f.W / 2 + 2, f.W / 2 - 2, 2.7, z1 + 5, z1 + 10, 0.6);
+  stalls(mb, rng, -f.W / 2 + 2, f.W / 2 - 2, 2.7, f.D / 2 - 6.5, f.D / 2 - 1.5, 0.45);
   mb.box(f.W / 2 - 3, 0, f.D / 2 - 1.5, f.W / 2 - 2.6, 6, f.D / 2 - 1.1, PALETTE.steel);
   mb.box(f.W / 2 - 4.5, 6, f.D / 2 - 1.5, f.W / 2 - 1.1, 8.5, f.D / 2 - 1.1, rng.pick(PALETTE.accent));
   tf(-f.W / 2 + 1.5, f.D / 2 - 1.5, 0.8);
@@ -468,7 +489,11 @@ function supermarket(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
   // 駐車場
   for (let x = -f.W / 2 + 2; x < f.W / 2 - 2; x += 2.7) {
     mb.ground(x, z1 + 6, x + 0.14, z1 + 11, 0.12, PALETTE.white);
-    if (z1 + 18 < f.D / 2 - 1) mb.ground(x, z1 + 13, x + 0.14, z1 + 18, 0.12, PALETTE.white);
+    if (x + 2.7 < f.W / 2 - 2 && rng.next() < 0.65) parkedCar(mb, x + 1.42, z1 + 6, z1 + 11, rng);
+    if (z1 + 18 < f.D / 2 - 1) {
+      mb.ground(x, z1 + 13, x + 0.14, z1 + 18, 0.12, PALETTE.white);
+      if (x + 2.7 < f.W / 2 - 2 && rng.next() < 0.45) parkedCar(mb, x + 1.42, z1 + 13, z1 + 18, rng);
+    }
   }
   mb.box(9, 0, z1 + 4, 11.5, 1.1, z1 + 5, PALETTE.steel); // カート置き場
   for (const x of [-f.W / 2 + 2, f.W / 2 - 2]) tf(x, f.D / 2 - 2, 0.8);
@@ -487,7 +512,7 @@ function cornerStore(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
   roofRim(mb, -w / 2, z0, w / 2, z1, h, wall, 0.5);
   roofUnits(mb, -w / 2 + 0.5, z0 + 0.5, w / 2 - 0.5, z1 - 0.5, h, rng, 2);
   // 前の駐車場
-  for (let x = -w / 2; x < w / 2; x += 2.7) mb.ground(x, z1 + 1, x + 0.14, z1 + 5.5, 0.12, PALETTE.white);
+  stalls(mb, rng, -w / 2, w / 2, 2.7, z1 + 1, z1 + 5.5, 0.55);
   // 道路沿いの看板
   mb.box(f.W / 2 - 2.2, 0, f.D / 2 - 1.4, f.W / 2 - 1.9, 4.5, f.D / 2 - 1.1, PALETTE.steel);
   mb.box(f.W / 2 - 3.2, 4.5, f.D / 2 - 1.4, f.W / 2 - 0.9, 6.3, f.D / 2 - 1.1, accent);
@@ -617,7 +642,7 @@ function factory(mb: MeshBuilder, f: LotFrame, rng: Rng, dirty: boolean, den = 0
     // 事務所棟と搬入口
     mb.box(x0, 0, z1, x0 + Math.min(12, w / 2), 7, z1 + 5, PALETTE.white, PAT.office, flatRoof());
     roofUnits(mb, x0, z0, x1, z1, h, rng, 3 + rng.int(3));
-    for (let x = x0 + 14; x < x1 - 3; x += 3) mb.ground(x, z1 + 1, x + 0.15, z1 + 5.5, 0.12, PALETTE.white);
+    stalls(mb, rng, x0 + 14, x1 - 3, 3, z1 + 1, z1 + 5.5, 0.55);
   }
   // トラック
   if (rng.next() < 0.7) {
