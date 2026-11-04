@@ -113,6 +113,7 @@ hud.applySettings();
 
 tools.onResult = (_ok, msg) => hud.showToast(msg, true);
 
+let pitchSave = 0;
 new Input(canvas, renderer, tools, {
   onTap: (c) => {
     if (!inGame) return;
@@ -124,6 +125,12 @@ new Input(canvas, renderer, tools, {
   isOverCancel: (x, y) => hud.isOverCancel(x, y),
   onCancelled: () => hud.showToast('キャンセルしました'),
   onInteract: () => {},
+  // 2本指で傾きを変えたら、設定にも反映して保存する（保存は少し待ってからまとめて）
+  onPitch: (v) => {
+    hud.settings.camPitch = v;
+    clearTimeout(pitchSave);
+    pitchSave = window.setTimeout(() => storeSettings(hud.settings), 400);
+  },
 });
 
 game.onReady = () => {

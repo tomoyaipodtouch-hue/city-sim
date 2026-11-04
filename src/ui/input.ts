@@ -20,6 +20,7 @@ export interface InputHooks {
   isOverCancel: (clientX: number, clientY: number) => boolean;
   onCancelled: () => void;
   onInteract: () => void;
+  onPitch?: (offsetDeg: number) => void; // 2本指の上下スワイプでカメラの傾きを変えたとき
 }
 
 type Mode = 'idle' | 'pan' | 'tool' | 'gesture' | 'ending';
@@ -28,6 +29,9 @@ export class Input {
   private ptrs = new Map<number, Ptr>();
   private mode: Mode = 'idle';
   private g0 = { dist: 0, angle: 0, mx: 0, my: 0, rotAcc: 0 };
+  // 2本指の操作の種類：動かし始めで決める（そろって上下 = 傾き、それ以外 = 移動・ズーム・回転）
+  private gKind: 'undecided' | 'tilt' | 'pz' = 'undecided';
+  private gStart = { ax: 0, ay: 0, bx: 0, by: 0, dist: 0 };
   private lastCell = { x: -1, y: -1 };
 
   constructor(private canvas: HTMLCanvasElement, private r: CityRenderer, private tools: ToolController, private hooks: InputHooks) {
@@ -75,6 +79,8 @@ export class Input {
         my: (a.y + b.y) / 2,
         rotAcc: 0,
       };
+      this.gKind = 'undecided';
+      this.gStart = { ax: a.x, ay: a.y, bx: b.x, by: b.y, dist: this.g0.dist };
     }
   };
 
@@ -104,6 +110,28 @@ export class Input {
       const dist = Math.hypot(a.x - b.x, a.y - b.y);
       const angle = Math.atan2(b.y - a.y, b.x - a.x);
       const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      if (this.gKind === 'undecided') {
+        const S = this.gStart;
+        const dax = a.x - S.ax, day = a.y - S.ay, dbx = b.x - S.bx, dby = b.y - S.by;
+        if (Math.max(Math.hypot(dax, day), Math.hypot(dbx, dby)) > 14) {
+          const vertical = day * dby > 0 && Math.abs(day) > 1.5 * Math.abs(dax) && Math.abs(dby) > 1.5 * Math.abs(dbx);
+          this.gKind = vertical && Math.abs(dist - S.dist) < 30 ? 'tilt' : 'pz';
+        }
+        if (this.gKind === 'undecided') return;
+        this.g0.dist = dist;
+        this.g0.angle = angle;
+        this.g0.mx = mx;
+        this.g0.my = my;
+      }
+      if (this.gKind === 'tilt') {
+        // 上へスワイプ = 地面に近い横からの眺め、下へ = 真上寄り
+        const rig = this.r.rig;
+        rig.pitchOffset = Math.max(-30, Math.min(15, rig.pitchOffset + (my - this.g0.my) * 0.12));
+        this.hooks.onPitch?.(Math.round(rig.pitchOffset));
+        this.g0.my = my;
+        this.g0.mx = mx;
+        return;
+      }
       this.r.rig.pan(mx - this.g0.mx, my - this.g0.my, this.canvas.clientHeight);
       if (dist > 10 && this.g0.dist > 10) {
         const anchor = this.r.pick(mx, my)?.point || null;

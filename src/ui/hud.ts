@@ -801,7 +801,7 @@ export class Hud {
     dn.append(seg);
     body.append(dn);
     // カメラの角度
-    const cp = el('div', 'row', '<div><div>カメラの角度</div><div class="desc">左にすると地面に近い横からの眺め、右にすると真上寄りになります</div></div>');
+    const cp = el('div', 'row', '<div><div>カメラの角度</div><div class="desc">左にすると地面に近い横からの眺め、右にすると真上寄りになります。2本指で画面を上下にスワイプしても変えられます</div></div>');
     const box = el('div', 'jrow');
     box.style.minWidth = '190px';
     const label = (v: number) => (v === 0 ? '標準' : v < 0 ? `横から ${-v}°` : `真上寄り ${v}°`);
@@ -833,7 +833,7 @@ export class Hud {
       row.append(t);
       body.append(row);
     }
-    body.append(el('p', 'muted', '操作：1本指でドラッグ＝地図を動かす（ツールを選んでいるときは道路を引くなど）、2本指でドラッグ＝地図を動かす、ピンチ＝ズーム、2本指でひねる＝回転、タップ＝情報'));
+    body.append(el('p', 'muted', '操作：1本指でドラッグ＝地図を動かす（ツールを選んでいるときは道路を引くなど）、2本指でドラッグ＝地図を動かす、2本指で上下にスワイプ＝カメラの傾き、ピンチ＝ズーム、2本指でひねる＝回転、タップ＝情報'));
   }
 
   applySettings() {
