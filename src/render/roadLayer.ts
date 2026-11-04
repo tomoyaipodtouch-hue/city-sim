@@ -675,10 +675,12 @@ export class RoadLayer {
             if (elevated) deckUnder(pts, level ? ground : null);
           } else for (const a of hw) ribbon(armPts(a, 0).reverse(), t, [false, false]);
           for (const a of others) {
+            onGround = nodeGround && a.ng; // 高架へ上がる腕は、地面に合わせない
             const pts = armPts(a, 0).reverse();
             ribbon(pts, t, [false, false]);
             if (elevated) deckUnder(pts, level ? ground : null);
           }
+          onGround = nodeGround;
           disc(cx, cz, ch, w / 2, asph);
           continue;
         }

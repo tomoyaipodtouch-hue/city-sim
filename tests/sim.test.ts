@@ -225,6 +225,33 @@ describe('stage 2a roads', () => {
     for (const [x, y] of [[13, 13], [14, 14], [14, 13], [13, 14]]) expect(g.conn[g.idx(x, y)] & 0b01010101).toBe(0);
   });
 
+  it('urban highway ramps (1x5) connect a road at the middle to one direction of the highway', () => {
+    for (const type of [RoadType.UrbanGroundHighway, RoadType.UrbanHighway]) {
+      const w = new World(48);
+      w.g.heights.fill(6);
+      w.funds = 1e6;
+      const g = w.g;
+      expect(w.exec({ t: 'road', x0: 2, y0: 20, x1: 45, y1: 20, road: type }).ok).toBe(true);
+      // 南側（東向きの車線の側）に置く。真ん中は (20, 21)。外側の一般道は南へ
+      expect(w.exec({ t: 'road', x0: 20, y0: 22, x1: 20, y1: 35, road: RoadType.Road }).ok).toBe(true);
+      const r = w.exec({ t: 'uramp', x: 20, y: 21 });
+      expect(r.ok).toBe(true);
+      // 一般道を後から引いても、真ん中のマスはランプのまま
+      expect(g.road[g.idx(20, 21)]).toBe(RoadType.Ramp);
+      // 出口：本線(17,20) → (18,21)、入口：(22,21) → 本線(23,20)
+      const L = type === RoadType.UrbanHighway ? 1 : 0;
+      const f0 = L ? g.flow1 : g.flow;
+      expect(f0[g.idx(17, 20)] & (1 << 1)).not.toBe(0);
+      const fe = L ? g.flow1 : g.flow;
+      expect(fe[g.idx(22, 21)] & (1 << 7)).not.toBe(0);
+      // 真ん中から一般道へ
+      expect(g.flow[g.idx(20, 21)] & (1 << 2)).not.toBe(0);
+      // 北側に置くと、西向きの車線用になる
+      expect(w.exec({ t: 'uramp', x: 30, y: 19 }).ok).toBe(true);
+      expect(f0[g.idx(33, 20)] & (1 << 5)).not.toBe(0);
+    }
+  });
+
   it('builds a bridge across water', () => {
     const w = new World(32);
     const V = 33;

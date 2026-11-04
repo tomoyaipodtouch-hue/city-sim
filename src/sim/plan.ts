@@ -444,7 +444,7 @@ export function applyRoad(g: Grid, plan: RoadPlan) {
         g.upH[i] = plan.upH.get(i) ?? g.upH[i];
       } else {
         const cur = g.road[i];
-        if ((!cur || ROADS[cur].rank < def.rank) && !lane.joins?.has(i)) g.road[i] = plan.type;
+        if ((!cur || ROADS[cur].rank < def.rank) && !lane.joins?.has(i) && cur !== RoadType.Ramp) g.road[i] = plan.type;
       }
       if (!def.elevated || levels[k] === 0) {
         g.zone[i] = 0;
@@ -1544,4 +1544,95 @@ export function fixWideTransitions(g: Grid, around: Iterable<number>) {
           }
         }
       }
+}
+
+// ---- 都市高速（片側1車線）のランプ：高速道路の横に1×5マス ----
+// タップしたマスが真ん中。右側通行なので、置いた側を走る向きの出口（手前の端）と入口（先の端）になる。
+// 真ん中のマスは、外側の一般道と直角につながる。高架の場合、真ん中は地上で、両端に向かって上がる。
+export interface URampPlan {
+  ok: boolean;
+  reason: string;
+  cells: number[]; // R[-2..2]
+  hw: number[]; // H[-3..3]
+  level: number;
+  a: number; // 本線の進む向き（この側の車線）
+  s: number; // ランプ → 本線の向き
+  heights: number[];
+  road: number; // 真ん中につなぐ一般道（なければ -1）
+  cost: number;
+}
+export function planURamp(g: Grid, x: number, y: number): URampPlan {
+  const n = g.n;
+  const fail = (reason: string, cells: number[] = []): URampPlan => ({ ok: false, reason, cells, hw: [], level: 0, a: 0, s: 0, heights: [], road: -1, cost: RAMP_COST * 3 });
+  if (!g.inb(x, y)) return fail('マップの外です');
+  let lastCells: number[] = [];
+  for (const s of [0, 2, 4, 6]) {
+    const hx = x + DX[s], hy = y + DY[s];
+    if (!g.inb(hx, hy)) continue;
+    const h0 = g.idx(hx, hy);
+    const level = g.up[h0] === RoadType.UrbanHighway ? 1 : g.road[h0] === RoadType.UrbanGroundHighway ? 0 : -1;
+    if (level < 0) continue;
+    const type = level ? RoadType.UrbanHighway : RoadType.UrbanGroundHighway;
+    const a = (s + 2) & 7;
+    const at = (bx: number, by: number, k: number) => {
+      const xx = bx + DX[a] * k, yy = by + DY[a] * k;
+      return g.inb(xx, yy) ? g.idx(xx, yy) : -1;
+    };
+    const cells = [-2, -1, 0, 1, 2].map((k) => at(x, y, k));
+    const hw = [-3, -2, -1, 0, 1, 2, 3].map((k) => at(hx, hy, k));
+    lastCells = cells.filter((c) => c >= 0);
+    if (cells.some((c) => c < 0) || hw.some((c) => c < 0)) return fail('マップの端に近すぎます', lastCells);
+    const conn = level ? g.conn1 : g.conn;
+    const along = (1 << a) | (1 << opp(a));
+    for (const c of hw) {
+      if ((level ? g.up[c] : g.road[c]) !== type) return fail('都市高速のまっすぐな区間（7マス）の横に置いてください', lastCells);
+      if (conn[c] & ~along & 0xff) return fail('都市高速のまっすぐな区間に置いてください（交差点や曲がり角の横には置けません）', lastCells);
+    }
+    for (const c of cells) {
+      const cx = c % n, cy = (c / n) | 0;
+      if (g.road[c] || g.up[c] || g.bldg[c] || hasSurfaceLine(g, c)) return fail('空いているマス（5マス）に置いてください', lastCells);
+      if (g.isWater(cx, cy)) return fail('水の上には置けません', lastCells);
+    }
+    const dOut = dirOf((cells[0] % n) - (hw[0] % n), ((cells[0] / n) | 0) - ((hw[0] / n) | 0));
+    const dIn = dirOf((hw[6] % n) - (cells[4] % n), ((hw[6] / n) | 0) - ((cells[4] / n) | 0));
+    if (crossesDiagonal(g, hw[0], dOut, level) || crossesDiagonal(g, cells[4], dIn, level)) return fail('近くの斜めの道路と交差します', lastCells);
+    // 真ん中の外側の一般道
+    const ox = x - DX[s], oy = y - DY[s];
+    let road = -1;
+    if (g.inb(ox, oy)) {
+      const j = g.idx(ox, oy), t = g.road[j];
+      if (t && !isHighway(t) && t !== RoadType.Ramp && !g.up[j]) road = j;
+    }
+    const gh = g.cellH(x, y);
+    const hu = level ? g.upH[hw[3]] : gh;
+    const heights = [0.8, 0.45, 0, 0.45, 0.8].map((k) => gh + (hu - gh) * k);
+    return { ok: true, reason: '', cells, hw, level, a, s, heights, road, cost: RAMP_COST * 3 };
+  }
+  return fail('都市高速（片側1車線）の横に置いてください', lastCells.length ? lastCells : [g.idx(x, y)]);
+}
+
+export function applyURamp(g: Grid, p: URampPlan) {
+  const n = g.n;
+  const { cells, hw, level, a } = p;
+  cells.forEach((c, k) => {
+    const L = level && k !== 2 ? 1 : 0;
+    if (L) {
+      g.up[c] = RoadType.Ramp;
+      g.upH[c] = p.heights[k];
+    } else g.road[c] = RoadType.Ramp;
+    g.zone[c] = 0;
+    g.zden[c] = 0;
+    g.tree[c] = 0;
+  });
+  const lv = (k: number) => (level && k !== 2 ? 1 : 0);
+  const dir = (from: number, to: number) => dirOf((to % n) - (from % n), ((to / n) | 0) - ((from / n) | 0));
+  // 出口：本線 H[-3] → R[-2] → R[-1] → R[0]
+  link(g, hw[0], level, cells[0], lv(0), dir(hw[0], cells[0]), true);
+  link(g, cells[0], lv(0), cells[1], lv(1), a, true);
+  link(g, cells[1], lv(1), cells[2], lv(2), a, true);
+  // 入口：R[0] → R[1] → R[2] → 本線 H[3]
+  link(g, cells[2], lv(2), cells[3], lv(3), a, true);
+  link(g, cells[3], lv(3), cells[4], lv(4), a, true);
+  link(g, cells[4], lv(4), hw[6], level, dir(cells[4], hw[6]), true);
+  if (p.road >= 0) link(g, cells[2], 0, p.road, 0, dir(cells[2], p.road), false);
 }
