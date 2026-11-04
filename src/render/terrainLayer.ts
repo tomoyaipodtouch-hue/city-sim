@@ -101,7 +101,7 @@ export class TerrainLayer {
     const wg = new THREE.PlaneGeometry(size, size, 1, 1);
     wg.rotateX(-Math.PI / 2);
     wg.translate(size / 2, WATER_LEVEL, size / 2);
-    const wm = new THREE.MeshPhongMaterial({ color: 0x2b6f96, specular: 0xd8ecf6, shininess: 140, transparent: true, opacity: 0.9 });
+    const wm = new THREE.MeshPhongMaterial({ color: 0x2b6f96, specular: 0x3a4650, shininess: 60, transparent: true, opacity: 0.9 });
     const U = this.waterUniforms;
     wm.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, U);
@@ -121,15 +121,16 @@ export class TerrainLayer {
           diffuseColor.rgb = mix(vec3(0.045, 0.17, 0.17), vec3(0.008, 0.045, 0.09), dk);
           diffuseColor.a = mix(0.5, 0.93, smoothstep(0.0, 3.0, depth));
           // 岸辺の白い波
-          float foamBand = 1.0 - smoothstep(0.05, 0.9, depth);
-          float foam = foamBand * (0.55 + 0.45 * sin(uTime * 1.3 + depth * 9.0 + vWw.x * 0.11 + vWw.z * 0.07));
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.75, 0.8, 0.82), foam * 0.75);
-          diffuseColor.a = max(diffuseColor.a, foam * 0.9);`)
+          float foamBand = 1.0 - smoothstep(0.02, 0.35, depth);
+          float foam = foamBand * (0.6 + 0.4 * sin(uTime * 1.3 + depth * 9.0 + vWw.x * 0.11 + vWw.z * 0.07)) * (1.0 - uNight * 0.85);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.55, 0.6, 0.62), foam * 0.45);
+          diffuseColor.a = max(diffuseColor.a, foam * 0.6);`)
         .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+          specularStrength = 1.0 - uNight * 0.9;
           {
             vec2 p = vWw.xz;
-            float dx = 0.06 * wv(p, vec2(0.8, 0.6), 0.09, 1.1) + 0.04 * wv(p, vec2(-0.3, 0.95), 0.17, 1.7) + 0.02 * wv(p, vec2(0.6, -0.8), 0.41, 2.6);
-            float dz = 0.06 * wv(p, vec2(0.6, -0.8), 0.08, 0.9) + 0.04 * wv(p, vec2(0.95, 0.3), 0.19, 1.5) + 0.02 * wv(p, vec2(-0.7, -0.7), 0.37, 2.3);
+            float dx = 0.025 * wv(p, vec2(0.8, 0.6), 0.09, 1.1) + 0.016 * wv(p, vec2(-0.3, 0.95), 0.17, 1.7) + 0.008 * wv(p, vec2(0.6, -0.8), 0.41, 2.6);
+            float dz = 0.025 * wv(p, vec2(0.6, -0.8), 0.08, 0.9) + 0.016 * wv(p, vec2(0.95, 0.3), 0.19, 1.5) + 0.008 * wv(p, vec2(-0.7, -0.7), 0.37, 2.3);
             vec3 wn = normalize(vec3(dx, 1.0, dz));
             normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz);
           }`)
@@ -138,7 +139,7 @@ export class TerrainLayer {
             // 空の映り込み（斜めから見るほど強い）
             vec3 V = normalize(vViewPosition);
             float fres = pow(1.0 - max(dot(V, normal), 0.0), 4.0);
-            totalEmissiveRadiance += uSky * fres * 0.55 * (1.0 - uNight * 0.8);
+            totalEmissiveRadiance += uSky * fres * 0.3 * (1.0 - uNight);
           }`);
     };
     this.water = new THREE.Mesh(wg, wm);

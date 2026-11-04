@@ -20,7 +20,7 @@ const ICONS: Record<string, string> = {
   civic: '<path d="M3 9 12 4l9 5M5 9v9M19 9v9M9.5 9v9M14.5 9v9M3 20h18"/>',
   transit: '<rect x="5" y="3" width="14" height="14" rx="3"/><path d="M5 11h14M8 21l1.5-4M16 21l-1.5-4"/><circle cx="8.5" cy="14" r=".6"/><circle cx="15.5" cy="14" r=".6"/>',
   terrain: '<path d="M2 20 9 8l4 6 3-4 6 10z"/>',
-  bulldoze: '<path d="M3 17h11v-5H7l-2 5M14 14h3l3-6M14 12V8h-4"/><circle cx="6" cy="19" r="1.5"/><circle cx="12" cy="19" r="1.5"/>',
+  bulldoze: '<rect x="4" y="15" width="12" height="5" rx="2.5"/><circle cx="6.5" cy="17.5" r=".8"/><circle cx="10" cy="17.5" r=".8"/><circle cx="13.5" cy="17.5" r=".8"/><path d="M5 15v-3h6.5l1.5 3M7 12V7.5h4.5V12"/><path d="M16 15.5l2.5-2"/><path d="M18.5 9.5c1.6 1.6 2 5.5 1.2 9.5"/><path d="M18.5 9.5l1.2 9.5"/>',
   query: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>',
   hide: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/><path d="M3 3l18 18"/>',
   show: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
