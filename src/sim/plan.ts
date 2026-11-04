@@ -129,36 +129,8 @@ function axisOf(mask: number) {
   return { ew, ns, dg, deg: ew + ns + dg };
 }
 
-// 斜めの道路どうしが、マスの角で（交差点なしに）交わる場所は、
-// 既存の道路のマスを通るように1マス分だけ回り道して、そこを交差点にする
-export function rerouteDiagonalCrossings(g: Grid, path: LinePath): LinePath {
-  const n = g.n;
-  const cells: number[] = [path.cells[0]];
-  for (let k = 0; k < path.dirs.length; k++) {
-    const a = path.cells[k], b = path.cells[k + 1], d = path.dirs[k];
-    if (isDiag(d) && crossesDiagonal(g, a, d, 0)) {
-      const x = a % n, y = (a / n) | 0;
-      // 交わっている斜めの道路の、どちらかの端のマスを通る（地上の一般の道路のマス）
-      const c1 = y * n + x + DX[d], c2 = (y + DY[d]) * n + x;
-      const ok = (c: number) => g.road[c] && !isHighway(g.road[c]) && g.road[c] !== RoadType.Ramp && !g.up[c] && !(g.deck[c] > 0);
-      const c = ok(c1) ? c1 : ok(c2) ? c2 : -1;
-      if (c >= 0) {
-        cells.push(c);
-        cells.push(b);
-        continue;
-      }
-    }
-    cells.push(b);
-  }
-  if (cells.length === path.cells.length) return path;
-  const dirs: number[] = [];
-  for (let k = 0; k + 1 < cells.length; k++) dirs.push(dirOf((cells[k + 1] % n) - (cells[k] % n), ((cells[k + 1] / n) | 0) - ((cells[k] / n) | 0)));
-  return { cells, dirs };
-}
-
-export function planRoad(g: Grid, path0: LinePath, type: RoadType): RoadPlan {
+export function planRoad(g: Grid, path: LinePath, type: RoadType): RoadPlan {
   const def = ROADS[type];
-  const path = def.wide || def.highway ? path0 : rerouteDiagonalCrossings(g, path0);
   const bad = new Set<number>();
   const reasons: string[] = [];
   const why = (r: string) => reasons.push(r);
@@ -320,7 +292,15 @@ function planLane(
     }
   }
   for (let k = 0; k < dirs.length; k++) {
-    if (isDiag(dirs[k]) && levels[k] === levels[k + 1] && crossesDiagonal(g, cells[k], dirs[k], levels[k])) {
+    // 地上の一般の道路どうしは、斜めのまま X 字に交差できる（マスの角が交差点になる）
+    const localX = (c: number) => g.road[c] !== 0 && !isHighway(g.road[c]) && g.road[c] !== RoadType.Ramp && !(g.deck[c] > 0);
+    const xOk = () => {
+      if (levels[k] || levels[k + 1] || def.highway || def.wide) return false;
+      const x = cells[k] % n, y = (cells[k] / n) | 0, d = dirs[k];
+      const c1 = y * n + x + DX[d], c2 = (y + DY[d]) * n + x;
+      return localX(c1) && localX(c2) && !ROADS[g.road[c1]].wide && !ROADS[g.road[c2]].wide;
+    };
+    if (isDiag(dirs[k]) && levels[k] === levels[k + 1] && crossesDiagonal(g, cells[k], dirs[k], levels[k]) && !xOk()) {
       bad.add(cells[k]);
       bad.add(cells[k + 1]);
       why('斜めの道路どうしは交差点なしで交差できません');

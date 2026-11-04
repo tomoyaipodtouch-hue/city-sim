@@ -887,6 +887,29 @@ export class RoadLayer {
         }
       }
     }
+    // ---- 斜めの道路どうしが X 字に交わる角：交差点の路面 ----
+    for (let i = 0; i < NC; i++) {
+      const t = g.road[i];
+      if (!t || g.up[i]) continue;
+      const x = i % n, y = (i / n) | 0;
+      for (const d of [1, 3]) {
+        if (!(g.conn[i] & (1 << d))) continue;
+        const ax = x + DX[d], ay = y, bx = x, by = y + DY[d];
+        if (!g.inb(ax, ay) || !g.inb(bx, by)) continue;
+        const dd = d === 1 ? 3 : 1; // (ax,ay) → (bx,by) の向き
+        if (!(g.conn[ay * n + ax] & (1 << dd))) continue;
+        const t2 = g.road[ay * n + ax];
+        const cx = (x + 0.5 + DX[d] / 2) * CELL, cz = (y + 0.5 + DY[d] / 2) * CELL;
+        const w = Math.max(ROADS[t].width, ROADS[t2]?.width ?? 0);
+        S.owner = -3;
+        onGround = true;
+        liftCur = 0;
+        const asph = t === RoadType.Street || t2 === RoadType.Street ? COL.asphaltStreet : COL.asphalt;
+        disc(cx, cz, g.groundAt(cx, cz) + ROAD_LIFT + 0.04, w * 0.78, asph, S, 24);
+      }
+    }
+    onGround = false;
+
     // ---- 重なりの取り除き ----
     // 路面の三角形を、マスごとの入れ物に分けておく
     const buckets = new Map<number, number[]>();

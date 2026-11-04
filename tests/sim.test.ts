@@ -221,10 +221,8 @@ describe('stage 2a roads', () => {
     expect(w.exec({ t: 'road', x0: 10, y0: 10, x1: 20, y1: 20, road: RoadType.Road }).ok).toBe(true);
     const r = w.exec({ t: 'road', x0: 17, y0: 10, x1: 7, y1: 20, road: RoadType.Road });
     expect(r.ok).toBe(true);
-    // 交差点になったマス（4本以上つながる）がある
-    let junction = false;
-    for (let i = 0; i < 32 * 32; i++) { let k = 0; for (let d = 0; d < 8; d++) if (g.conn[i] & (1 << d)) k++; if (k >= 4) junction = true; }
-    expect(junction).toBe(true);
+    // まっすぐ X 字に交わる（回り道しない）：交わる角の4マスは、斜めにだけつながる
+    for (const [x, y] of [[13, 13], [14, 14], [14, 13], [13, 14]]) expect(g.conn[g.idx(x, y)] & 0b01010101).toBe(0);
   });
 
   it('builds a bridge across water', () => {
