@@ -198,3 +198,64 @@ export function garbageTruck() {
     ...lights(W, 1.05, 3.72, 1.1, -3.72),
   ])!;
 }
+
+// ---------------- 列車の車両 ----------------
+// kind：rail（鉄道）、erail（高架鉄道）、sub（地下鉄）、mono（モノレール）。head = 運転台つき（前が +z）
+export const TRAIN_SPEC = {
+  rail: { L: 18, gap: 0.8, cars: 5, stripe: 0x2e9e5b, stripe2: 0xf08a24 },
+  erail: { L: 18, gap: 0.8, cars: 4, stripe: 0x1f6fd0, stripe2: 0x9ad0ff },
+  sub: { L: 17, gap: 0.8, cars: 5, stripe: 0xd23a3a, stripe2: 0xf2f2f2 },
+  mono: { L: 13, gap: 0.6, cars: 4, stripe: 0x1aa38a, stripe2: 0x0f6f60 },
+} as const;
+export type TrainKind = keyof typeof TRAIN_SPEC;
+
+export function trainCar(kind: TrainKind, head: boolean) {
+  const S = TRAIN_SPEC[kind];
+  const L = S.L, hl = L / 2;
+  const mono = kind === 'mono';
+  const W = mono ? 2.7 : 2.9;
+  const y0 = mono ? -0.5 : 0.95, y1 = mono ? 2.9 : 4.0; // 車体の下と上
+  const BODY = mono ? 0xf2f4f6 : 0xe4e7ea;
+  const parts: THREE.BufferGeometry[] = [];
+  // 車体（横から見た輪郭）。先頭車は前が斜め、モノレールは丸みのある前
+  const front: P[] = head
+    ? mono
+      ? [[hl - 2.6, y0], [hl - 0.6, y0 + 0.4], [hl, y0 + 1.4], [hl - 0.3, y1 - 0.8], [hl - 1.6, y1]]
+      : [[hl - 0.2, y0], [hl, y0 + 0.7], [hl, y0 + 1.6], [hl - 1.4, y1 - 0.15], [hl - 1.8, y1]]
+    : [[hl, y0], [hl, y1]];
+  parts.push(side([[-hl, y0], ...front, [-hl, y1]], W, BODY));
+  // 屋根のまるみ（少し細い板を重ねる）
+  parts.push(box(W - 0.5, 0.22, (head ? L - 2.2 : L) - 0.3, 0, y1 + 0.08, head ? -1.0 : 0, 0xd2d6da));
+  // 窓の帯（両側）と、色の帯
+  const winY = mono ? 1.25 : 2.55, winH = mono ? 0.95 : 1.05;
+  const wl = head ? L - 3.6 : L - 1.2, wz = head ? -1.2 : 0;
+  parts.push(box(W + 0.04, winH, wl, 0, winY, wz, GLASS));
+  parts.push(box(W + 0.05, 0.28, L - 0.4, 0, winY - winH / 2 - 0.25, 0, S.stripe));
+  parts.push(box(W + 0.05, 0.12, L - 0.4, 0, winY - winH / 2 - 0.5, 0, S.stripe2));
+  // ドア（片側 3〜4 か所、暗い色）
+  const doors = mono ? [-3.5, 2.0] : [-6.0, -1.5, 3.0];
+  for (const z of doors) parts.push(box(W + 0.07, mono ? 1.7 : 2.0, 1.2, 0, (mono ? 1.0 : 2.1), z + (head ? -0.8 : 0), 0xb4babf));
+  if (head) {
+    // 前面のガラスとライト
+    const gz = mono ? hl - 0.9 : hl - 0.75;
+    parts.push(side(mono ? [[hl - 1.0, y0 + 1.4], [hl - 0.25, y0 + 1.5], [hl - 0.55, y1 - 0.85], [hl - 1.5, y1 - 0.2]] : [[hl - 0.05, y0 + 1.7], [hl - 0.05, y0 + 1.75], [hl - 1.35, y1 - 0.2], [hl - 1.5, y1 - 0.25]], W - 0.3, GLASS));
+    parts.push(box(0.5, 0.2, 0.08, -W / 2 + 0.55, y0 + 0.75, gz + 0.7, HEAD), box(0.5, 0.2, 0.08, W / 2 - 0.55, y0 + 0.75, gz + 0.7, HEAD));
+    parts.push(box(W - 0.6, 0.35, 0.1, 0, y0 + 0.35, hl - 0.1, S.stripe)); // 前の色の帯
+  }
+  if (mono) {
+    // 軌道けたを包むスカート
+    parts.push(box(W - 0.2, 0.9, L - 1.0, 0, -0.75, 0, 0x7d848b));
+  } else {
+    // 台車と床下の機器
+    for (const z of [hl - 3.2, -hl + 3.2]) parts.push(box(2.3, 0.75, 2.8, 0, 0.55, z, 0x2a2d31));
+    parts.push(box(2.2, 0.45, L - 9, 0, 0.75, 0, 0x3a3d42));
+    if (kind !== 'sub') {
+      // パンタグラフ（低い台と、細い枠）
+      const pz = head ? -3.5 : 2.5, py = y1 + 0.2;
+      parts.push(box(1.0, 0.14, 0.7, 0, py, pz, 0x5a5f66));
+      parts.push(box(0.06, 0.06, 1.0, 0, py + 0.45, pz, 0x30343a));
+      parts.push(box(1.1, 0.06, 0.08, 0, py + 0.75, pz, 0x30343a));
+    }
+  }
+  return mergeGeometries(parts)!;
+}

@@ -6,7 +6,7 @@ import { CELL, DX, DY, opp } from '../sim/constants';
 import { isHighway, LINES, LineKind, ROADS, RoadType } from '../sim/defs';
 import { RailLayer, TRACK_GAP } from './railLayer';
 import { ROAD_LIFT } from './roadLayer';
-import { boxTruck, cityBus, garbageTruck, hatchback, minivan, pickup, sedan, suv, tractor, trailerBox, trailerTank, vc } from './vehicles';
+import { boxTruck, cityBus, garbageTruck, trainCar, TRAIN_SPEC, TrainKind, hatchback, minivan, pickup, sedan, suv, tractor, trailerBox, trailerTank, vc } from './vehicles';
 
 const MAX_CARS = 1500;
 const MAX_TRUCKS = 300;
@@ -30,7 +30,7 @@ interface Car extends Cell {
   lane: number;
   col: number; // 車体の色（パレットの番号）。車ごとに決めて変えない
   col2: number; // トレーラーの色
-  p: Cell | null; // ひとつ前のマス（トレーラーの位置に使う）
+  hist: Cell[]; // 通ってきたマス（新しい順）。トレーラーや列車の後ろの車両の位置に使う
 }
 
 // 走る場所：道路（車・トラック・バス）、歩道、線路（鉄道・高架鉄道・モノレール・地下鉄）
@@ -39,6 +39,10 @@ type Track = 'road' | 'bus' | 'walk' | LineKind;
 class Fleet {
   mesh: THREE.InstancedMesh;
   trailer: THREE.InstancedMesh | null = null;
+  // 列車：先頭と最後尾は mesh（運転台つき）、中間の車両は mid
+  mid: THREE.InstancedMesh | null = null;
+  carsPer = 1;
+  spacing = 0;
   trailerColors: THREE.Color[] = [];
   cars: Car[] = [];
   cdf = new Float32Array(0);
@@ -57,6 +61,16 @@ class Fleet {
     m.frustumCulled = false;
     m.setColorAt(0, new THREE.Color());
     return m;
+  }
+  asTrain(kind: TrainKind) {
+    const S = TRAIN_SPEC[kind];
+    this.carsPer = S.cars;
+    this.spacing = S.L + S.gap;
+    this.mesh.dispose();
+    this.mesh = this.makeMesh(trainCar(kind, true), this.max * 2);
+    this.mid = this.makeMesh(trainCar(kind, false), this.max * Math.max(1, S.cars - 2));
+    this.halfLen = S.L / 2;
+    return this;
   }
   withTrailer(geo: THREE.BufferGeometry, palette: number[]) {
     this.trailer = this.makeMesh(geo, this.max);
@@ -96,7 +110,7 @@ export class CarLayer {
   // 夜は車が暗くなりすぎないように、少し光らせる。前後のライトは光の点で描く
   setNight(k: number) {
     this.night = k;
-    for (const f of this.fleets) for (const m of [f.mesh, f.trailer]) if (m) (m.material as THREE.MeshLambertMaterial).emissive.setRGB(0.05 * k, 0.05 * k, 0.045 * k);
+    for (const f of this.fleets) for (const m of [f.mesh, f.trailer, f.mid]) if (m) (m.material as THREE.MeshLambertMaterial).emissive.setRGB(0.05 * k, 0.05 * k, 0.045 * k);
     for (const p of [this.lightsHead, this.lightsTail]) (p.material as THREE.PointsMaterial).opacity = Math.min(1, k * 1.3);
   }
   private makeLights(color: number, size: number) {
@@ -151,10 +165,10 @@ export class CarLayer {
     this.packers = new Fleet(garbageTruck(), 60, [0xf2f2f2, 0x2e8b57, 0x2e6da4, 0x3f7f3f], 'road', 3.7);
     this.bus = new Fleet(cityBus(), 200, [0xe0a800, 0x2f86d0, 0x2e8b57, 0xd0d0d0], 'bus', 6.0);
     this.lineFleets = [
-      new Fleet(train, 160, [0xf2f2f2], 'rail'),
-      new Fleet(train, 160, [0xe8eef2], 'erail'),
-      new Fleet(mono, 120, [0xf4f4f4], 'mono'),
-      new Fleet(train, 160, [0xd9dde2], 'sub'),
+      new Fleet(train, 60, [0xffffff], 'rail').asTrain('rail'),
+      new Fleet(train, 60, [0xffffff], 'erail').asTrain('erail'),
+      new Fleet(mono, 50, [0xffffff], 'mono').asTrain('mono'),
+      new Fleet(train, 60, [0xffffff], 'sub').asTrain('sub'),
     ];
     this.people = new Fleet(person, MAX_PEOPLE, [0xc0392b, 0x2e6da4, 0xf2f2f2, 0x333333, 0xe0a800, 0x4c7a3b, 0x8e44ad, 0xd98aa0, 0x6d8fb0, 0xb07a4a], 'walk');
     this.fleets = [...this.cars, ...this.trucks, this.packers, this.bus, ...this.lineFleets, this.people];
@@ -164,6 +178,7 @@ export class CarLayer {
     for (const f of this.fleets) {
       this.group.add(f.mesh);
       if (f.trailer) this.group.add(f.trailer);
+      if (f.mid) this.group.add(f.mid);
     }
   }
 
@@ -216,7 +231,7 @@ export class CarLayer {
     if (riders && riders.length === 5 * N) {
       // バスは40人に1台、電車は1両に乗る人数を多めに見て台数を決める
       build(this.bus, riders.subarray(0, N), 0.002);
-      this.lineFleets.forEach((f, i) => build(f, riders.subarray((i + 1) * N, (i + 2) * N), 0.0012));
+      this.lineFleets.forEach((f, i) => build(f, riders.subarray((i + 1) * N, (i + 2) * N), 0.0012 / f.carsPer));
     }
   }
 
@@ -242,10 +257,37 @@ export class CarLayer {
     const from = f.nodes[lo];
     const nx = this.pickNext(f, from, -1);
     if (!nx) return null;
-    return {
+    const car: Car = {
       from, to: nx[0], din: nx[1], d: nx[1], t: Math.random(), hA: this.trackH(f, from), alive: true, lane: Math.random() < 0.5 ? 0 : 1,
-      col: (Math.random() * f.colors.length) | 0, col2: (Math.random() * Math.max(1, f.trailerColors.length)) | 0, p: null,
+      col: (Math.random() * f.colors.length) | 0, col2: (Math.random() * Math.max(1, f.trailerColors.length)) | 0, hist: [],
     };
+    if (f.mid) this.seedHistory(f, car);
+    return car;
+  }
+
+  // 列車は、出てきたときから後ろの車両が線路の上に並ぶように、通ってきたマスをさかのぼって作っておく
+  private seedHistory(f: Fleet, c: Car) {
+    const g = this.grid!, n = g.n;
+    const mask = g[f.track as LineKind];
+    let cur: Cell = c;
+    for (let k = 0; k < 7; k++) {
+      const x = cur.from % n, y = (cur.from / n) | 0;
+      let back = -1;
+      // まっすぐ後ろを優先し、なければ進む向き以外のつながっている向き
+      const prefer = (cur.din + 4) & 7;
+      for (const d of [prefer, ...[0, 1, 2, 3, 4, 5, 6, 7].filter((q) => q !== prefer)]) {
+        if (d === cur.d || !(mask[cur.from] & (1 << d)) || !g.inb(x + DX[d], y + DY[d])) continue;
+        back = d;
+        break;
+      }
+      if (back < 0) break;
+      const j = (y + DY[back]) * n + x + DX[back];
+      const dirIn = (back + 4) & 7;
+      const prev: Cell = { from: j, to: cur.from, din: dirIn, d: dirIn, hA: this.trackH(f, j) };
+      cur.din = dirIn;
+      c.hist.push(prev);
+      cur = prev;
+    }
   }
 
   // 次のノードを、交通量の多い方を選びやすくして決める（Uターンはしない）
@@ -289,6 +331,10 @@ export class CarLayer {
     return opts[opts.length - 1];
   }
 
+  private trainCap(f: Fleet) {
+    return f.mesh.instanceMatrix.count;
+  }
+
   // マスの中の道のり（入口の半分 + 出口の半分）
   private static cellLen(c: Cell) {
     return (c.din & 1 ? CELL * 0.707 : CELL * 0.5) + (c.d & 1 ? CELL * 0.707 : CELL * 0.5);
@@ -320,12 +366,14 @@ export class CarLayer {
     const tb = c.t - back / len;
     if (tb >= 0) return this.place(f, c, tb);
     let rem = -tb * len;
-    if (c.p) {
-      const pl = CarLayer.cellLen(c.p);
-      if (rem <= pl) return this.place(f, c.p, 1 - rem / pl);
-      this.place(f, c.p, 0);
+    let last: Cell = c;
+    for (const h of c.hist) {
+      const pl = CarLayer.cellLen(h);
+      if (rem <= pl) return this.place(f, h, 1 - rem / pl);
       rem -= pl;
-    } else this.place(f, c, 0);
+      last = h;
+    }
+    this.place(f, last, 0);
     // それより前はまっすぐ伸ばす
     const P = this.pt;
     P.x -= P.tx * rem;
@@ -338,6 +386,7 @@ export class CarLayer {
       for (const f of this.fleets) {
         f.mesh.count = 0;
         if (f.trailer) f.trailer.count = 0;
+        if (f.mid) f.mid.count = 0;
       }
       return;
     }
@@ -349,6 +398,7 @@ export class CarLayer {
     for (const f of this.fleets) {
       if ((f.track === 'sub' && !this.showSubway) || (f.track === 'walk' && this.viewDist > 450)) {
         f.mesh.count = 0;
+        if (f.mid) f.mid.count = 0;
         continue;
       }
       // 台数を目標に近づける
@@ -360,7 +410,7 @@ export class CarLayer {
       if (f.cars.length > f.target) f.cars.length = Math.max(0, f.target);
       const walk = f.track === 'walk';
       const line = f.track !== 'road' && f.track !== 'bus' && !walk;
-      let k = 0;
+      let k = 0, hk = 0, mk = 0;
       for (const c of f.cars) {
         const def = ROADS[line ? 1 : g.nodeType(c.from)] || ROADS[1];
         const turning = c.din !== c.d;
@@ -373,7 +423,7 @@ export class CarLayer {
         while (c.t >= 1 && guard++ < 3) {
           c.t -= 1;
           // ときどき入れ替えて、交通量の分布を保つ（トレーラーは途中で消えると目立つので、少なめに）
-          if (Math.random() < (f.trailer ? 0.008 : 0.03)) {
+          if (!f.mid && Math.random() < (f.trailer ? 0.008 : 0.03)) {
             const nc = this.spawn(f);
             if (nc) Object.assign(c, nc);
             continue;
@@ -383,7 +433,8 @@ export class CarLayer {
             c.alive = false;
             break;
           }
-          c.p = { from: c.from, to: c.to, din: c.din, d: c.d, hA: c.hA };
+          c.hist.unshift({ from: c.from, to: c.to, din: c.din, d: c.d, hA: c.hA });
+          if (c.hist.length > 8) c.hist.length = 8;
           c.hA = (this.trackH(f, c.from) + this.trackH(f, c.to)) / 2;
           c.from = c.to;
           c.din = c.d;
@@ -395,6 +446,32 @@ export class CarLayer {
         // 右側通行。一方通行・大通り・高速道路は2車線を使い分ける。電車は複線の、進む向きの右側の線路を走る
         const lane = walk ? (def.width / 2 + 0.9) * (c.lane ? 1 : -1) : line ? TRACK_GAP : def.oneWay ? (c.lane ? 1 : -1) * def.width * 0.2 : (def.width / 2) * 0.48;
         const x = P.x - P.tz * lane, z = P.z + P.tx * lane, h = P.h, tx = P.tx, tz = P.tz;
+        if (f.mid) {
+          // 列車：車両ごとに、前と後ろの台車の位置から向きを決めて並べる
+          const nCar = f.carsPer, sp = f.spacing, half = f.halfLen * 0.7;
+          for (let j = 0; j < nCar; j++) {
+            this.placeBack(f, c, Math.max(0, j * sp - half));
+            const fx = P.x - P.tz * lane, fz = P.z + P.tx * lane, fh = P.h;
+            this.placeBack(f, c, j * sp + half);
+            const rx = P.x - P.tz * lane, rz = P.z + P.tx * lane, rh = P.h;
+            let ang = Math.atan2(fx - rx, fz - rz);
+            const tail = j === nCar - 1;
+            if (tail) ang += Math.PI;
+            this.v.set((fx + rx) / 2, (fh + rh) / 2, (fz + rz) / 2);
+            this.q.setFromAxisAngle(this.up, ang);
+            this.mtx.compose(this.v, this.q, this.s);
+            if (j === 0 || tail) {
+              if (hk < this.trainCap(f)) { f.mesh.setMatrixAt(hk, this.mtx); f.mesh.setColorAt(hk, f.colors[0]); hk++; }
+            } else if (f.mid && mk < f.mid.instanceMatrix.count) {
+              f.mid.setMatrixAt(mk, this.mtx);
+              f.mid.setColorAt(mk, f.colors[0]);
+              mk++;
+            }
+          }
+          k++;
+          if (k >= f.max) break;
+          continue;
+        }
         this.v.set(x, h, z);
         this.q.setFromAxisAngle(this.up, Math.atan2(tx, tz));
         this.mtx.compose(this.v, this.q, this.s);
@@ -428,7 +505,12 @@ export class CarLayer {
         if (k >= f.max) break;
       }
       f.cars = f.cars.filter((c) => c.alive);
-      f.mesh.count = k;
+      f.mesh.count = f.mid ? hk : k;
+      if (f.mid) {
+        f.mid.count = mk;
+        f.mid.instanceMatrix.needsUpdate = true;
+        if (f.mid.instanceColor) f.mid.instanceColor.needsUpdate = true;
+      }
       f.mesh.instanceMatrix.needsUpdate = true;
       if (f.mesh.instanceColor) f.mesh.instanceColor.needsUpdate = true;
       if (f.trailer) {
