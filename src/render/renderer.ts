@@ -235,6 +235,7 @@ export class CityRenderer {
       if (this.buildings.update(g, this.buildingList, heights)) this.dirty.trees = true;
       updateAO(g, this.buildingList);
       this.props.setBuildings(g, this.buildingList);
+      this.cars.setStations(g, this.buildingList);
     }
     if (this.dirty.trees) this.trees.rebuild(g, this.buildings.allTrees());
     if (this.dirty.overlay) {
@@ -273,19 +274,21 @@ export class CityRenderer {
     if (!carsMoving && this.idleFrames > 30 && this.idleFrames % 10 !== 0) return;
     this.rig.update(dt, this.grid);
     this.cars.viewDist = this.rig.dist;
-    if (carsMoving) this.cars.update(dt);
+    // 一時停止中は、車・列車・船・飛行機・雲・波も止める
+    const mdt = this.timeRunning() ? dt : 0;
+    if (carsMoving) this.cars.update(mdt);
     this.cars.group.visible = carsMoving;
-    this.props.update(dt);
+    this.props.update(mdt);
     this.updateDayNight(dt);
     this.updateShadow();
     // 遠くほど空の色に溶け込む（ズームに合わせて霧の距離を変える）
     const fog = this.scene.fog as THREE.Fog;
     fog.near = this.rig.dist * 0.9 + 300;
     fog.far = this.rig.dist * 4.2 + 2600;
-    this.sky.uniforms.uTime.value += dt;
+    this.sky.uniforms.uTime.value += mdt;
     if (this.terrain) {
       const wu = this.terrain.waterUniforms;
-      wu.uTime.value += dt;
+      wu.uTime.value += mdt;
       wu.uSky.value.copy(this.sky.uniforms.uHorizon.value).lerp(this.sky.uniforms.uZenith.value, 0.3);
       wu.uNight.value = this.night;
     }

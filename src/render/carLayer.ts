@@ -3,7 +3,8 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Grid } from '../sim/grid';
 import { CELL, DX, DY, opp } from '../sim/constants';
-import { isHighway, LINES, LineKind, ROADS, RoadType } from '../sim/defs';
+import { CIVIC, CivicId, isHighway, LINES, LineKind, ROADS, RoadType } from '../sim/defs';
+import type { Building } from '../sim/world';
 import { RailLayer, TRACK_GAP } from './railLayer';
 import { ROAD_LIFT } from './roadLayer';
 import { boxTruck, cityBus, garbageTruck, trainCar, TRAIN_SPEC, TrainKind, hatchback, minivan, pickup, sedan, suv, tractor, trailerBox, trailerTank, vc } from './vehicles';
@@ -30,6 +31,9 @@ interface Car extends Cell {
   lane: number;
   col: number; // 車体の色（パレットの番号）。車ごとに決めて変えない
   col2: number; // トレーラーの色
+  stop?: number; // 駅に止まっている残りの秒数
+  lastStop?: number; // 最後に止まった駅のマス
+  wait?: number; // 前の列車を待っている秒数
   hist: Cell[]; // 通ってきたマス（新しい順）。トレーラーや列車の後ろの車両の位置に使う
 }
 
@@ -335,6 +339,34 @@ export class CarLayer {
     return f.mesh.instanceMatrix.count;
   }
 
+  // 駅のホームに接する線路のマス（路線ごと）
+  private stations = new Map<string, Set<number>>();
+  setStations(g: Grid, list: Building[]) {
+    this.stations.clear();
+    for (const b of list) {
+      if (!b.civic) continue;
+      const k = CIVIC[b.type as CivicId].transit;
+      if (!k || k === 'bus') continue;
+      const mask = g[k];
+      const set = this.stations.get(k) ?? this.stations.set(k, new Set()).get(k)!;
+      for (let y = b.y - 1; y <= b.y + b.h; y++)
+        for (let x = b.x - 1; x <= b.x + b.w; x++) if (g.inb(x, y) && mask[g.idx(x, y)]) set.add(g.idx(x, y));
+    }
+  }
+  // 列車が占めているマス（進む向きで上り・下りの線路を分ける）
+  private static occKey(cell: number, d: number) {
+    return cell * 2 + (d < 4 ? 0 : 1);
+  }
+  private buildOcc(f: Fleet) {
+    const occ = new Map<number, Car>();
+    const cells = Math.ceil((f.carsPer * f.spacing) / 14) + 1;
+    for (const c of f.cars) {
+      occ.set(CarLayer.occKey(c.from, c.d), c);
+      for (let k = 0; k < Math.min(cells, c.hist.length); k++) occ.set(CarLayer.occKey(c.hist[k].from, c.hist[k].d), c);
+    }
+    return occ;
+  }
+
   // マスの中の道のり（入口の半分 + 出口の半分）
   private static cellLen(c: Cell) {
     return (c.din & 1 ? CELL * 0.707 : CELL * 0.5) + (c.d & 1 ? CELL * 0.707 : CELL * 0.5);
@@ -403,9 +435,14 @@ export class CarLayer {
       }
       // 台数を目標に近づける
       let add = Math.min(30, f.target - f.cars.length);
+      let occ = f.mid ? this.buildOcc(f) : null;
       while (add-- > 0) {
         const c = this.spawn(f);
-        if (c) f.cars.push(c);
+        if (!c) continue;
+        // 列車は、ほかの列車がいる場所には出さない
+        if (occ && [c, ...c.hist].some((q) => { const o = occ!.get(CarLayer.occKey(q.from, q.d)); return o && o !== c; })) continue;
+        f.cars.push(c);
+        if (occ) occ = this.buildOcc(f);
       }
       if (f.cars.length > f.target) f.cars.length = Math.max(0, f.target);
       const walk = f.track === 'walk';
@@ -418,7 +455,39 @@ export class CarLayer {
         const cg = line || walk ? 1 : Math.max(this.cong![c.from], 1);
         const kmh = walk ? 4.5 + (c.col % 3) * 0.6 : line ? LINES[f.track as LineKind].speedKmh * 1.2 : def.speedKmh * (f.track === 'bus' ? 0.8 : f.trailer ? 0.85 : 1);
         const speed = (((kmh / 3.6) * 0.9) / cg) * (turning ? 0.6 : 1);
-        c.t += (dt * speed) / len;
+        let adv = (dt * speed) / len;
+        if (f.mid && occ) {
+          const st = this.stations.get(f.track);
+          if ((c.stop ?? 0) > 0) {
+            // 駅で停車中
+            c.stop! -= dt;
+            adv = 0;
+          } else {
+            const inSt = !!st && st.has(c.from);
+            if (!inSt) c.lastStop = -1;
+            if (inSt) {
+              // ホームでは速度を落とし、ホームの端のマスの中ほどで止まる
+              adv *= 0.45;
+              if (!st!.has(c.to) && c.lastStop !== c.from && c.t < 0.5 && c.t + adv >= 0.5) {
+                c.t = 0.5;
+                adv = 0;
+                c.stop = 8;
+                c.lastStop = c.from;
+              }
+            }
+            // 前の列車との間隔：先の 2 マスに別の列車がいたら、マスの手前で待つ（長く詰まったら進む）
+            const n = this.grid!.n;
+            const ahead2 = (() => { const x = (c.to % n) + DX[c.d], y = ((c.to / n) | 0) + DY[c.d]; return this.grid!.inb(x, y) ? y * n + x : -1; })();
+            const block = [c.to, ahead2].some((cell) => { if (cell < 0) return false; const o = occ!.get(CarLayer.occKey(cell, c.d)); return o && o !== c; });
+            if (block && (c.wait ?? 0) < 25) {
+              if (c.t + adv > 0.8) {
+                adv = Math.max(0, 0.8 - c.t);
+                c.wait = (c.wait ?? 0) + dt;
+              }
+            } else c.wait = 0;
+          }
+        }
+        c.t += adv;
         let guard = 0;
         while (c.t >= 1 && guard++ < 3) {
           c.t -= 1;
