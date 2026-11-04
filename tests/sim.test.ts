@@ -246,7 +246,9 @@ describe('stage 2a roads', () => {
       expect(fe[g.idx(22, 21)] & (1 << 7)).not.toBe(0);
       // 真ん中から一般道へ
       expect(g.flow[g.idx(20, 21)] & (1 << 2)).not.toBe(0);
-      // 北側に置くと、西向きの車線用になる
+      // 北側に置くと、西向きの車線用になる。同じ場所の反対側にも置ける
+      expect(w.exec({ t: 'uramp', x: 20, y: 19 }).ok).toBe(true);
+      expect(f0[g.idx(23, 20)] & (1 << 5)).not.toBe(0);
       expect(w.exec({ t: 'uramp', x: 30, y: 19 }).ok).toBe(true);
       expect(f0[g.idx(33, 20)] & (1 << 5)).not.toBe(0);
     }

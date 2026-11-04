@@ -1586,7 +1586,15 @@ export function planURamp(g: Grid, x: number, y: number): URampPlan {
     const along = (1 << a) | (1 << opp(a));
     for (const c of hw) {
       if ((level ? g.up[c] : g.road[c]) !== type) return fail('都市高速のまっすぐな区間（7マス）の横に置いてください', lastCells);
-      if (conn[c] & ~along & 0xff) return fail('都市高速のまっすぐな区間に置いてください（交差点や曲がり角の横には置けません）', lastCells);
+      // まっすぐ以外のつながりは、ランプ（反対側などにすでに置いたもの）へのものだけ認める
+      const cx0 = c % n, cy0 = (c / n) | 0;
+      for (let d = 0; d < 8; d++) {
+        if (!(conn[c] & ~along & (1 << d))) continue;
+        const nx = cx0 + DX[d], ny = cy0 + DY[d];
+        const j = g.inb(nx, ny) ? g.idx(nx, ny) : -1;
+        if (j < 0 || (g.road[j] !== RoadType.Ramp && g.up[j] !== RoadType.Ramp))
+          return fail('都市高速のまっすぐな区間に置いてください（交差点や曲がり角の横には置けません）', lastCells);
+      }
     }
     for (const c of cells) {
       const cx = c % n, cy = (c / n) | 0;
