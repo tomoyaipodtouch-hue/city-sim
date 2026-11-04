@@ -1,5 +1,5 @@
 // オフライン用のキャッシュ（ページはネットワーク優先、それ以外はキャッシュ優先）
-const CACHE = 'pocket-metro-v2';
+const CACHE = 'pocket-metro-v3';
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['./', './index.html', './manifest.webmanifest'])));
@@ -14,7 +14,13 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   const req = e.request;
-  if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
+  const url = new URL(req.url);
+  // フォント（Google Fonts）は、一度読んだらオフラインでも使えるように保存する
+  if (req.method === 'GET' && (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com')) {
+    e.respondWith(caches.open(CACHE).then((c) => c.match(req).then((hit) => hit || fetch(req).then((res) => { if (res.ok || res.type === 'opaque') c.put(req, res.clone()); return res; }))));
+    return;
+  }
+  if (req.method !== 'GET' || url.origin !== location.origin) return;
   if (req.mode === 'navigate') {
     e.respondWith(
       fetch(req)
