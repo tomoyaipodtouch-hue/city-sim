@@ -456,6 +456,7 @@ export function applyRoad(g: Grid, plan: RoadPlan) {
     g.flow[a] |= 1 << d;
   }
   if (plan.uturns.length) cleanAvenueUturns(g, plan.lanes.flatMap((l) => [l.cells[0], l.cells[l.cells.length - 1]]));
+  fixWideTransitions(g, plan.lanes.flatMap((l) => [l.cells[0], l.cells[l.cells.length - 1]]));
 }
 
 // ---- ランプ（高速道路の出入口） ----
@@ -1474,4 +1475,65 @@ export function cleanAvenueUturns(g: Grid, cells: Iterable<number>) {
         }
       }
   }
+}
+
+// ---------------- 2車線（大通り）と1車線の道路のつなぎ目 ----------------
+// 大通りの端に、両方向に通れる道路がまっすぐ続く場合：
+//   出ていく車線 → 道路、道路 → 入ってくる車線 とつなぎ直し（片方は斜め）、端の折り返しは取り除く
+export function fixWideTransitions(g: Grid, around: Iterable<number>) {
+  const n = g.n;
+  const at = (c: number, d: number) => {
+    const x = (c % n) + DX[d], y = ((c / n) | 0) + DY[d];
+    return g.inb(x, y) ? y * n + x : -1;
+  };
+  const twoWayLocal = (t: number) => t !== 0 && !ROADS[t].wide && !ROADS[t].oneWay && !isHighway(t) && t !== RoadType.Ramp;
+  const seen = new Set<number>();
+  for (const c0 of around)
+    for (let oy = -2; oy <= 2; oy++)
+      for (let ox = -2; ox <= 2; ox++) {
+        const x0 = (c0 % n) + ox, y0 = ((c0 / n) | 0) + oy;
+        if (!g.inb(x0, y0)) continue;
+        const X = y0 * n + x0;
+        if (seen.has(X)) continue;
+        seen.add(X);
+        const t = g.road[X];
+        if (!t || !ROADS[t].wide || isHighway(t)) continue;
+        for (const d of [0, 2, 4, 6]) {
+          const R = at(X, d);
+          if (R < 0 || !twoWayLocal(g.road[R]) || !(g.conn[X] & (1 << d))) continue;
+          if (g.up[R]) continue;
+          for (const p of [(d + 2) & 7, (d + 6) & 7]) {
+            const Y = at(X, p);
+            if (Y < 0 || g.road[Y] !== t) continue;
+            // Y の車線は、ここで終わっている（R の横は空き地）
+            const RY = at(R, p);
+            if (RY < 0 || g.road[RY] || at(Y, d) < 0 || g.road[at(Y, d)]) continue;
+            // X と Y は逆向きに流れる平行な車線
+            const back = (d + 4) & 7;
+            const xOut = (g.flow[X] & (1 << d)) !== 0; // X から R へ流れる
+            const yAxis = (g.conn[Y] & (1 << back)) !== 0;
+            if (!yAxis) continue;
+            const diag = dirOf((R % n) - (Y % n), ((R / n) | 0) - ((Y / n) | 0)); // Y → R の向き（斜め）
+            if (diag < 0) continue;
+            g.conn[Y] |= 1 << diag;
+            g.conn[R] |= 1 << opp(diag);
+            if (xOut) {
+              // X → R（そのまま）、R → Y（斜め）
+              g.flow[R] &= ~(1 << back);
+              g.flow[R] |= 1 << opp(diag);
+              g.flow[Y] &= ~(1 << diag);
+            } else {
+              // R → X（そのまま）、Y → R（斜め）
+              g.flow[X] &= ~(1 << d);
+              g.flow[Y] |= 1 << diag;
+              g.flow[R] &= ~(1 << opp(diag));
+            }
+            // 端の折り返し（X と Y の間）を取り除く
+            g.flow[X] &= ~(1 << p);
+            g.flow[Y] &= ~(1 << opp(p));
+            g.conn[X] &= ~(1 << p);
+            g.conn[Y] &= ~(1 << opp(p));
+          }
+        }
+      }
 }

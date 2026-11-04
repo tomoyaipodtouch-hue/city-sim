@@ -196,6 +196,22 @@ describe('stage 2a roads', () => {
     expect(w.exec({ t: 'road', x0: 4, y0: 20, x1: 4, y1: 35, road: RoadType.Road }).ok).toBe(true);
   });
 
+  it('a two-way road continuing from an avenue end links each direction to the right lane', () => {
+    const w = new World(32);
+    w.g.heights.fill(6);
+    w.funds = 1e6;
+    const g = w.g, idx = (x: number, y: number) => g.idx(x, y);
+    w.exec({ t: 'road', x0: 2, y0: 10, x1: 12, y1: 10, road: RoadType.Avenue }); // 東向きの車線は y=10、西向きは y=9
+    expect(w.exec({ t: 'road', x0: 12, y0: 10, x1: 22, y1: 10, road: RoadType.Road }).ok).toBe(true);
+    // 東向き：大通り(12,10) → 道路(13,10)
+    expect(g.flow[idx(12, 10)] & (1 << 0)).not.toBe(0);
+    // 西向き：道路(13,10) → 大通り(12,9)（斜め）。道路から(12,10)へは入らない
+    expect(g.flow[idx(13, 10)] & (1 << 5)).not.toBe(0);
+    expect(g.flow[idx(13, 10)] & (1 << 4)).toBe(0);
+    // 端の折り返しはない
+    expect(g.conn[idx(12, 10)] & (1 << 6)).toBe(0);
+  });
+
   it('builds a bridge across water', () => {
     const w = new World(32);
     const V = 33;
