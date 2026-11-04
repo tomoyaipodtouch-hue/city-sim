@@ -804,7 +804,7 @@ export class Hud {
     dn.append(seg);
     body.append(dn);
     // BGM の音量
-    const bv = el('div', 'row', `<div><div>BGM の音量</div><div class="desc">おだやかなジャズ風の曲が流れます${this.nowPlaying ? `（再生中：${this.nowPlaying}）` : ''}。iPhone の消音スイッチがオンだと鳴りません</div></div>`);
+    const bv = el('div', 'row', `<div><div>BGM の音量</div><div class="desc">落ち着いたジャズ風の曲が流れます${this.nowPlaying ? `（再生中：${this.nowPlaying}）` : ''}。iPhone の消音スイッチがオンだと鳴りません</div></div>`);
     const vbox = el('div', 'jrow');
     vbox.style.minWidth = '190px';
     vbox.innerHTML = `<input type="range" min="0" max="100" step="5" value="${this.settings.bgmVol ?? 50}"><span class="v">${this.settings.bgmVol ?? 50}</span>`;

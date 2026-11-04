@@ -14,10 +14,10 @@ interface Song {
 }
 
 export const SONGS: Song[] = [
-  { name: '朝のアベニュー', bpm: 112, seed: 11, chords: ['Fmaj7', 'Dm7', 'Gm7', 'C7', 'Am7', 'D7', 'Gm7 C7', 'Fmaj7', 'Bbmaj7', 'Bbm6', 'Am7', 'D7', 'Gm7', 'C7', 'Fmaj7 D7', 'Gm7 C7'] },
-  { name: 'ブルーブリッジ', bpm: 98, seed: 23, chords: ['Cm7', 'F7', 'Bbmaj7', 'Ebmaj7', 'Am7b5', 'D7', 'Gm7', 'Gm7', 'Cm7', 'F7', 'Bbmaj7', 'Ebmaj7', 'Am7b5', 'D7', 'Gm7 C7', 'Fm7 Bb7'] },
-  { name: '屋上の風', bpm: 104, seed: 37, bossa: true, chords: ['Dm9', 'Dm9', 'Em7b5', 'A7', 'Dm9', 'Gm9', 'C9', 'Fmaj7', 'Bbmaj7', 'Em7b5', 'A7', 'Dm9', 'Gm9', 'C9', 'Em7b5', 'A7'] },
-  { name: '真夜中の乗りかえ', bpm: 70, seed: 53, ballad: true, chords: ['Ebmaj7', 'Cm7', 'Fm7', 'Bb7', 'Gm7', 'C7', 'Fm7', 'Bb7', 'Abmaj7', 'Abm6', 'Gm7', 'C7', 'Fm7', 'Bb7', 'Ebmaj7', 'Fm7 Bb7'] },
+  { name: '朝のアベニュー', bpm: 86, seed: 11, chords: ['Fmaj7', 'Dm7', 'Gm7', 'C7', 'Am7', 'D7', 'Gm7 C7', 'Fmaj7', 'Bbmaj7', 'Bbm6', 'Am7', 'D7', 'Gm7', 'C7', 'Fmaj7 D7', 'Gm7 C7'] },
+  { name: 'ブルーブリッジ', bpm: 78, seed: 23, chords: ['Cm7', 'F7', 'Bbmaj7', 'Ebmaj7', 'Am7b5', 'D7', 'Gm7', 'Gm7', 'Cm7', 'F7', 'Bbmaj7', 'Ebmaj7', 'Am7b5', 'D7', 'Gm7 C7', 'Fm7 Bb7'] },
+  { name: '屋上の風', bpm: 82, seed: 37, bossa: true, chords: ['Dm9', 'Dm9', 'Em7b5', 'A7', 'Dm9', 'Gm9', 'C9', 'Fmaj7', 'Bbmaj7', 'Em7b5', 'A7', 'Dm9', 'Gm9', 'C9', 'Em7b5', 'A7'] },
+  { name: '真夜中の乗りかえ', bpm: 60, seed: 53, ballad: true, chords: ['Ebmaj7', 'Cm7', 'Fm7', 'Bb7', 'Gm7', 'C7', 'Fm7', 'Bb7', 'Abmaj7', 'Abm6', 'Gm7', 'C7', 'Fm7', 'Bb7', 'Ebmaj7', 'Fm7 Bb7'] },
 ];
 
 // ---------------- 和音 ----------------
@@ -76,10 +76,10 @@ function arrange(song: Song): Arr {
     while (prevTop - notes[notes.length - 1] > 6) notes = notes.map((n) => n + 12);
     prevTop = notes[notes.length - 1];
     // リズム：バラードは長く、ほかは「1拍目」と「2拍目の裏」などに軽く
-    const hits = song.ballad ? [[0, sl.len]] : song.bossa ? [[0, 1.4], [1.5, 1], [3, 0.9]] : r() < 0.5 ? [[0, 1.2], [2.5, 1]] : [[0.5, 1], [2, 1.2]];
+    const hits = song.bossa ? [[0, 1.8], [2.5, 1.4]] : [[0, sl.len]];
     for (const [h, d] of hits) {
       if (h >= sl.len) continue;
-      for (const n of notes) piano.push({ t: off(sl.t + h), d: Math.min(d, sl.len - h) + 0.3, midi: n, v: 0.06 + r() * 0.015 });
+      for (const n of notes) piano.push({ t: off(sl.t + h), d: Math.min(d, sl.len - h) + 0.6, midi: n, v: 0.04 + r() * 0.01 });
     }
     // ベース
     const nextRoot = slots[(i + 1) % slots.length].c.root;
@@ -113,9 +113,9 @@ function arrange(song: Song): Arr {
       if (b % 4 === 3) drums.push({ t: b + 0.5, k: 'kick', v: 0.2 });
     } else {
       // ライドの「チン、チキ」と、2・4拍目のハイハットとブラシ
-      drums.push({ t: b, k: 'ride', v: 0.11 });
-      if (b % 2 === 1) { drums.push({ t: off(b + 0.5), k: 'ride', v: 0.07 }); drums.push({ t: b, k: 'hat', v: 0.1 }); drums.push({ t: b, k: 'brush', v: 0.12 }); }
-      if (b % 4 === 0) drums.push({ t: b, k: 'kick', v: 0.18 });
+      drums.push({ t: b, k: 'brush', v: 0.2 });
+      if (b % 2 === 1) drums.push({ t: b, k: 'hat', v: 0.06 });
+
     }
   }
   // メロディ（ビブラフォン）：4小節ごとのフレーズ。和音の音を中心に、近い音へ動く。最後の小節は休む
@@ -127,7 +127,7 @@ function arrange(song: Song): Arr {
     ? [[0, 1.5, 2, 2], [0, 3, 1, 1]]
     : [[0, 1, 1.5, 0.5, 2, 1, 3, 1], [0.5, 1, 1.5, 1, 2.5, 1.5], [0, 1.5, 1.5, 0.5, 2, 2], [0, 0.5, 0.5, 0.5, 1, 1, 2.5, 1.5]];
   for (let bar = 0; bar < bars; bar++) {
-    if (bar % 4 === 3) continue; // 休み
+    if (bar % 4 === 3 || bar % 4 === 1) continue; // 休みを多めに（ゆったり）
     // 同じ形を A→A' のようにくり返す（8小節後は少し変える）
     if (bar >= 8 && phrase.length && r() < 0.6) {
       // 8小節前と同じ形をくり返し、和音に合わない音だけ近い和音の音に直す
@@ -152,7 +152,7 @@ function arrange(song: Song): Arr {
       const pool = strong ? tones : scale;
       const target = cur + (r() < 0.5 ? -1 : 1) * Math.floor(r() * 4);
       cur = Math.max(65, Math.min(81, nearest(target, pool)));
-      const e = { t: off(t), d: rh[k + 1] * 0.9, midi: cur, v: 0.09 + r() * 0.03 };
+      const e = { t: off(t), d: rh[k + 1] * 0.9, midi: cur, v: 0.045 + r() * 0.015 };
       vib.push(e);
       phrase.push({ ...e, t });
     }
@@ -249,7 +249,7 @@ export class Bgm {
     }
     conv.buffer = ir;
     this.wet = a.createGain();
-    this.wet.gain.value = 0.25;
+    this.wet.gain.value = 0.4;
     this.wet.connect(conv).connect(this.master);
     this.noiseBuf = a.createBuffer(1, a.sampleRate, a.sampleRate);
     const nd = this.noiseBuf.getChannelData(0);
@@ -350,7 +350,7 @@ export class Bgm {
     const o = a.createOscillator(), m = a.createOscillator(), mg = a.createGain(), g = a.createGain();
     o.frequency.value = f;
     m.frequency.value = f * 1.0;
-    mg.gain.setValueAtTime(f * 1.2, t);
+    mg.gain.setValueAtTime(f * 0.45, t);
     mg.gain.exponentialRampToValueAtTime(f * 0.05, t + 0.6);
     m.connect(mg).connect(o.frequency);
     g.gain.setValueAtTime(0.0001, t);
@@ -375,7 +375,7 @@ export class Bgm {
     f.frequency.setValueAtTime(900, t);
     f.frequency.exponentialRampToValueAtTime(260, t + 0.25);
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(v * 0.55, t + 0.015);
+    g.gain.exponentialRampToValueAtTime(v * 0.4, t + 0.02);
     g.gain.exponentialRampToValueAtTime(v * 0.25, t + 0.25);
     g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.1);
     o.connect(f).connect(g);
@@ -436,7 +436,7 @@ export class Bgm {
     else if (k === 'hat') { f.type = 'highpass'; f.frequency.value = 8000; dur = 0.05; }
     else { f.type = 'bandpass'; f.frequency.value = 2500; f.Q.value = 0.6; dur = 0.3; } // ブラシ
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(v * (k === 'brush' ? 0.32 : 0.38), t + (k === 'brush' ? 0.05 : 0.003));
+    g.gain.exponentialRampToValueAtTime(v * (k === 'brush' ? 0.16 : 0.14), t + (k === 'brush' ? 0.06 : 0.004));
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     const p = a.createStereoPanner();
     p.pan.value = k === 'ride' ? 0.35 : k === 'hat' ? -0.3 : 0;
