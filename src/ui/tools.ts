@@ -157,6 +157,14 @@ export class ToolController {
     this.r.setShowGrid(!!t && t !== 'query');
     // 地下鉄の線路と駅のツールでは、地下の画面にする
     this.r.setUnderground(t === 'line:sub' || t === 'plop:sub_station');
+    // 取り壊しモードのときは、画面の上に黄色と黒のしまを出す
+    let band = document.getElementById('demo-band');
+    if (!band) {
+      band = document.createElement('div');
+      band.id = 'demo-band';
+      document.body.append(band);
+    }
+    band.classList.toggle('on', t === 'bulldoze');
   }
 
   get isDragTool() {
