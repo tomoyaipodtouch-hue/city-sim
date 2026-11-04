@@ -2,7 +2,8 @@
 import * as THREE from 'three';
 import { Grid } from '../sim/grid';
 import { CELL, DX, DY, WATER_LEVEL } from '../sim/constants';
-import { LINES, LineKind } from '../sim/defs';
+import { CIVIC, CivicId, LINES, LineKind } from '../sim/defs';
+import type { Building } from '../sim/world';
 import { Buf, ROAD_LIFT } from './roadLayer';
 
 const COL = {
@@ -181,5 +182,99 @@ export class RailLayer {
       mesh.geometry.dispose();
       mesh.geometry = buf.geometry();
     }
+  }
+}
+
+// ---------------- 駅のホーム ----------------
+// 駅に接する線路のマスに、上り・下りの両側のホーム、屋根、跨線橋を作る
+
+const PC = {
+  slab: new THREE.Color(0xc9c5bc),
+  edge: new THREE.Color(0xf0c419),
+  roof: new THREE.Color(0x6d7781),
+  post: new THREE.Color(0x8f969c),
+  bridge: new THREE.Color(0xd9dcdf),
+  glass: new THREE.Color(0x8fb4c9),
+};
+
+export class StationLayer {
+  mesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true }));
+  constructor() {
+    this.mesh.castShadow = true;
+    this.mesh.receiveShadow = true;
+  }
+
+  rebuild(g: Grid, list: Building[]) {
+    const B = new Buf();
+    const n = g.n;
+    // 向きのついた箱：中心 (cx, cz)、u = 線路の向き、p = 横の向き。a0..a1 は u 方向、o0..o1 は p 方向
+    const obox = (cx: number, cz: number, ux: number, uz: number, a0: number, a1: number, o0: number, o1: number, y0: number, y1: number, c: THREE.Color) => {
+      const px = -uz, pz = ux;
+      const P = (a: number, o: number) => [cx + ux * a + px * o, cz + uz * a + pz * o];
+      const q = [P(a0, o0), P(a1, o0), P(a1, o1), P(a0, o1)];
+      for (let k = 0; k < 4; k++) {
+        const [x0, z0] = q[k], [x1, z1] = q[(k + 1) % 4];
+        B.wall(x0, z0, y0, y1, x1, z1, y0, y1, c);
+      }
+      const t = q.map(([x, z]) => B.v(x, y1, z, c));
+      B.tri(t[0], t[1], t[2]);
+      B.tri(t[0], t[2], t[3]);
+    };
+    for (const b of list) {
+      if (!b.civic) continue;
+      const kind = CIVIC[b.type as CivicId].transit;
+      if (!kind || kind === 'bus' || kind === 'sub') continue;
+      const mask = g[kind];
+      const cells: number[] = [];
+      for (let y = b.y - 1; y <= b.y + b.h; y++)
+        for (let x = b.x - 1; x <= b.x + b.w; x++) if (g.inb(x, y) && mask[g.idx(x, y)]) cells.push(g.idx(x, y));
+      if (!cells.length) continue;
+      // 跨線橋は、駅舎にいちばん近いマスに置く
+      const bx = (b.x + b.w / 2) * CELL, bz = (b.y + b.h / 2) * CELL;
+      let bridgeCell = cells[0], bd = Infinity;
+      for (const c of cells) {
+        const d = Math.hypot(((c % n) + 0.5) * CELL - bx, (((c / n) | 0) + 0.5) * CELL - bz);
+        if (d < bd) { bd = d; bridgeCell = c; }
+      }
+      for (const c of cells) {
+        const m = mask[c];
+        // 線路の向き：まっすぐつながる向きを優先
+        let d = -1;
+        for (let k = 0; k < 4; k++) if (m & (1 << k) && m & (1 << (k + 4))) { d = k; break; }
+        if (d < 0) for (let k = 0; k < 8; k++) if (m & (1 << k)) { d = k & 3; break; }
+        if (d < 0) continue;
+        const len = Math.hypot(DX[d], DY[d]);
+        const ux = DX[d] / len, uz = DY[d] / len;
+        const cx = ((c % n) + 0.5) * CELL, cz = (((c / n) | 0) + 0.5) * CELL;
+        const H = RailLayer.lineH(g, kind, c);
+        const half = (CELL * len) / 2;
+        const ground = Math.max(g.cellH(c % n, (c / n) | 0), WATER_LEVEL);
+        const top = H + 1.1;
+        const elevated = H - ground > 2;
+        for (const s of [-1, 1]) {
+          const o0 = s * 3.75, o1 = s * 6.7;
+          const lo = Math.min(o0, o1), hi = Math.max(o0, o1);
+          obox(cx, cz, ux, uz, -half, half, lo, hi, elevated ? top - 0.5 : ground - 0.5, top, PC.slab);
+          // 黄色の線（点字ブロック）
+          const e0 = s * 4.1, e1 = s * 4.45;
+          obox(cx, cz, ux, uz, -half, half, Math.min(e0, e1), Math.max(e0, e1), top, top + 0.03, PC.edge);
+          // 屋根と柱
+          for (const a of [-half * 0.5, half * 0.5]) obox(cx, cz, ux, uz, a - 0.15, a + 0.15, s * 5.9 - 0.15, s * 5.9 + 0.15, top, top + 3.4, PC.post);
+          const r0 = s * 3.9, r1 = s * 6.9;
+          obox(cx, cz, ux, uz, -half, half, Math.min(r0, r1), Math.max(r0, r1), top + 3.4, top + 3.6, PC.roof);
+          // 高架のホームを支える柱
+          if (elevated) obox(cx, cz, ux, uz, -0.5, 0.5, s * 5.6 - 0.5, s * 5.6 + 0.5, ground - 0.5, top - 0.5, PC.slab);
+        }
+        if (c === bridgeCell) {
+          // 跨線橋：両側のホームの階段の塔と、線路をまたぐ通路
+          const by = top + 6.0;
+          obox(cx, cz, ux, uz, -1.3, 1.3, -7.0, 7.0, by, by + 2.4, PC.bridge);
+          obox(cx, cz, ux, uz, -1.32, 1.32, -6.9, 6.9, by + 0.9, by + 1.8, PC.glass);
+          for (const s of [-1, 1]) obox(cx, cz, ux, uz, -1.3, 1.3, s * 5.3 - 1.1, s * 5.3 + 1.1, top, by + 2.4, PC.bridge);
+        }
+      }
+    }
+    this.mesh.geometry.dispose();
+    this.mesh.geometry = B.geometry();
   }
 }

@@ -1335,15 +1335,14 @@ function station(mb: MeshBuilder, f: LotFrame, lift: number) {
   mb.box(-f.W / 2 + 2, 0, 0, f.W / 2 - 2, 6, f.D / 2 - 3, wall, PAT.shop, PALETTE.steel);
   mb.box(-f.W / 2 + 1, 6, -1, f.W / 2 - 1, 6.5, f.D / 2 - 2, PALETTE.steel);
   mb.box(-3, 4.6, f.D / 2 - 3, 3, 5.6, f.D / 2 - 2.8, PALETTE.accent[2]);
-  // ホームと屋根
+  // ホームは線路の側に、上り・下りの両方を描く（railLayer の StationLayer）。駅舎からホームへの通路だけ置く
   const ph = lift ? lift - 0.4 : 1.0;
   if (lift) {
-    for (const x of [-f.W / 2 + 3, 0, f.W / 2 - 3]) mb.box(x - 0.5, 0, -f.D / 2 + 3, x + 0.5, ph, -f.D / 2 + 4, PALETTE.concrete);
+    for (const x of [-f.W / 2 + 3, f.W / 2 - 3]) mb.box(x - 0.5, 0, -f.D / 2 + 1, x + 0.5, ph, -f.D / 2 + 2, PALETTE.concrete);
     mb.box(-f.W / 2 + 1.5, 0, -2, -f.W / 2 + 4.5, ph + 3, 1, wall, PAT.office, PALETTE.steel);
   }
-  mb.box(-f.W / 2 + 0.6, ph - 0.6, -f.D / 2 + 1.2, f.W / 2 - 0.6, ph, -f.D / 2 + 5.5, PALETTE.concrete);
-  for (const x of [-f.W / 2 + 2, 0, f.W / 2 - 2]) mb.box(x - 0.12, ph, -f.D / 2 + 3.2, x + 0.12, ph + 3.2, -f.D / 2 + 3.5, PALETTE.steel);
-  mb.box(-f.W / 2 + 0.6, ph + 3.2, -f.D / 2 + 1.5, f.W / 2 - 0.6, ph + 3.5, -f.D / 2 + 5.2, PALETTE.roof[3]);
+  mb.box(-3, ph - 0.4, -f.D / 2 + 0.3, 3, ph, 0, PALETTE.concrete);
+  mb.box(-3, ph + 2.8, -f.D / 2 + 0.3, 3, ph + 3.0, 0, PALETTE.roof[3]);
 }
 
 function subwayEntrance(mb: MeshBuilder, f: LotFrame) {

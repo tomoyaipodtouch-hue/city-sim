@@ -5,7 +5,7 @@ import { CELL } from '../sim/constants';
 import type { Building, Maps } from '../sim/world';
 import { TerrainLayer } from './terrainLayer';
 import { RoadLayer } from './roadLayer';
-import { RailLayer } from './railLayer';
+import { RailLayer, StationLayer } from './railLayer';
 import { PropsLayer } from './propsLayer';
 import { BuildingLayer } from './buildingLayer';
 import { TreeLayer } from './treeLayer';
@@ -54,6 +54,7 @@ export class CityRenderer {
   private sunDir = new THREE.Vector3(-0.62, 0.52, 0.42).normalize();
   lights = new StreetLights();
   sky = new SkyDome();
+  stationsMesh = new StationLayer();
   private post: PostFX | null = null;
   grid: Grid | null = null;
   maps: Maps | null = null;
@@ -86,7 +87,7 @@ export class CityRenderer {
     this.scene.fog = new THREE.Fog(sky, 1500, 7000);
     // 環境光は弱め、太陽を強めにして、日なたと日かげの差をはっきりさせる
     this.hemi = new THREE.HemisphereLight(0xcfe0f2, 0x4f4a3e, 0.85);
-    this.scene.add(this.hemi, this.lights.points, this.sky.mesh);
+    this.scene.add(this.hemi, this.lights.points, this.sky.mesh, this.stationsMesh.mesh);
     this.sun = new THREE.DirectionalLight(0xffeed6, 3.2);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
@@ -229,6 +230,7 @@ export class CityRenderer {
         this.roads.rebuild(g);
         this.rails.rebuild(g);
         this.lights.rebuild(g);
+        this.stationsMesh.rebuild(g, this.buildingList);
       }
     }
     if (this.dirty.buildings || heights) {
@@ -236,6 +238,7 @@ export class CityRenderer {
       updateAO(g, this.buildingList);
       this.props.setBuildings(g, this.buildingList);
       this.cars.setStations(g, this.buildingList);
+      this.stationsMesh.rebuild(g, this.buildingList);
     }
     if (this.dirty.trees) this.trees.rebuild(g, this.buildings.allTrees());
     if (this.dirty.overlay) {
