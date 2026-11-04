@@ -1073,7 +1073,7 @@ function planPlopSized(g: Grid, id: CivicId, cx: number, cy: number, W: number, 
     }
   }
   // 水辺の施設は川岸の斜面に置くことが多いので、より傾いた土地でも造成して置ける
-  if (hi - lo > (def.waterfront ? 22 : 10)) reason = reason || '地面の傾きが大きすぎます';
+  if (hi - lo > (def.waterfront ? 22 : def.airport ? 26 : 10)) reason = reason || '地面の傾きが大きすぎます';
   // 駅・停留所・フェリー乗り場・港・貨物駅は、線路や水辺、道路に接している必要がある
   if (!reason && (def.transit || def.waterfront || def.freightRail || def.airport)) {
     const around: number[] = [];

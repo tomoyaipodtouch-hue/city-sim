@@ -6,7 +6,7 @@ import { CIVIC, CivicId } from '../sim/defs';
 import type { Building } from '../sim/world';
 import { labelWater } from '../sim/plan';
 import { MeshBuilder } from './builder';
-import { boat, plane } from './buildingGen';
+import { airportLayout, boat, plane } from './buildingGen';
 
 interface Route {
   ax: number;
@@ -89,11 +89,11 @@ export class PropsLayer {
       }
       if (def.airport) {
         const [W, D] = lotDepth(b);
-        const rw = def.airport === 2 ? 22 : 16;
-        const rx = -W / 2 + rw / 2 + 4;
-        const [x0, z0] = lotToWorld(b, rx, D / 2 - 6), [x1, z1] = lotToWorld(b, rx, -D / 2 + 6);
+        const Y = airportLayout(W, D, def.airport);
+        const [l0x, l0z] = Y.P(Y.ra0 + 10, Y.rc), [l1x, l1z] = Y.P(Y.ra1 - 10, Y.rc);
+        const [x0, z0] = lotToWorld(b, l0x, l0z), [x1, z1] = lotToWorld(b, l1x, l1z);
         const len = Math.hypot(x1 - x0, z1 - z0);
-        this.runways.push({ x: x0, z: z0, ux: (x1 - x0) / len, uz: (z1 - z0) / len, len, t: Math.random(), scale: def.airport === 2 ? 1 : 0.7 });
+        this.runways.push({ x: x0, z: z0, ux: (x1 - x0) / len, uz: (z1 - z0) / len, len, t: Math.random(), scale: def.airport === 2 ? 1.5 : 1.0 });
       }
     }
     const old = this.routes;
@@ -132,7 +132,7 @@ export class PropsLayer {
       rw.t = (rw.t + dt / 60) % 1;
       const t = rw.t * 3;
       if (t > 1.6) continue;
-      const d = t < 1 ? rw.len * t * t : rw.len + (t - 1) * 900;
+      const d = t < 1 ? rw.len * 0.7 * t * t : rw.len * 0.7 + (t - 1) * 900;
       const y = t < 0.75 ? 0 : (t < 1 ? (t - 0.75) * 40 : 10 + (t - 1) * 260);
       const pitch = t < 0.75 ? 0 : 0.18;
       this.q.setFromEuler(new THREE.Euler(-pitch, Math.atan2(rw.ux, rw.uz), 0, 'YXZ'));
