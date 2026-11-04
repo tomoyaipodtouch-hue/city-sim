@@ -156,6 +156,46 @@ describe('stage 2a roads', () => {
     expect(w.g.conn[w.g.idx(10, 10)]).not.toBe(1 << 4);
   });
 
+  it('urban highways (one lane each way) connect directly to ordinary roads at their ends', () => {
+    for (const type of [RoadType.UrbanHighway, RoadType.UrbanGroundHighway]) {
+      const w = new World(48);
+      w.g.heights.fill(6);
+      w.funds = 1e6;
+      const g = w.g;
+      w.exec({ t: 'road', x0: 4, y0: 10, x1: 4, y1: 30, road: RoadType.Road });
+      w.exec({ t: 'road', x0: 40, y0: 10, x1: 40, y1: 30, road: RoadType.Road });
+      // 一般道から一般道へ、都市高速を引く（両端は一般道のまま、つながる）
+      const r = w.exec({ t: 'road', x0: 4, y0: 20, x1: 40, y1: 20, road: type });
+      expect(r.ok).toBe(true);
+      expect(g.road[g.idx(4, 20)]).toBe(RoadType.Road);
+      expect(g.conn[g.idx(4, 20)] & 1).not.toBe(0);
+      // 両方向に通れる（片側1車線）
+      const mid = g.idx(22, 20);
+      const lvl = type === RoadType.UrbanHighway ? 1 : 0;
+      const flow = lvl ? g.flow1[mid] : g.flow[mid];
+      expect(flow & 1).not.toBe(0);
+      expect(flow & (1 << 4)).not.toBe(0);
+      if (lvl) {
+        // 高架は真ん中で高く、端に向かって下がる
+        expect(g.upH[mid]).toBeGreaterThan(g.upH[g.idx(6, 20)]);
+      }
+    }
+  });
+
+  it('a wide highway ending across a road connects to it, and a road can continue from a highway end', () => {
+    const w = new World(48);
+    w.g.heights.fill(6);
+    w.funds = 1e6;
+    const g = w.g;
+    w.exec({ t: 'road', x0: 30, y0: 5, x1: 30, y1: 40, road: RoadType.Road });
+    expect(w.exec({ t: 'road', x0: 4, y0: 20, x1: 30, y1: 20, road: RoadType.GroundHighway }).ok).toBe(true);
+    expect(g.road[g.idx(30, 20)]).toBe(RoadType.Road);
+    expect(g.road[g.idx(30, 19)]).toBe(RoadType.Road);
+    expect(g.conn[g.idx(30, 20)] & (1 << 4)).not.toBe(0);
+    // 高速道路の行き止まりの端から一般道を続ける
+    expect(w.exec({ t: 'road', x0: 4, y0: 20, x1: 4, y1: 35, road: RoadType.Road }).ok).toBe(true);
+  });
+
   it('builds a bridge across water', () => {
     const w = new World(32);
     const V = 33;

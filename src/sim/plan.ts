@@ -1,7 +1,7 @@
 // ツールの計画（プレビューと実行の両方で使う）
 import { Grid } from './grid';
 import { DX, DY, MAX_ROAD_GRADE, CELL, WATER_LEVEL, dirOf, isDiag, opp } from './constants';
-import { ROADS, RoadType, ZoneType, ZONE_COST, POWER_LINE_COST, CIVIC, CivicId, BRIDGE_COST_MUL, MAX_BRIDGE, OVERPASS_LIFT, RAMP_COST, isHighway, LINES, LineKind, BUS_STOP_COST } from './defs';
+import { ROADS, RoadType, ZoneType, ZONE_COST, POWER_LINE_COST, CIVIC, CivicId, BRIDGE_COST_MUL, MAX_BRIDGE, OVERPASS_LIFT, RAMP_COST, isHighway, isGroundHighway, LINES, LineKind, BUS_STOP_COST } from './defs';
 
 export interface LinePath {
   cells: number[]; // マスの番号
@@ -51,6 +51,7 @@ export interface Lane {
   dirs: number[];
   oneWay: boolean;
   levels: number[]; // マスごとの階層（0 = 地上, 1 = 上空）
+  joins?: Set<number>; // 高速道路の端で、一般の道路に直接つなぐマス（道路の種類は変えない）
 }
 
 export interface RoadPlan {
@@ -113,6 +114,8 @@ function avenueLanes(g: Grid, path: LinePath): { lanes: { cells: number[]; dirs:
   }
   return { lanes: [{ cells, dirs }, { cells: other, dirs: odirs }], ok };
 }
+
+const degreeOf = (m: number) => { let k = 0; for (let d = 0; d < 8; d++) if (m & (1 << d)) k++; return k; };
 
 // 道路の向き（そのマスで使っている方向の軸）。0 = 東西, 1 = 南北, 2 = 斜め
 function axisOf(mask: number) {
@@ -210,20 +213,28 @@ function planLane(
   const dirAt = (k: number) => dirs[Math.min(k, dirs.length - 1)] ?? 0;
   const axisOfDir = (d: number) => (d === 0 || d === 4 ? 0 : d === 2 || d === 6 ? 1 : 2);
 
+  // 高速道路の端を、一般の道路（地上）に直接つなぐ場所
+  const localRoad = (t: number) => t !== 0 && !isHighway(t) && t !== RoadType.Ramp;
+  const joinsLocal = (k: number) => def.highway && (k === 0 || k === last) && localRoad(g.road[cells[k]]) && !g.up[cells[k]] && g.deck[cells[k]] <= 0;
   // 階層を決める
   const levels = cells.map((i, k) => {
     const end = k === 0 || k === last;
+    if (joinsLocal(k)) return 0;
     if (def.elevated) {
       // 高架の端が地上の高速道路に重なる場合は、地上に降りてつながる
-      if (end && g.road[i] === RoadType.GroundHighway && !g.up[i]) return 0;
+      if (end && isGroundHighway(g.road[i]) && !g.up[i]) return 0;
       return 1;
     }
-    if (type === RoadType.GroundHighway) {
-      if (end && g.up[i] === RoadType.Highway && !g.road[i]) return 1;
+    if (def.highway) {
+      if (end && (g.up[i] === RoadType.Highway || g.up[i] === RoadType.UrbanHighway) && !g.road[i]) return 1;
       return 0;
     }
     // 一般の道路
-    if (g.road[i] === RoadType.GroundHighway) return 1; // 立体交差でまたぐ
+    if (isGroundHighway(g.road[i])) {
+      // 高速道路の行き止まりの端なら、そこにつなぐ。それ以外は立体交差でまたぐ
+      if (end && degreeOf(g.conn[i]) <= 1) return 0;
+      return 1;
+    }
     if (g.up[i] === RoadType.Ramp && !g.road[i]) return 1;
     return 0;
   });
@@ -242,7 +253,10 @@ function planLane(
     else if (ROADS[cur].rank < def.rank) cost += Math.max(0, def.cost - ROADS[cur].cost) * len * mul;
 
     if (def.highway) {
-      if (L === 0) {
+      if (L === 0 && joinsLocal(k)) {
+        lane.joins = lane.joins ?? new Set();
+        lane.joins.add(i);
+      } else if (L === 0) {
         const r = g.road[i];
         if (r && !isHighway(r) && r !== RoadType.Ramp) {
           // 既存の道路は、高速道路の上を通る立体交差にする
@@ -265,9 +279,9 @@ function planLane(
       const ax = axisOf(g.conn[i]);
       const myAxis = axisOfDir(dirAt(k));
       if ((myAxis === 0 && ax.ew > 0) || (myAxis === 1 && ax.ns > 0)) { bad.add(i); why('高速道路には直接つなげません。ランプを使ってください'); }
-    } else if (isHighway(g.road[i])) {
+    } else if (isHighway(g.road[i]) && !((k === 0 || k === last) && degreeOf(g.conn[i]) <= 1)) {
       bad.add(i);
-      why('高速道路には直接つなげません。ランプを使ってください');
+      why('高速道路には、行き止まりの端か、ランプでつないでください');
     }
     if (L === 0 && g.rail[i]) {
       // 踏切：まっすぐな線路と直角に交わる場合だけ
@@ -304,6 +318,17 @@ function planLane(
       const floor = Math.max(g.cellH(cells[k] % n, (cells[k] / n) | 0), WATER_LEVEL) + lift * 0.7;
       u[k] = Math.max(floor, Math.max(u[p] - m, Math.min(u[p] + m, u[k])));
     }
+  }
+  // 高架が地上の道路に降りる端は、手前から少しずつ下げる（約 1.5m / マス）
+  if (def.elevated) {
+    const touch = cells.map((_, k) => k).filter((k) => (k === 0 || k === last) && levels[k] === 0);
+    if (touch.length)
+      for (let k = 0; k < cells.length; k++) {
+        if (levels[k] !== 1 || ufix[k]) continue;
+        const dmin = Math.min(...touch.map((t2) => Math.abs(k - t2)));
+        const gh = Math.max(g.cellH(cells[k] % n, (cells[k] / n) | 0), WATER_LEVEL);
+        u[k] = Math.min(u[k], gh + 0.3 + dmin * 1.5);
+      }
   }
   for (let k = 0; k < cells.length; k++) if (levels[k] === 1) upHs.set(cells[k], u[k]);
   for (const c of converts) if (!upHs.has(c)) upHs.set(c, g.cellH(c % n, (c / n) | 0) + OVERPASS_LIFT);
@@ -411,7 +436,7 @@ export function applyRoad(g: Grid, plan: RoadPlan) {
         g.upH[i] = plan.upH.get(i) ?? g.upH[i];
       } else {
         const cur = g.road[i];
-        if (!cur || ROADS[cur].rank < def.rank) g.road[i] = plan.type;
+        if ((!cur || ROADS[cur].rank < def.rank) && !lane.joins?.has(i)) g.road[i] = plan.type;
       }
       if (!def.elevated || levels[k] === 0) {
         g.zone[i] = 0;

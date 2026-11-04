@@ -298,6 +298,14 @@ export class RoadLayer {
           line(pts, (p) => -(p.hw - 0.9), COL.yellow, 0.16);
           line(pts, (p) => p.hw - 0.9, COL.white, 0.16);
           break;
+        case RoadType.UrbanHighway:
+        case RoadType.UrbanGroundHighway:
+          // 片側1車線：中央の黄色の2本線と、両端の白線
+          line(pts, () => -0.16, COL.yellow, 0.14);
+          line(pts, () => 0.16, COL.yellow, 0.14);
+          line(pts, (p) => -(p.hw - 0.45), COL.white, 0.15);
+          line(pts, (p) => p.hw - 0.45, COL.white, 0.15);
+          break;
         // ランプは短く斜めに重なるので、線は引かない
       }
     };
