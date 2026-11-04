@@ -212,6 +212,21 @@ describe('stage 2a roads', () => {
     expect(g.conn[idx(12, 10)] & (1 << 6)).toBe(0);
   });
 
+  it('two diagonal roads crossing between cells get a junction', () => {
+    const w = new World(32);
+    w.g.heights.fill(6);
+    w.funds = 1e6;
+    const g = w.g;
+    // ＼ の向き（10,10 → 20,20）と、／ の向き（17,10 → 7,20）。マスの角で交わる
+    expect(w.exec({ t: 'road', x0: 10, y0: 10, x1: 20, y1: 20, road: RoadType.Road }).ok).toBe(true);
+    const r = w.exec({ t: 'road', x0: 17, y0: 10, x1: 7, y1: 20, road: RoadType.Road });
+    expect(r.ok).toBe(true);
+    // 交差点になったマス（4本以上つながる）がある
+    let junction = false;
+    for (let i = 0; i < 32 * 32; i++) { let k = 0; for (let d = 0; d < 8; d++) if (g.conn[i] & (1 << d)) k++; if (k >= 4) junction = true; }
+    expect(junction).toBe(true);
+  });
+
   it('builds a bridge across water', () => {
     const w = new World(32);
     const V = 33;
