@@ -175,6 +175,44 @@ export class MeshBuilder {
     }
   }
 
+  // 凸多角形の柱（base の各頂点 [x, z]）。top を渡すと上の形を変えられる（先細りなど）。
+  // topY を渡すと上面の高さを頂点ごとに変えられる（斜めに切った屋上）
+  prism(
+    base: [number, number][], y0: number, y1: number, wall: THREE.Color, pat: number = PAT.none, roof?: THREE.Color | null,
+    top?: [number, number][], topY?: number[],
+  ) {
+    const n = base.length;
+    let t = top ?? base;
+    let b = base;
+    let ty = topY;
+    // 外向きの順番にそろえる
+    let cx = 0, cz = 0;
+    for (const [x, z] of b) { cx += x / n; cz += z / n; }
+    const [ax, az] = b[0], [bx, bz] = b[1];
+    const dx = bx - ax, dz = bz - az, mx = (ax + bx) / 2 - cx, mz = (az + bz) / 2 - cz;
+    if (-dz * mx + dx * mz < 0) {
+      b = [...b].reverse();
+      t = [...t].reverse();
+      if (ty) ty = [...ty].reverse();
+    }
+    let u = 0;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      const len = Math.hypot(b[j][0] - b[i][0], b[j][1] - b[i][1]);
+      const yi = ty ? ty[i] : y1, yj = ty ? ty[j] : y1;
+      this.quad([b[i][0], y0, b[i][1]], [b[j][0], y0, b[j][1]], [t[j][0], yj, t[j][1]], [t[i][0], yi, t[i][1]], wall, pat, len, Math.max(yi, yj) - y0, u, 0);
+      u += len;
+    }
+    if (roof === null) return;
+    const rc = roof ?? wall;
+    let tx = 0, tz = 0, tyc = 0;
+    for (let i = 0; i < n; i++) { tx += t[i][0] / n; tz += t[i][1] / n; tyc += (ty ? ty[i] : y1) / n; }
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      this.tri([tx, tyc, tz], [t[i][0], ty ? ty[i] : y1, t[i][1]], [t[j][0], ty ? ty[j] : y1, t[j][1]], rc);
+    }
+  }
+
   // 地面の板
   ground(x0: number, z0: number, x1: number, z1: number, y: number, color: THREE.Color) {
     const keep = this.matOverride;

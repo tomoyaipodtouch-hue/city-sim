@@ -1002,9 +1002,30 @@ export interface PlopPlan {
   cost: number;
   reason: string;
   flatH: number;
+  w: number;
+  h: number;
 }
+// 細長い公園などは、長い辺が道路に面する向きに自動で回す
 export function planPlop(g: Grid, id: CivicId, cx: number, cy: number): PlopPlan {
   const def = CIVIC[id];
+  const a = planPlopSized(g, id, cx, cy, def.w, def.h);
+  if (!def.rotate || def.w === def.h) return a;
+  const b = planPlopSized(g, id, cx, cy, def.h, def.w);
+  if (a.ok !== b.ok) return a.ok ? a : b;
+  const roads = (p: PlopPlan) => {
+    let k = 0;
+    for (let yy = p.y - 1; yy <= p.y + p.h; yy++)
+      for (let xx = p.x - 1; xx <= p.x + p.w; xx++) {
+        if (!g.inb(xx, yy) || (xx >= p.x && xx < p.x + p.w && yy >= p.y && yy < p.y + p.h)) continue;
+        const t = g.road[g.idx(xx, yy)];
+        if (t && !isHighway(t)) k++;
+      }
+    return k;
+  };
+  return roads(b) > roads(a) ? b : a;
+}
+function planPlopSized(g: Grid, id: CivicId, cx: number, cy: number, W: number, H: number): PlopPlan {
+  const def = { ...CIVIC[id], w: W, h: H };
   // 指の位置が中央になるようにする
   const x = Math.max(0, Math.min(g.n - def.w, cx - Math.floor((def.w - 1) / 2)));
   const y = Math.max(0, Math.min(g.n - def.h, cy - Math.floor((def.h - 1) / 2)));
@@ -1043,7 +1064,7 @@ export function planPlop(g: Grid, id: CivicId, cx: number, cy: number): PlopPlan
   }
   const flatH = sum / cells.length;
   const cost = def.cost + Math.round((hi - lo) * def.w * def.h * 2);
-  return { ok: !reason, id, x, y, cells, cost, reason, flatH };
+  return { ok: !reason, id, x, y, cells, cost, reason, flatH, w: W, h: H };
 }
 
 export function flattenRect(g: Grid, x: number, y: number, w: number, h: number, target: number) {

@@ -92,14 +92,14 @@ const S_IND_MID: Size[] = [[2, 2], [3, 2], [2, 3], [3, 3], [4, 3]];
 const S_IND_HIGH: Size[] = [[3, 3], [4, 3], [3, 4], [4, 4]];
 
 export const GROW: Record<GrowKind, GrowDef> = {
-  R1: { kind: 'R1', zone: ZoneType.R, name: '住宅（低所得）', capPerCell: 14, floorCap: 5, wealth: 0.6, dens: [0, 1, 2], sizes: [S_LOW_R, S_MID, S_HIGH], floors: [[1, 2], [3, 6], [8, 24]], pollution: 0, powerPer: 0.05, waterPer: 0.1 },
-  R2: { kind: 'R2', zone: ZoneType.R, name: '住宅（中所得）', capPerCell: 10, floorCap: 4, wealth: 1.0, dens: [0, 1, 2], sizes: [[[1, 1], [1, 2], [2, 1], [2, 2]], S_MID, S_HIGH], floors: [[1, 2], [3, 8], [10, 36]], pollution: 0, powerPer: 0.06, waterPer: 0.12 },
-  R3: { kind: 'R3', zone: ZoneType.R, name: '住宅（高所得）', capPerCell: 6, floorCap: 3, wealth: 1.8, dens: [0, 1, 2], sizes: [[[2, 2], [1, 2], [2, 1]], S_MID, S_HIGH], floors: [[2, 3], [3, 8], [12, 45]], pollution: 0, powerPer: 0.08, waterPer: 0.15 },
+  R1: { kind: 'R1', zone: ZoneType.R, name: '住宅（低所得）', capPerCell: 14, floorCap: 5, wealth: 0.6, dens: [0, 1, 2], sizes: [S_LOW_R, S_MID, S_HIGH], floors: [[1, 2], [3, 6], [8, 32]], pollution: 0, powerPer: 0.05, waterPer: 0.1 },
+  R2: { kind: 'R2', zone: ZoneType.R, name: '住宅（中所得）', capPerCell: 10, floorCap: 4, wealth: 1.0, dens: [0, 1, 2], sizes: [[[1, 1], [1, 2], [2, 1], [2, 2]], S_MID, S_HIGH], floors: [[1, 2], [3, 8], [10, 50]], pollution: 0, powerPer: 0.06, waterPer: 0.12 },
+  R3: { kind: 'R3', zone: ZoneType.R, name: '住宅（高所得）', capPerCell: 6, floorCap: 3, wealth: 1.8, dens: [0, 1, 2], sizes: [[[2, 2], [1, 2], [2, 1]], S_MID, S_HIGH], floors: [[2, 3], [3, 8], [12, 80]], pollution: 0, powerPer: 0.08, waterPer: 0.15 },
   CS1: { kind: 'CS1', zone: ZoneType.C, name: '商業（低所得向け）', capPerCell: 9, floorCap: 3, wealth: 0.7, dens: [0, 1, 2], sizes: [[[1, 1], [1, 1], [2, 1], [1, 2]], S_MID, S_MID], floors: [[1, 1], [2, 4], [3, 8]], pollution: 0.05, powerPer: 0.06, waterPer: 0.05 },
   CS2: { kind: 'CS2', zone: ZoneType.C, name: '商業（中所得向け）', capPerCell: 8, floorCap: 3, wealth: 1.0, dens: [0, 1, 2], sizes: [[[1, 1], [2, 1], [1, 2], [2, 2]], S_MID, S_HIGH], floors: [[1, 2], [2, 5], [4, 14]], pollution: 0.05, powerPer: 0.07, waterPer: 0.05 },
   CS3: { kind: 'CS3', zone: ZoneType.C, name: '商業（高所得向け）', capPerCell: 6, floorCap: 3, wealth: 1.6, dens: [0, 1, 2], sizes: [[[1, 1], [2, 1], [1, 2], [2, 2]], S_MID, S_HIGH], floors: [[1, 2], [2, 6], [5, 20]], pollution: 0.03, powerPer: 0.08, waterPer: 0.06 },
-  CO2: { kind: 'CO2', zone: ZoneType.C, name: 'オフィス（中所得）', capPerCell: 0, floorCap: 8, wealth: 1.2, dens: [1, 2], sizes: [[], S_MID, S_HIGH], floors: [[1, 1], [4, 10], [10, 30]], pollution: 0.02, powerPer: 0.08, waterPer: 0.04 },
-  CO3: { kind: 'CO3', zone: ZoneType.C, name: 'オフィス（高所得）', capPerCell: 0, floorCap: 8, wealth: 1.8, dens: [1, 2], sizes: [[], S_MID, S_HIGH], floors: [[1, 1], [5, 12], [15, 60]], pollution: 0.02, powerPer: 0.09, waterPer: 0.04 },
+  CO2: { kind: 'CO2', zone: ZoneType.C, name: 'オフィス（中所得）', capPerCell: 0, floorCap: 8, wealth: 1.2, dens: [1, 2], sizes: [[], S_MID, S_HIGH], floors: [[1, 1], [4, 10], [10, 45]], pollution: 0.02, powerPer: 0.08, waterPer: 0.04 },
+  CO3: { kind: 'CO3', zone: ZoneType.C, name: 'オフィス（高所得）', capPerCell: 0, floorCap: 8, wealth: 1.8, dens: [1, 2], sizes: [[], S_MID, S_HIGH], floors: [[1, 1], [5, 12], [15, 110]], pollution: 0.02, powerPer: 0.09, waterPer: 0.04 },
   IA: { kind: 'IA', zone: ZoneType.I, name: '農業', capPerCell: 1.5, floorCap: 0, wealth: 0.5, dens: [0], sizes: [[[3, 3], [2, 3], [3, 2], [4, 4], [2, 2]]], floors: [[1, 1]], pollution: 0.05, powerPer: 0.05, waterPer: 0.3 },
   ID: { kind: 'ID', zone: ZoneType.I, name: '汚染型工業', capPerCell: 18, floorCap: 0, wealth: 0.8, dens: [0, 1, 2], sizes: [[[2, 2], [3, 2], [2, 3], [3, 3], [1, 2]], S_IND_MID, S_IND_HIGH], floors: [[1, 1], [1, 1], [1, 1]], pollution: 1.0, powerPer: 0.12, waterPer: 0.1 },
   IM: { kind: 'IM', zone: ZoneType.I, name: '製造業', capPerCell: 14, floorCap: 0, wealth: 1.1, dens: [0, 1, 2], sizes: [[[2, 2], [3, 2], [2, 3], [3, 3]], S_IND_MID, S_IND_HIGH], floors: [[1, 1], [1, 1], [1, 1]], pollution: 0.45, powerPer: 0.1, waterPer: 0.1 },
@@ -126,10 +126,11 @@ export const TAX_LABELS: Record<GrowKind, string> = {
 export function maxFloorsFor(pop: number) {
   if (pop < 2000) return 6;
   if (pop < 6000) return 12;
-  if (pop < 15000) return 20;
-  if (pop < 40000) return 35;
-  if (pop < 90000) return 50;
-  return 60;
+  if (pop < 15000) return 22;
+  if (pop < 30000) return 36;
+  if (pop < 60000) return 55;
+  if (pop < 100000) return 80;
+  return 110; // 400m 級の超高層ビル
 }
 
 // ---- 公共施設 ----
@@ -170,7 +171,7 @@ export const SERVICE_DEPT: Record<ServiceKind, Dept> = {
 export const GARBAGE_PER_RES = 0.9;
 export const GARBAGE_PER_JOB = 0.6;
 
-export type CivicId = 'coal' | 'gas' | 'oil' | 'nuclear' | 'wind' | 'solar' | 'pump' | 'tower' | 'park_s' | 'park_l' | 'plaza' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station'
+export type CivicId = 'coal' | 'gas' | 'oil' | 'nuclear' | 'wind' | 'solar' | 'pump' | 'tower' | 'park_s' | 'park_l' | 'plaza' | 'playground' | 'greenway' | 'sports' | 'garden' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station'
   | 'ferry_p' | 'ferry_c' | 'seaport' | 'airport_s' | 'airport_l' | 'freight_st'
   | 'police_s' | 'police_l' | 'fire_s' | 'fire_l' | 'clinic' | 'hospital' | 'school_e' | 'school_h' | 'college' | 'library'
   | 'landfill' | 'incinerator' | 'recycling'
@@ -198,6 +199,7 @@ export interface CivicDef {
   radius?: number; // 効果が届く範囲（マス）
   capacity?: number; // 受け入れ人数（学校の席、病院のベッドなど）／ゴミの処理量（月）
   reward?: boolean; // 記念施設（条件を満たすと建てられる）
+  rotate?: boolean; // 細長い施設：道路に面する向きに自動で回す
   desc: string;
 }
 
@@ -213,6 +215,10 @@ export const CIVIC: Record<CivicId, CivicDef> = {
   park_s: { id: 'park_s', name: '小さな公園', w: 1, h: 1, cost: 150, upkeep: 6, park: 0.12, desc: '周りの地価が少し上がる' },
   park_l: { id: 'park_l', name: '大きな公園', w: 3, h: 3, cost: 1200, upkeep: 30, park: 0.3, desc: '周りの地価が上がる' },
   plaza: { id: 'plaza', name: '広場', w: 2, h: 2, cost: 500, upkeep: 12, park: 0.18, desc: '商業地の地価が上がる' },
+  playground: { id: 'playground', name: '遊び場', w: 1, h: 2, cost: 350, upkeep: 8, park: 0.15, rotate: true, desc: 'ブランコやすべり台のある公園。周りの地価が少し上がる' },
+  greenway: { id: 'greenway', name: '緑道', w: 1, h: 3, cost: 450, upkeep: 9, park: 0.16, rotate: true, desc: '並木と遊歩道。細長い空き地に置ける' },
+  sports: { id: 'sports', name: '運動場', w: 2, h: 3, cost: 900, upkeep: 22, park: 0.22, rotate: true, desc: 'サッカー場とテニスコート。周りの地価が上がる' },
+  garden: { id: 'garden', name: '池のある庭園', w: 2, h: 3, cost: 1100, upkeep: 26, park: 0.28, rotate: true, desc: '池と橋のある庭園。周りの地価がよく上がる' },
   busstop: { id: 'busstop', name: 'バス停', w: 1, h: 1, cost: 150, upkeep: 15, transit: 'bus', desc: '道路沿いに置くと、近くの住人がバスを使う。路線は自動で決まる' },
   station: { id: 'station', name: '鉄道の駅', w: 2, h: 2, cost: 3000, upkeep: 60, transit: 'rail', desc: '線路と道路の両方に接するように置く' },
   el_station: { id: 'el_station', name: '高架鉄道の駅', w: 2, h: 2, cost: 4000, upkeep: 70, transit: 'erail', desc: '高架鉄道の線路と道路の両方に接するように置く' },

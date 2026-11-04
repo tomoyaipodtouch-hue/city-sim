@@ -402,11 +402,11 @@ export class World {
         }
         if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
         const def = CIVIC[c.id];
-        flattenRect(g, plan.x, plan.y, def.w, def.h, plan.flatH);
+        flattenRect(g, plan.x, plan.y, plan.w, plan.h, plan.flatH);
         this.heightVersion++;
         const b: Building = {
-          id: this.nextId++, civic: true, type: c.id, x: plan.x, y: plan.y, w: def.w, h: def.h,
-          face: def.waterfront ? this.waterFace(plan.x, plan.y, def.w, def.h) : this.findFace(plan.x, plan.y, def.w, def.h), seed: this.rng.int(1e9), den: 0, cap: 0, occ: 0,
+          id: this.nextId++, civic: true, type: c.id, x: plan.x, y: plan.y, w: plan.w, h: plan.h,
+          face: def.waterfront ? this.waterFace(plan.x, plan.y, plan.w, plan.h) : this.findFace(plan.x, plan.y, plan.w, plan.h), seed: this.rng.int(1e9), den: 0, cap: 0, occ: 0,
           state: BState.Normal, stateDays: 0, powered: false, watered: false, floors: 0, commute: 0, employed: 1, badMonths: 0,
         };
         this.placeBuilding(b);

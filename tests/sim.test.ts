@@ -113,6 +113,19 @@ describe('stage 2a roads', () => {
     expect(plantPower('wind', 200)).toBe(64);
   });
 
+  it('long parks turn so their long side faces the road', () => {
+    const w = new World(32);
+    w.g.heights.fill(6);
+    w.funds = 1e6;
+    w.exec({ t: 'road', x0: 2, y0: 10, x1: 28, y1: 10, road: RoadType.Street });
+    expect(w.exec({ t: 'plop', id: 'greenway', x: 10, y: 11 }).ok).toBe(true);
+    const b = [...w.buildings.values()].find((x) => x.type === 'greenway')!;
+    expect([b.w, b.h]).toEqual([3, 1]);
+    expect(w.exec({ t: 'plop', id: 'sports', x: 20, y: 11 }).ok).toBe(true);
+    const s2 = [...w.buildings.values()].find((x) => x.type === 'sports')!;
+    expect([s2.w, s2.h]).toEqual([3, 2]);
+  });
+
   it('builds a bridge across water', () => {
     const w = new World(32);
     const V = 33;
