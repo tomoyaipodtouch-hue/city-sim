@@ -15,7 +15,7 @@ export const MAT = {
   ground: 9,
 } as const;
 // 模様1枚の大きさ（m）
-export const MAT_TILE_M = [1, 2.4, 6, 4, 2.4, 3, 8, 4, 3, 8];
+export const MAT_TILE_M = [1, 2.4, 6, 4, 2.4, 4, 8, 4, 3, 8];
 const S = 256;
 
 function rng(seed: number) {
@@ -112,7 +112,7 @@ function makeLayers(): Uint8Array[] {
     return 162 + shade + fine[y * S + x] * 0.35 + blot[y * S + x] * 0.4;
   }));
   // 波板の金属（縦のうね）
-  L.push(layer((x, y) => 160 + Math.sin((x / S) * Math.PI * 2 * 16) * 22 + fine[y * S + x] * 0.3 + blot[y * S + x] * 0.7));
+  L.push(layer((x, y) => 160 + Math.sin((x / S) * Math.PI * 2 * 8) * 18 + fine[y * S + x] * 0.3 + blot[y * S + x] * 0.7));
   // 屋上の防水シート（2m ごとの継ぎ目、むら、補修のあと）
   {
     const r = rng(61);

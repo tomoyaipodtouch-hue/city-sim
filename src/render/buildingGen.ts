@@ -103,14 +103,14 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
       break;
     case 'CS1': case 'CS2': case 'CS3':
       if (dense) shopMid(mb, f, rng, tf, b.floors, b.type === 'CS3');
-      else shop(mb, f, rng, tf, b.type === 'CS1' ? 1 : b.type === 'CS2' ? 2 : 3);
+      else lowShop(mb, f, rng, tf, b.type === 'CS1' ? 1 : b.type === 'CS2' ? 2 : 3);
       break;
     case 'CO2': case 'CO3':
       highrise(mb, f, rng, tf, Math.max(3, b.floors), true, b.type === 'CO3');
       break;
     case 'IA': farm(mb, f, rng, tf); break;
-    case 'ID': factory(mb, f, rng, true, b.den); break;
-    case 'IM': factory(mb, f, rng, false, b.den); break;
+    case 'ID': if (rng.next() < 0.45) chemicalPlant(mb, f, rng, b.den); else factory(mb, f, rng, true, b.den); break;
+    case 'IM': if (rng.next() < 0.5) warehouse(mb, f, rng, b.den); else factory(mb, f, rng, false, b.den); break;
     case 'IH': hightech(mb, f, rng, tf, b.den); break;
     case 'coal': coalPlant(mb, f); break;
     case 'gas': gasPlant(mb, f); break;
@@ -350,6 +350,214 @@ function shop(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, tier: number) {
   if (rng.next() < 0.5) tf(-f.W / 2 + 1.5, -f.D / 2 + 1.5, 0.8);
 }
 
+
+// ---------------- 細かい部品 ----------------
+// 屋上の給水タンク：脚の上に円筒、円すいの屋根、たが（帯）
+function waterTank(mb: MeshBuilder, x: number, z: number, y: number, r: number, rng: Rng) {
+  const wood = rng.next() < 0.5, body = wood ? C(0x8a6a48) : C(0xb9bdc2), band = wood ? PALETTE.dark : PALETTE.steel;
+  for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) mb.box(x + dx * r * 0.65 - 0.1, y, z + dz * r * 0.65 - 0.1, x + dx * r * 0.65 + 0.1, y + 1.6, z + dz * r * 0.65 + 0.1, PALETTE.steel);
+  mb.box(x - r * 0.8, y + 1.5, z - r * 0.8, x + r * 0.8, y + 1.65, z + r * 0.8, PALETTE.steel);
+  mb.cylinder(x, z, y + 1.65, y + 4.4, r, 12, body);
+  for (const by of [2.3, 3.4]) mb.cylinder(x, z, y + by, y + by + 0.1, r + 0.04, 12, band);
+  mb.cylinder(x, z, y + 4.4, y + 5.4, r + 0.1, 12, PALETTE.roof[0], PALETTE.roof[0], 0.08);
+}
+
+// 店の看板：色の板と、文字に見える明るい線
+function signBoard(mb: MeshBuilder, x0: number, x1: number, y: number, z: number, color: THREE.Color, rng: Rng) {
+  mb.box(x0, y, z, x1, y + 0.8, z + 0.22, color);
+  const w = x1 - x0, n = Math.max(2, Math.floor(w / 1.1));
+  const lw = Math.min(0.75, (w * 0.7) / n);
+  const start = x0 + (w - n * lw * 1.25) / 2;
+  for (let k = 0; k < n; k++) {
+    if (rng.next() < 0.15) continue;
+    const lx = start + k * lw * 1.25;
+    mb.box(lx, y + 0.2, z + 0.22, lx + lw, y + 0.6, z + 0.26, PALETTE.white);
+  }
+}
+
+// しま模様の日よけ
+function awning(mb: MeshBuilder, x0: number, x1: number, y: number, z: number, depth: number, a: THREE.Color, b: THREE.Color) {
+  const n = Math.max(2, Math.round((x1 - x0) / 0.9));
+  const sw = (x1 - x0) / n;
+  for (let k = 0; k < n; k++) {
+    const c = k % 2 ? a : b;
+    const u0 = x0 + k * sw, u1 = u0 + sw;
+    mb.quad([u0, y - 0.7, z + depth], [u1, y - 0.7, z + depth], [u1, y, z], [u0, y, z], c);
+    mb.quad([u0, y - 0.7, z + depth], [u0, y, z], [u1, y, z], [u1, y - 0.7, z + depth], c);
+    mb.quad([u0, y - 1.0, z + depth], [u1, y - 1.0, z + depth], [u1, y - 0.7, z + depth], [u0, y - 0.7, z + depth], c);
+  }
+}
+
+// ---------------- 低層の店舗 ----------------
+function lowShop(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, tier: number) {
+  const r = rng.next();
+  if (tier === 1 && f.W <= 16 && r < 0.25) return shop(mb, f, rng, tf, tier); // ガソリンスタンド
+  if (f.W >= 30 && f.D >= 30 && tier >= 2 && r < 0.5) return supermarket(mb, f, rng, tf);
+  if (f.W >= 28 && r < 0.6) return stripMall(mb, f, rng, tf);
+  if (f.W <= 20 && r < 0.75) return mainStreetShop(mb, f, rng, tf, tier);
+  if (r < 0.85) return cornerStore(mb, f, rng, tf);
+  return shop(mb, f, rng, tf, tier);
+}
+
+// 商店街の2〜3階建て：1階は店、上は住まいや事務所。飾りのついた屋上のふち
+function mainStreetShop(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, tier: number) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.09, PALETTE.pavement);
+  const wall = rng.pick([PALETTE.brick, ...PALETTE.shopWall, C(0xe8dcc2)]);
+  const trim = C(0xe9e4d6), accent = rng.pick(PALETTE.accent);
+  const floors = 2 + (tier >= 2 && rng.next() < 0.5 ? 1 : 0);
+  const g = 4.2, fh = 3.3, h = g + (floors - 1) * fh;
+  const w = f.W - 1, z1 = f.D / 2 - 1.2, z0 = z1 - Math.min(f.D - 4, 14 + rng.next() * 6);
+  mb.box(-w / 2, 0, z0, w / 2, g, z1, wall, PAT.shop, flatRoof());
+  mb.box(-w / 2, g, z0, w / 2, h, z1, wall, PAT.house, flatRoof());
+  // 1階と2階の境目の帯、屋上のふち（中央が高い）
+  mb.box(-w / 2 - 0.1, g - 0.2, z1, w / 2 + 0.1, g + 0.3, z1 + 0.25, trim);
+  mb.box(-w / 2, h, z1 - 0.35, w / 2, h + 1.0, z1, wall, PAT.none, trim);
+  mb.box(-w / 6, h + 1.0, z1 - 0.35, w / 6, h + 1.8, z1, wall, PAT.none, trim);
+  mb.box(-w / 2 - 0.15, h + 0.9, z1 - 0.4, w / 2 + 0.15, h + 1.1, z1 + 0.15, trim);
+  roofRim(mb, -w / 2, z0, w / 2, z1 - 0.35, h, wall, 0.7);
+  signBoard(mb, -w / 2 + 0.8, w / 2 - 0.8, g - 1.3, z1, accent, rng);
+  if (rng.next() < 0.7) awning(mb, -w / 2 + 0.6, w / 2 - 0.6, g - 1.4, z1, 1.4, accent, PALETTE.white);
+  roofUnits(mb, -w / 2 + 0.5, z0 + 0.5, w / 2 - 0.5, z1 - 1, h, rng, 1 + rng.int(2));
+  if (rng.next() < 0.3) waterTank(mb, -w / 4, z0 + 3, h, 1.2, rng);
+  // 裏の小さな駐車場
+  mb.ground(-f.W / 2 + 0.5, -f.D / 2 + 0.5, f.W / 2 - 0.5, z0 - 0.5, 0.1, PALETTE.asphalt);
+  void tf;
+}
+
+// テナントが並ぶ平屋の商店街：区画ごとに看板の色が違う。前に駐車場
+function stripMall(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.asphalt);
+  const wall = rng.pick([C(0xd9cdb4), C(0xc8b89a), C(0xe3ddd0), C(0xb5a38a)]);
+  const w = f.W - 3, d = Math.min(14, f.D * 0.42);
+  const z0 = -f.D / 2 + 1.5, z1 = z0 + d, h = 5.2;
+  mb.box(-w / 2, 0, z0, w / 2, h, z1, wall, PAT.shop, flatRoof());
+  roofRim(mb, -w / 2, z0, w / 2, z1, h, wall, 0.8);
+  // 屋根つきの通路（柱）
+  mb.box(-w / 2, h - 1.2, z1, w / 2, h - 0.8, z1 + 3, C(0xe9e4d6));
+  for (let x = -w / 2 + 0.3; x <= w / 2; x += 6) mb.box(x - 0.2, 0, z1 + 2.6, x + 0.2, h - 1.2, z1 + 3, C(0xe9e4d6));
+  // テナントの看板と、中央の高い看板壁
+  const units = Math.max(3, Math.round(w / 8)), uw = w / units;
+  for (let k = 0; k < units; k++) {
+    const x0 = -w / 2 + k * uw;
+    signBoard(mb, x0 + 0.8, x0 + uw - 0.8, h - 0.75, z1 + 3, rng.pick(PALETTE.accent), rng);
+  }
+  mb.box(-5, h, z1 - 0.4, 5, h + 2.4, z1, wall, PAT.none, C(0xe9e4d6));
+  // 駐車場の白線と、道路沿いの看板の柱
+  for (let x = -f.W / 2 + 2; x < f.W / 2 - 2; x += 2.7) mb.ground(x, z1 + 5, x + 0.14, z1 + 10, 0.12, PALETTE.white);
+  for (let x = -f.W / 2 + 2; x < f.W / 2 - 2; x += 2.7) mb.ground(x, f.D / 2 - 6.5, x + 0.14, f.D / 2 - 1.5, 0.12, PALETTE.white);
+  mb.box(f.W / 2 - 3, 0, f.D / 2 - 1.5, f.W / 2 - 2.6, 6, f.D / 2 - 1.1, PALETTE.steel);
+  mb.box(f.W / 2 - 4.5, 6, f.D / 2 - 1.5, f.W / 2 - 1.1, 8.5, f.D / 2 - 1.1, rng.pick(PALETTE.accent));
+  tf(-f.W / 2 + 1.5, f.D / 2 - 1.5, 0.8);
+}
+
+// 大型スーパー：大きな箱と、ガラスの入口、カート置き場、大きな駐車場
+function supermarket(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.asphalt);
+  const wall = rng.pick([C(0xe6e1d6), C(0xd2c7b3), C(0xc9ccd0)]), accent = rng.pick(PALETTE.accent);
+  const w = f.W - 4, d = Math.min(f.D * 0.55, 30);
+  const z0 = -f.D / 2 + 2, z1 = z0 + d, h = 8;
+  mb.box(-w / 2, 0, z0, w / 2, h, z1, wall, PAT.dock, flatRoof());
+  roofRim(mb, -w / 2, z0, w / 2, z1, h, wall, 0.9);
+  // 入口（ガラス）とひさし、ロゴの帯
+  mb.box(-7, 0, z1, 7, 5.5, z1 + 2.5, PALETTE.glass, PAT.shop, wall);
+  mb.box(-8, 5.5, z1, 8, 6.2, z1 + 3.5, accent);
+  signBoard(mb, -6, 6, 6.6, z1, accent, rng);
+  // 屋上の天窓の列と室外機
+  for (let x = -w / 2 + 4; x < w / 2 - 4; x += 6) mb.box(x, h, z0 + 4, x + 2.5, h + 0.4, z1 - 4, PALETTE.glass);
+  roofUnits(mb, -w / 2 + 1, z0 + 1, w / 2 - 1, z0 + 4, h, rng, 4);
+  // 駐車場
+  for (let x = -f.W / 2 + 2; x < f.W / 2 - 2; x += 2.7) {
+    mb.ground(x, z1 + 6, x + 0.14, z1 + 11, 0.12, PALETTE.white);
+    if (z1 + 18 < f.D / 2 - 1) mb.ground(x, z1 + 13, x + 0.14, z1 + 18, 0.12, PALETTE.white);
+  }
+  mb.box(9, 0, z1 + 4, 11.5, 1.1, z1 + 5, PALETTE.steel); // カート置き場
+  for (const x of [-f.W / 2 + 2, f.W / 2 - 2]) tf(x, f.D / 2 - 2, 0.8);
+}
+
+// コンビニ風の小さな店：大きなガラス窓と、屋根の上の看板
+function cornerStore(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.asphalt);
+  const accent = rng.pick(PALETTE.accent), wall = rng.pick([PALETTE.white, C(0xe9e4d6), C(0xd8dde2)]);
+  const w = Math.min(f.W - 4, 14), d = Math.min(f.D - 8, 10);
+  const z1 = f.D / 2 - 6, z0 = z1 - d, h = 4.2;
+  mb.box(-w / 2, 0, z0, w / 2, h, z1, wall, PAT.shop, flatRoof());
+  // 色の帯（2本）
+  mb.box(-w / 2 - 0.05, h - 1.0, z0 - 0.05, w / 2 + 0.05, h - 0.6, z1 + 0.05, accent);
+  mb.box(-w / 2 - 0.05, h - 0.55, z0 - 0.05, w / 2 + 0.05, h - 0.35, z1 + 0.05, rng.pick(PALETTE.accent));
+  roofRim(mb, -w / 2, z0, w / 2, z1, h, wall, 0.5);
+  roofUnits(mb, -w / 2 + 0.5, z0 + 0.5, w / 2 - 0.5, z1 - 0.5, h, rng, 2);
+  // 前の駐車場
+  for (let x = -w / 2; x < w / 2; x += 2.7) mb.ground(x, z1 + 1, x + 0.14, z1 + 5.5, 0.12, PALETTE.white);
+  // 道路沿いの看板
+  mb.box(f.W / 2 - 2.2, 0, f.D / 2 - 1.4, f.W / 2 - 1.9, 4.5, f.D / 2 - 1.1, PALETTE.steel);
+  mb.box(f.W / 2 - 3.2, 4.5, f.D / 2 - 1.4, f.W / 2 - 0.9, 6.3, f.D / 2 - 1.1, accent);
+  tf(-f.W / 2 + 1.5, -f.D / 2 + 1.5, 0.7);
+}
+
+// ---------------- 工場の種類 ----------------
+// 倉庫・物流センター：大きな箱、トラックの搬入口が並ぶ、コンテナ
+function warehouse(mb: MeshBuilder, f: LotFrame, rng: Rng, den: number) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.concrete);
+  const wall = rng.pick([C(0xcfd3d6), C(0xb9c2c9), C(0xd8d2c4), C(0x9fb0bc)]);
+  const w = f.W - 4, d = f.D * 0.55;
+  const z0 = -f.D / 2 + 2, z1 = z0 + d, h = 10 + den * 3;
+  mb.box(-w / 2, 0, z0, w / 2, h, z1, wall, PAT.industrial, flatRoof());
+  roofRim(mb, -w / 2, z0, w / 2, z1, h, wall, 0.6);
+  // 帯（会社の色）と事務所の角
+  const accent = rng.pick(PALETTE.accent);
+  mb.box(-w / 2 - 0.05, h - 1.6, z1, w / 2 + 0.05, h - 0.9, z1 + 0.1, accent);
+  mb.box(-w / 2, 0, z1, -w / 2 + 10, 7, z1 + 0.6, PALETTE.glass, PAT.office, wall);
+  // 搬入口（シャッター、ひさし、止まっているトラック）
+  for (let x = -w / 2 + 12; x < w / 2 - 3; x += 4.2) {
+    mb.box(x, 0.0, z1, x + 3, 3.8, z1 + 0.12, C(0x6b7178));
+    if (rng.next() < 0.45) {
+      mb.box(x + 0.25, 0, z1 + 0.5, x + 2.75, 3.8, z1 + 10, PALETTE.white);
+      mb.box(x + 0.35, 0, z1 + 10, x + 2.65, 3.1, z1 + 12.5, rng.pick(PALETTE.accent));
+    }
+  }
+  mb.box(-w / 2 + 11, 4.2, z1, w / 2 - 2, 4.5, z1 + 2, PALETTE.steel);
+  // 天窓の列
+  for (let x = -w / 2 + 3; x < w / 2 - 3; x += 7) mb.box(x, h, z0 + 3, x + 1.4, h + 0.35, z1 - 3, PALETTE.glass);
+  // コンテナ
+  const cont = [0xb5452f, 0x2f6fb5, 0x3f8f4a, 0xd9a227, 0x7a7f86].map(C);
+  for (let k = 0; k < 4; k++) {
+    const x = -f.W / 2 + 3 + k * 3;
+    for (let lv = 0; lv < 1 + rng.int(3); lv++) mb.box(x, lv * 2.6, f.D / 2 - 14, x + 2.4, lv * 2.6 + 2.55, f.D / 2 - 2, rng.pick(cont), PAT.industrial, rng.pick(cont));
+  }
+}
+
+// 化学工場：タンク群、配管、蒸留塔、紅白の煙突
+function chemicalPlant(mb: MeshBuilder, f: LotFrame, rng: Rng, den: number) {
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.concrete);
+  const wall = rng.pick(PALETTE.indWall);
+  const s = 1 + den * 0.3;
+  // 制御棟
+  mb.box(-f.W / 2 + 2, 0, f.D / 2 - 12, -f.W / 2 + 14, 8, f.D / 2 - 3, wall, PAT.industrial, flatRoof());
+  roofRim(mb, -f.W / 2 + 2, f.D / 2 - 12, -f.W / 2 + 14, f.D / 2 - 3, 8, wall, 0.5);
+  // 球形のタンクに見える丸いタンクと、円筒のタンク
+  const tanks = Math.max(2, Math.floor((f.W - 18) / 9));
+  for (let k = 0; k < tanks; k++) {
+    const x = -f.W / 2 + 20 + k * 9, z = f.D / 2 - 8;
+    mb.cylinder(x, z, 0, 7 * s, 3.6, 16, PALETTE.white, PALETTE.white);
+    mb.cylinder(x, z, 7 * s, 7.8 * s, 3.6, 16, PALETTE.white, PALETTE.white, 2.2);
+    mb.cylinder(x, z, 0, 0.8, 4.2, 16, PALETTE.concrete, PALETTE.concrete);
+  }
+  // 蒸留塔（細く高い塔）と足場
+  for (let k = 0; k < 2 + rng.int(2); k++) {
+    const x = -f.W / 2 + 6 + k * 5, z = -f.D / 2 + 8;
+    const th = (18 + rng.next() * 10) * s;
+    mb.cylinder(x, z, 0, th, 1.3, 12, C(0xc9ccd0), PALETTE.steel);
+    for (let y = 4; y < th; y += 5) mb.cylinder(x, z, y, y + 0.25, 1.9, 12, PALETTE.steel, PALETTE.steel);
+  }
+  // 配管の橋
+  for (const z of [-f.D / 2 + 13, -f.D / 2 + 13.8]) mb.box(-f.W / 2 + 4, 5, z - 0.25, f.W / 2 - 4, 5.5, z + 0.25, PALETTE.steel);
+  for (let x = -f.W / 2 + 5; x < f.W / 2 - 4; x += 6) mb.box(x - 0.2, 0, -f.D / 2 + 12.8, x + 0.2, 5, -f.D / 2 + 14, PALETTE.steel);
+  // 紅白の煙突
+  const cx = f.W / 2 - 6, cz = -f.D / 2 + 6, ch = (30 + rng.next() * 12) * s;
+  const bands = 6;
+  for (let k = 0; k < bands; k++) mb.cylinder(cx, cz, (ch * k) / bands, (ch * (k + 1)) / bands, 1.6 - k * 0.1, 12, k % 2 ? PALETTE.white : C(0xc0392b), k === bands - 1 ? PALETTE.dark : undefined, 1.6 - (k + 1) * 0.1);
+}
+
 function farm(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
   // 畑の畝
   const crop = rng.pick(PALETTE.crop), crop2 = rng.pick(PALETTE.crop);
@@ -387,7 +595,9 @@ function factory(mb: MeshBuilder, f: LotFrame, rng: Rng, dirty: boolean, den = 0
     const tw = w / teeth;
     for (let k = 0; k < teeth; k++) {
       const a = x0 + k * tw;
-      mb.quad([a, h, z1], [a + tw, h, z1], [a + tw, h + 3, z1], [a + tw, h + 3, z0], PALETTE.steel);
+      // 両端の三角の壁
+      mb.tri([a, h, z1], [a + tw, h, z1], [a + tw, h + 3, z1], wall);
+      mb.tri([a + tw, h, z0], [a, h, z0], [a + tw, h + 3, z0], wall);
       mb.quad([a, h, z0], [a, h, z1], [a + tw, h + 3, z1], [a + tw, h + 3, z0], PALETTE.roof[3]);
       mb.quad([a + tw, h, z1], [a + tw, h, z0], [a + tw, h + 3, z0], [a + tw, h + 3, z1], PALETTE.glass);
     }
@@ -797,7 +1007,7 @@ function apartments(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: numb
   // 入口のひさし
   mb.box(-2, 2.8, bz1, 2, 3.1, bz1 + 2, kind === 'R3' ? PALETTE.dark : PALETTE.concrete);
   // 給水タンク
-  if (rng.next() < 0.4) mb.cylinder(bx0 + 3, blocks[0][1] + 3, h, h + 3.5, 1.4, 8, PALETTE.wood, PALETTE.dark);
+  if (rng.next() < 0.4) waterTank(mb, bx0 + 3, blocks[0][1] + 3, h, 1.4, rng);
   tf(-f.W / 2 + 1.6, f.D / 2 - 1.6, 0.8);
   tf(f.W / 2 - 1.6, f.D / 2 - 1.6, 0.8);
 }
@@ -883,7 +1093,7 @@ function tower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, o
     mb.box(-tw / 3, y, cz - td / 3, tw / 3, y + 3.5, cz + td / 3, PALETTE.concrete, PAT.industrial, flatRoof());
     roofUnits(mb, -tw / 2 + 0.5, cz - td / 2 + 0.5, tw / 2 - 0.5, cz + td / 2 - 0.5, y, rng, 3);
     if (floors > 20 && crown < 0.6) mb.box(-0.25, y + 3.5, cz - 0.25, 0.25, y + 16, cz + 0.25, PALETTE.steel);
-    if (!office) mb.cylinder(tw / 4, cz, y + 3.5, y + 6, 1.6, 8, PALETTE.wood, PALETTE.dark);
+    if (!office) waterTank(mb, tw / 4, cz, y + 3.5, 1.6, rng);
   }
   // 入口と植え込み
   mb.box(-3, podium ? 4.3 : 3, pz1, 3, (podium ? 4.3 : 3) + 0.3, pz1 + 2.2, PALETTE.dark);
@@ -1373,7 +1583,20 @@ function hightech(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
   const h = 7 + den * 4;
   mb.box(-W / 2, 0, -D / 2, W / 2 - 6, h, D / 2 - 4, glass, PAT.office, PALETTE.white);
   mb.box(W / 2 - 12, 0, D / 2 - 10, W / 2, h * 0.6, D / 2 + 2, PALETTE.white, PAT.office, PALETTE.steel);
-  roofUnits(mb, -W / 2, -D / 2, W / 2 - 6, D / 2 - 4, h, rng, 2);
+  roofRim(mb, -W / 2, -D / 2, W / 2 - 6, D / 2 - 4, h, PALETTE.white, 0.7);
+  // 屋上の太陽光パネル
+  const panel = C(0x1d3557);
+  for (let z = -D / 2 + 2; z < D / 2 - 7; z += 3.2)
+    for (let x = -W / 2 + 2; x < W / 2 - 9; x += 5.5) {
+      const x1 = Math.min(W / 2 - 8, x + 5);
+      mb.quad([x, h + 0.5, z + 2.2], [x1, h + 0.5, z + 2.2], [x1, h + 1.3, z], [x, h + 1.3, z], panel);
+    }
+  // ガラスのアトリウム（入口）
+  mb.box(-6, 0, D / 2 - 4, 4, h + 1.5, D / 2 - 1, PALETTE.glass, PAT.office, PALETTE.glass);
+  mb.box(-6.3, h + 1.5, D / 2 - 4.3, 4.3, h + 1.8, D / 2 - 0.7, PALETTE.white);
+  // 遊歩道と池
+  mb.ground(-1.2, D / 2 - 1, 1.2, f.D / 2 - 5, 0.1, PALETTE.pavement);
+  mb.ground(-f.W / 2 + 3, D / 2 - 1, -f.W / 2 + 10, D / 2 + 1.5, 0.12, PALETTE.water);
   mb.ground(-f.W / 2 + 1, f.D / 2 - 5, f.W / 2 - 1, f.D / 2 - 0.5, 0.1, PALETTE.asphalt);
   for (let k = 0; k < 6; k++) tf(-f.W / 2 + 2 + rng.next() * (f.W - 4), -f.D / 2 + 2 + rng.next() * 3, 0.8 + rng.next() * 0.4);
 }
