@@ -129,7 +129,7 @@ export class Hud {
   // ---------------- 左のツール ----------------
   private buildToolbar() {
     for (const g of TOOL_GROUPS) {
-      const b = el('button', 'tbtn', `${svg(g.icon)}<span>${g.name}</span>`);
+      const b = el('button', 'tbtn' + (g.id === 'bulldoze' ? ' demo' : ''), `${svg(g.icon)}<span>${g.name}</span>`);
       b.dataset.g = g.id;
       b.onclick = () => {
         sfx.click();

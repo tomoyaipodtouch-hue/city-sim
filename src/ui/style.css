@@ -240,3 +240,5 @@ button:disabled { opacity: 0.38; cursor: default; }
 
 /* メニューの中の文字は、すべてタブ（予算など）と同じ大きさにする */
 .sheet-b, .sheet-b * { font-size: var(--fs-m) !important; }
+/* 取り壊しのボタンは、選んだときに黄色 */
+.tbtn.demo.on { color: #f2c200; background: rgba(242, 194, 0, 0.18); border-left-color: #f2c200; }
