@@ -1,5 +1,6 @@
 // 建物などの形を組み立てるための簡単なジオメトリビルダー
 import * as THREE from 'three';
+import { MAT } from './textures';
 
 // 模様の番号（シェーダーで窓などを描く）
 export const PAT = {
@@ -18,7 +19,12 @@ export class MeshBuilder {
   col: number[] = [];
   uvm: number[] = [];
   pat: number[] = [];
+  mat: number[] = [];
   idx: number[] = [];
+  // 素材（textures.ts の MAT）。null なら面の向き・模様・色から自動で選ぶ
+  matOverride: number | null = null;
+  flatRoofMat: number = MAT.membrane;
+  slopeRoofMat: number = MAT.shingle;
 
   // 変換（Y軸まわりの回転と平行移動）
   private cos = 1;
@@ -36,6 +42,24 @@ export class MeshBuilder {
     this.tz = tz;
   }
 
+  // 面の素材を自動で選ぶ
+  private autoMat(ny: number, c: THREE.Color, p: number) {
+    if (this.matOverride !== null) return this.matOverride;
+    if (ny > 0.95) return this.flatRoofMat;
+    if (ny > 0.2) return this.slopeRoofMat;
+    if (ny < -0.5) return MAT.none;
+    if (c.r > c.g * 1.3 && c.r > c.b * 1.45 && c.r > 0.12) return MAT.brick;
+    const lum = 0.3 * c.r + 0.59 * c.g + 0.11 * c.b;
+    switch (p) {
+      case PAT.industrial: return MAT.metal;
+      case PAT.house: return lum > 0.45 ? MAT.siding : MAT.plaster;
+      case PAT.office: return MAT.none; // ガラスの壁
+      case PAT.apartment: case PAT.shop: return lum > 0.5 ? MAT.plaster : MAT.concrete;
+      default: return MAT.plaster;
+    }
+  }
+
+  private curMat = 0;
   private vtx(x: number, y: number, z: number, nx: number, ny: number, nz: number, c: THREE.Color, u: number, v: number, p: number) {
     const { cos, sin } = this;
     this.pos.push(x * cos - z * sin + this.tx, y + this.ty, x * sin + z * cos + this.tz);
@@ -44,6 +68,7 @@ export class MeshBuilder {
     this.col.push(c.r * k, c.g * k, c.b * k);
     this.uvm.push(u, v);
     this.pat.push(this.abandoned && p > 0 ? p + 10 : p);
+    this.mat.push(this.curMat);
     return this.pos.length / 3 - 1;
   }
 
@@ -59,6 +84,7 @@ export class MeshBuilder {
     let nz = e1[0] * e2[1] - e1[1] * e2[0];
     const l = Math.hypot(nx, ny, nz) || 1;
     nx /= l; ny /= l; nz /= l;
+    this.curMat = this.autoMat(ny, color, pat);
     const i0 = this.vtx(...a, nx, ny, nz, color, u0, v0, pat);
     const i1 = this.vtx(...b, nx, ny, nz, color, u0 + uw, v0, pat);
     const i2 = this.vtx(...c, nx, ny, nz, color, u0 + uw, v0 + vh, pat);
@@ -74,6 +100,7 @@ export class MeshBuilder {
     let nz = e1[0] * e2[1] - e1[1] * e2[0];
     const l = Math.hypot(nx, ny, nz) || 1;
     nx /= l; ny /= l; nz /= l;
+    this.curMat = this.autoMat(ny, color, 0);
     const i0 = this.vtx(...a, nx, ny, nz, color, 0, 0, 0);
     const i1 = this.vtx(...b, nx, ny, nz, color, 0, 0, 0);
     const i2 = this.vtx(...c, nx, ny, nz, color, 0, 0, 0);
@@ -150,7 +177,10 @@ export class MeshBuilder {
 
   // 地面の板
   ground(x0: number, z0: number, x1: number, z1: number, y: number, color: THREE.Color) {
+    const keep = this.matOverride;
+    this.matOverride = MAT.ground;
     this.quad([x0, y, z1], [x1, y, z1], [x1, y, z0], [x0, y, z0], color);
+    this.matOverride = keep;
   }
 
   get vertexCount() {
@@ -164,6 +194,7 @@ export class MeshBuilder {
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
     g.setAttribute('aUvm', new THREE.Float32BufferAttribute(this.uvm, 2));
     g.setAttribute('aPat', new THREE.Float32BufferAttribute(this.pat, 1));
+    g.setAttribute('aMat', new THREE.Float32BufferAttribute(this.mat, 1));
     g.setIndex(this.pos.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(this.idx, 1) : new THREE.Uint16BufferAttribute(this.idx, 1));
     g.computeBoundingSphere();
     return g;

@@ -323,10 +323,10 @@ export class CityRenderer {
     const C = (a: number, b: number, t: number) => new THREE.Color(a).lerp(new THREE.Color(b), t);
     const sunCol = C(0xffeed6, 0xff9a5a, dusk).lerp(new THREE.Color(0x8fa6e8), night);
     this.sun.color.copy(sunCol);
-    this.sun.intensity = 3.2 * day + 0.55 * night;
-    this.hemi.intensity = 0.85 * day + 0.42 * night;
+    this.sun.intensity = 3.0 * day + 0.55 * night;
+    this.hemi.intensity = 1.05 * day + 0.42 * night;
     this.hemi.color.copy(C(0xcfe0f2, 0xf0c0a0, dusk).lerp(new THREE.Color(0x5a6ea8), night));
-    this.hemi.groundColor.copy(C(0x4f4a3e, 0x1a1c28, night));
+    this.hemi.groundColor.copy(C(0x6e675a, 0x1a1c28, night));
     const sky = C(0xa9cbe6, 0xe8a27c, dusk).lerp(new THREE.Color(0x0c1528), night);
     (this.scene.background as THREE.Color).copy(sky);
     this.scene.fog!.color.copy(sky);

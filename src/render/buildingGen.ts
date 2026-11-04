@@ -1,5 +1,6 @@
 // 建物の自動生成（アメリカの都市風）
 import * as THREE from 'three';
+import { MAT } from './textures';
 import { MeshBuilder, PAT } from './builder';
 import { Rng } from '../sim/rng';
 import { CELL } from '../sim/constants';
@@ -73,6 +74,9 @@ const flatRoof = () => curRoof;
 export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, trees: TreeSpot[]) {
   const rng = new Rng(b.seed);
   curRoof = FLAT_ROOFS[b.seed % FLAT_ROOFS.length];
+  mb.flatRoofMat = (b.seed >> 3) % 3 === 0 ? MAT.gravel : MAT.membrane;
+  // 工場・発電所などの斜めの屋根は金属
+  mb.slopeRoofMat = b.civic || b.type === 'ID' || b.type === 'IM' || b.type === 'IH' ? MAT.metal : MAT.shingle;
   mb.abandoned = b.state === BState.Abandoned;
   const tf = (lx: number, lz: number, s = 1, kind = 0) => {
     // ローカル座標から世界座標へ（MeshBuilder と同じ変換）
@@ -273,11 +277,35 @@ function mansion(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
   tf(f.W / 2 - 3, f.D / 2 - 4, 1.2);
 }
 
+// 屋上の設備（空調の室外機、換気口、天窓）
 function roofUnits(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, rng: Rng, n: number) {
+  const unit = C(0xb9bdc2), fan = C(0x3a3d42);
   for (let k = 0; k < n; k++) {
-    const x = x0 + 1 + rng.next() * (x1 - x0 - 3), z = z0 + 1 + rng.next() * (z1 - z0 - 3);
-    mb.box(x, y, z, x + 1.5, y + 1.1, z + 1.2, PALETTE.steel);
+    const x = x0 + 1.2 + rng.next() * Math.max(0.1, x1 - x0 - 4), z = z0 + 1.2 + rng.next() * Math.max(0.1, z1 - z0 - 4);
+    const kind = rng.next();
+    if (kind < 0.5) {
+      // 室外機（ファンつき）
+      mb.box(x, y, z, x + 2.2, y + 1.2, z + 1.4, unit);
+      mb.cylinder(x + 0.65, z + 0.7, y + 1.2, y + 1.25, 0.5, 10, fan, fan);
+      mb.cylinder(x + 1.55, z + 0.7, y + 1.2, y + 1.25, 0.5, 10, fan, fan);
+    } else if (kind < 0.8) {
+      // 換気口
+      mb.box(x, y, z, x + 0.9, y + 0.9, z + 0.9, PALETTE.steel);
+      mb.box(x - 0.15, y + 0.9, z - 0.15, x + 1.05, y + 1.05, z + 1.05, unit);
+    } else {
+      // 天窓
+      mb.box(x, y, z, x + 2.6, y + 0.35, z + 1.8, PALETTE.glass);
+    }
   }
+}
+
+// 屋上のふち（パラペット）。上面は明るい笠木
+function roofRim(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, wall: THREE.Color, h = 0.9) {
+  const t = 0.35, cap = C(0xd6d3cb);
+  mb.box(x0, y, z1 - t, x1, y + h, z1, wall, PAT.none, cap);
+  mb.box(x0, y, z0, x1, y + h, z0 + t, wall, PAT.none, cap);
+  mb.box(x0, y, z0 + t, x0 + t, y + h, z1 - t, wall, PAT.none, cap);
+  mb.box(x1 - t, y, z0 + t, x1, y + h, z1 - t, wall, PAT.none, cap);
 }
 
 function shop(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, tier: number) {
@@ -591,9 +619,8 @@ function apartments(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: numb
   }
   for (const [x0, z0, x1, z1] of blocks) {
     mb.box(x0, 0, z0, x1, h, z1, wall, PAT.apartment, flatRoof());
-    mb.box(x0, h, z0, x1, h + 0.8, z0 + 0.3, wall);
-    mb.box(x0, h, z1 - 0.3, x1, h + 0.8, z1, wall);
-    roofUnits(mb, x0, z0, x1, z1, h, rng, 1 + rng.int(2));
+    roofRim(mb, x0, z0, x1, z1, h, wall);
+    roofUnits(mb, x0, z0, x1, z1, h, rng, 2 + rng.int(3));
   }
   // ベランダ（正面）
   const [bx0, , bx1, bz1] = blocks[0];
@@ -617,14 +644,16 @@ function shopMid(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number,
   const g = 4.4, fh = 3.4;
   const h = g + (floors - 1) * fh;
   mb.box(-W / 2, 0, z0, W / 2, g, z1, wall, PAT.shop, flatRoof());
-  mb.box(-W / 2 + 0.3, g, z0 + 0.3, W / 2 - 0.3, h, z1 - 0.3, wall, upscale ? PAT.office : PAT.apartment, PALETTE.dark);
-  mb.box(-W / 2 + 0.3, h, z1 - 0.6, W / 2 - 0.3, h + 1.0, z1 - 0.3, wall);
+  mb.box(-W / 2 + 0.3, g, z0 + 0.3, W / 2 - 0.3, h, z1 - 0.3, wall, upscale ? PAT.office : PAT.apartment, flatRoof());
+  roofRim(mb, -W / 2 + 0.3, z0 + 0.3, W / 2 - 0.3, z1 - 0.3, h, wall, 1.0);
+  // 階の境目の帯（コーニス）
+  mb.box(-W / 2 + 0.1, g - 0.15, z1 - 0.1, W / 2 - 0.1, g + 0.25, z1 + 0.1, C(0xd6d3cb));
   // 看板の帯と日よけ
   mb.box(-W / 2 + 0.4, g - 1.0, z1, W / 2 - 0.4, g - 0.2, z1 + 0.3, accent);
   mb.quad([-W / 2 + 0.4, 3.0, z1 + 1.6], [W / 2 - 0.4, 3.0, z1 + 1.6], [W / 2 - 0.4, 3.6, z1], [-W / 2 + 0.4, 3.6, z1], accent);
   // 縦の看板（ネオン風）
   if (rng.next() < 0.5 && floors >= 3) mb.box(W / 2 - 2, g, z1, W / 2 - 1.2, Math.min(h, g + 9), z1 + 1.2, rng.pick(PALETTE.accent));
-  roofUnits(mb, -W / 2, z0, W / 2, z1, h, rng, 2 + rng.int(3));
+  roofUnits(mb, -W / 2 + 0.7, z0 + 0.7, W / 2 - 0.7, z1 - 0.7, h, rng, 3 + rng.int(3));
   if (rng.next() < 0.5) tf(-f.W / 2 + 1.2, f.D / 2 - 1.0, 0.7);
 }
 
@@ -643,6 +672,7 @@ function tower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, o
   if (podium) {
     const ph = 4.5 + (podium - 1) * 4;
     mb.box(-PW / 2, 0, pz1 - PD, PW / 2, ph, pz1, frame, PAT.shop, flatRoof());
+    roofRim(mb, -PW / 2, pz1 - PD, PW / 2, pz1, ph, frame, 0.8);
     y = ph;
   }
   // 塔の部分。高いほど段々に細くする
@@ -658,7 +688,11 @@ function tower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, o
     remaining -= fl;
     const h = fl * fh;
     if (round) mb.cylinder(0, cz, y, y + h, Math.min(tw, td) / 2, 16, wall, flatRoof());
-    else mb.box(-tw / 2, y, cz - td / 2, tw / 2, y + h, cz + td / 2, wall, pat, PALETTE.dark);
+    else {
+      mb.box(-tw / 2, y, cz - td / 2, tw / 2, y + h, cz + td / 2, wall, pat, flatRoof());
+      roofRim(mb, -tw / 2, cz - td / 2, tw / 2, cz + td / 2, y + h, office ? frame : wall, 1.1);
+      if (t < tiers - 1) roofUnits(mb, -tw / 2, cz - td / 2, tw / 2, cz + td / 2, y + h, rng, 2);
+    }
     // 階ごとの帯（オフィスは縦の柱）
     if (office && !round) {
       for (let x = -tw / 2; x <= tw / 2 + 0.01; x += tw / Math.max(2, Math.round(tw / 6))) {
@@ -678,7 +712,8 @@ function tower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, o
     mb.hip(-tw / 2, cz - td / 2, tw / 2, cz + td / 2, y, Math.min(tw, td) * 0.9, wall, 0);
     mb.box(-0.3, y, cz - 0.3, 0.3, y + Math.min(tw, td) * 0.9 + 18, cz + 0.3, PALETTE.steel);
   } else {
-    mb.box(-tw / 3, y, cz - td / 3, tw / 3, y + 3.5, cz + td / 3, PALETTE.concrete);
+    mb.box(-tw / 3, y, cz - td / 3, tw / 3, y + 3.5, cz + td / 3, PALETTE.concrete, PAT.industrial, flatRoof());
+    roofUnits(mb, -tw / 2 + 0.5, cz - td / 2 + 0.5, tw / 2 - 0.5, cz + td / 2 - 0.5, y, rng, 3);
     if (floors > 20 && crown < 0.6) mb.box(-0.25, y + 3.5, cz - 0.25, 0.25, y + 16, cz + 0.25, PALETTE.steel);
     if (!office) mb.cylinder(tw / 4, cz, y + 3.5, y + 6, 1.6, 8, PALETTE.wood, PALETTE.dark);
   }
