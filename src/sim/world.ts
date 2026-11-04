@@ -112,6 +112,12 @@ export interface SaveData {
   conn1?: Uint8Array;
   flow1?: Uint8Array;
   upH?: Float32Array;
+  lift?: Float32Array;
+  rail?: Uint8Array;
+  erail?: Uint8Array;
+  mono?: Uint8Array;
+  sub?: Uint8Array;
+  bstop?: Uint8Array;
   ictl?: Uint8Array;
   isplit?: Uint8Array;
   iflags?: Uint8Array;
