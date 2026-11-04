@@ -178,13 +178,14 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
 // 開発用
 (window as unknown as Record<string, unknown>).__pm = { game, renderer, tools, hud };
 
-// BGM：最初に画面をさわったときに始める（iPhone は操作のあとでないと音を出せない）
-const startBgm = () => {
-  bgm.start();
-  window.removeEventListener('pointerdown', startBgm);
+// BGM：タップしたときに始める（iPhone は「指をはなした」ときでないと音を出させてくれない）。
+// 音が鳴る状態になるまで、タップのたびにやり直す
+const unlockAudio = () => {
+  bgm.unlock();
+  if (bgm.running) for (const ev of ['touchend', 'click', 'keydown'] as const) window.removeEventListener(ev, unlockAudio, true);
 };
-window.addEventListener('pointerdown', startBgm);
+for (const ev of ['touchend', 'click', 'keydown'] as const) window.addEventListener(ev, unlockAudio, true);
 bgm.onSong = (name) => (hud.nowPlaying = name);
 setInterval(() => (bgm.night = renderer.nightAmount > 0.6), 2000);
 
-(window as unknown as { __bgm: unknown }).__bgm = { Bgm: (bgm.constructor as unknown), SONGS: 0 };
+(window as unknown as { __bgm: unknown }).__bgm = { Bgm: bgm.constructor as unknown };

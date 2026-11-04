@@ -180,7 +180,39 @@ export class Bgm {
   night = false;
   onSong: ((name: string) => void) | null = null;
 
-  // 最初にタッチされたときに呼ぶ（iPhone は操作のあとでないと音を出せない）
+  get running() {
+    return !!this.ctx && this.ctx.state === 'running';
+  }
+
+  private silent: HTMLAudioElement | null = null;
+  // タップのたびに呼ぶ：音の準備をして、止まっていたら動かす
+  unlock() {
+    // iOS 17 以降：消音スイッチがオンでも音楽として鳴らす
+    try {
+      const nav = navigator as unknown as { audioSession?: { type: string } };
+      if (nav.audioSession) nav.audioSession.type = 'playback';
+    } catch { /* 対応していない */ }
+    // それより前の iOS：無音の音声を流しておくと、Web Audio も消音スイッチの影響を受けなくなる
+    if (!this.silent) {
+      const a = document.createElement('audio');
+      a.src = silentWav();
+      a.loop = true;
+      a.setAttribute('playsinline', '');
+      this.silent = a;
+    }
+    void this.silent.play().catch(() => {});
+    if (!this.ctx) this.start();
+    const c = this.ctx as AudioContext | null;
+    if (c && c.state !== 'running' && bgmSettings.enabled) void c.resume();
+    // iOS の古い版は、ここで短い無音を鳴らすと音が出るようになる
+    if (c) {
+      const b = c.createBuffer(1, 1, 22050), src = c.createBufferSource();
+      src.buffer = b;
+      src.connect(c.destination);
+      src.start(0);
+    }
+  }
+
   start(ctx?: AudioContext) {
     if (this.ctx) return;
     try {
@@ -419,3 +451,17 @@ export class Bgm {
 }
 
 export const bgm = new Bgm();
+
+// 0.5 秒の無音の WAV（data: URL）
+function silentWav() {
+  const rate = 8000, n = 4000;
+  const buf = new DataView(new ArrayBuffer(44 + n));
+  const w = (o: number, t: string) => { for (let k = 0; k < t.length; k++) buf.setUint8(o + k, t.charCodeAt(k)); };
+  w(0, 'RIFF'); buf.setUint32(4, 36 + n, true); w(8, 'WAVE'); w(12, 'fmt '); buf.setUint32(16, 16, true); buf.setUint16(20, 1, true); buf.setUint16(22, 1, true);
+  buf.setUint32(24, rate, true); buf.setUint32(28, rate, true); buf.setUint16(32, 1, true); buf.setUint16(34, 8, true); w(36, 'data'); buf.setUint32(40, n, true);
+  for (let k = 0; k < n; k++) buf.setUint8(44 + k, 128);
+  let bin = '';
+  const u = new Uint8Array(buf.buffer);
+  for (let k = 0; k < u.length; k++) bin += String.fromCharCode(u[k]);
+  return 'data:audio/wav;base64,' + btoa(bin);
+}
