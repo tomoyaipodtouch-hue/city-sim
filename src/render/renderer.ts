@@ -115,9 +115,11 @@ export class CityRenderer {
     this.resize();
   }
 
+  private sizeKey = '';
   resize() {
     const w = this.canvas.clientWidth || window.innerWidth;
     const h = this.canvas.clientHeight || window.innerHeight;
+    this.sizeKey = `${w}x${h}`;
     this.renderer.setSize(w, h, false);
     this.post?.setSize(w, h, this.quality.pixelRatio);
     this.rig.camera.aspect = w / h;
@@ -264,6 +266,9 @@ export class CityRenderer {
 
   private loop = () => {
     requestAnimationFrame(this.loop);
+    // 画面を回したとき、iPhone は大きさが決まる前に resize を送ることがあるので、毎フレーム確かめて直す
+    const cw = this.canvas.clientWidth, chh = this.canvas.clientHeight;
+    if (cw > 0 && chh > 0 && (`${cw}x${chh}` !== this.sizeKey || Math.abs(this.rig.camera.aspect - cw / chh) > 0.01)) this.resize();
     const now = performance.now();
     const dt = Math.min(0.1, (now - this.last) / 1000);
     this.last = now;
