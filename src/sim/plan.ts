@@ -430,6 +430,7 @@ export function applyRoad(g: Grid, plan: RoadPlan) {
     g.conn[b] |= 1 << opp(d);
     g.flow[a] |= 1 << d;
   }
+  if (plan.uturns.length) cleanAvenueUturns(g, plan.lanes.flatMap((l) => [l.cells[0], l.cells[l.cells.length - 1]]));
 }
 
 // ---- ランプ（高速道路の出入口） ----
@@ -1351,5 +1352,101 @@ export function applyTerrain(g: Grid, plan: TerrainPlan) {
       g.zden[i] = 0;
       g.tree[i] = 0;
     }
+  }
+}
+
+// ---------------- 道路の始点・終点の自動補正 ----------------
+// 少しずれた場所をタップしても、近くの道路の端（大通りは正しい車線）につながるように直す
+export function snapRoadEnds(g: Grid, type: RoadType, x0: number, y0: number, x1: number, y1: number): [number, number, number, number] {
+  if (x0 === x1 && y0 === y1) return [x0, y0, x1, y1];
+  const n = g.n;
+  const def = ROADS[type];
+  // ドラッグの向き（8方向）
+  const ang = Math.atan2(y1 - y0, x1 - x0);
+  const dd = ((Math.round(ang / (Math.PI / 4)) % 8) + 8) % 8;
+  const degree = (c: number) => { let k = 0; for (let d = 0; d < 8; d++) if (g.conn[c] & (1 << d)) k++; return k; };
+  const pick = (x: number, y: number, score: (c: number) => number) => {
+    let best = -1, bx = x, by = y;
+    for (let oy = -1; oy <= 1; oy++)
+      for (let ox = -1; ox <= 1; ox++) {
+        const cx = x + ox, cy = y + oy;
+        if (!g.inb(cx, cy)) continue;
+        const c = cy * n + cx;
+        const s = score(c) - (ox || oy ? 0.5 : 0); // 同じくらいなら、タップしたマスを優先
+        if (s > best) { best = s; bx = cx; by = cy; }
+      }
+    return best > 0 ? [bx, by] : [x, y];
+  };
+  const back = (c: number, d: number) => {
+    const x = (c % n) - DX[d], y = ((c / n) | 0) - DY[d];
+    return g.inb(x, y) ? y * n + x : -1;
+  };
+  const ahead = (c: number, d: number) => {
+    const x = (c % n) + DX[d], y = ((c / n) | 0) + DY[d];
+    return g.inb(x, y) ? y * n + x : -1;
+  };
+  if (def.wide) {
+    // 大通り・高速道路：始点は「ドラッグの向きに流れてきて、そこで終わる車線」、
+    // 終点は「ドラッグの向きに流れ出していく車線」に合わせる
+    const s = pick(x0, y0, (c) => {
+      if (g.road[c] !== type) return 0;
+      const b = back(c, dd);
+      const inflow = b >= 0 && g.road[b] === type && (g.flow[b] & (1 << dd)) !== 0;
+      const a = ahead(c, dd);
+      const continues = a >= 0 && g.road[a] === type && (g.flow[c] & (1 << dd)) !== 0;
+      return inflow && !continues ? 3 : inflow ? 1 : 0;
+    });
+    const e = pick(x1, y1, (c) => {
+      if (g.road[c] !== type) return 0;
+      const a = ahead(c, dd);
+      const outflow = a >= 0 && g.road[a] === type && (g.flow[c] & (1 << dd)) !== 0;
+      const b = back(c, dd);
+      const fed = b >= 0 && g.road[b] === type && (g.flow[b] & (1 << dd)) !== 0;
+      return outflow && !fed ? 3 : outflow ? 1 : 0;
+    });
+    return [s[0], s[1], e[0], e[1]];
+  }
+  // ふつうの道路：タップしたマスが道路でなければ、すぐ隣の道路の端（行き止まり）につなぐ
+  const endScore = (c: number) => (g.road[c] && !isHighway(g.road[c]) && g.road[c] !== RoadType.Ramp && degree(c) <= 1 ? 2 : 0);
+  const s = g.road[y0 * n + x0] ? [x0, y0] : pick(x0, y0, endScore);
+  const e = g.road[y1 * n + x1] ? [x1, y1] : pick(x1, y1, endScore);
+  return [s[0], s[1], e[0], e[1]];
+}
+
+// 大通りの端の折り返し（Uターン）は、その先に大通りが続いたら取り除く（交差点のようにならないように）
+export function cleanAvenueUturns(g: Grid, cells: Iterable<number>) {
+  const n = g.n;
+  const seen = new Set<number>();
+  for (const c0 of cells) {
+    const x0 = c0 % n, y0 = (c0 / n) | 0;
+    for (let oy = -1; oy <= 1; oy++)
+      for (let ox = -1; ox <= 1; ox++) {
+        const x = x0 + ox, y = y0 + oy;
+        if (!g.inb(x, y)) continue;
+        const c = y * n + x;
+        if (seen.has(c)) continue;
+        seen.add(c);
+        const t = g.road[c];
+        if (!t || !ROADS[t].wide || isHighway(t)) continue;
+        for (let d = 0; d < 8; d++) {
+          if (!(g.flow[c] & (1 << d))) continue;
+          const j = (() => { const jx = x + DX[d], jy = y + DY[d]; return g.inb(jx, jy) ? jy * n + jx : -1; })();
+          if (j < 0 || g.road[j] !== t) continue;
+          // c からほかの向きへも同じ大通りが続き、j がその逆向きに流れる車線なら、c → j は折り返し
+          let other = -1;
+          for (let d2 = 0; d2 < 8; d2++) {
+            if (d2 === d || !(g.flow[c] & (1 << d2))) continue;
+            const kx = x + DX[d2], ky = y + DY[d2];
+            if (g.inb(kx, ky) && g.road[ky * n + kx] === t) other = d2;
+          }
+          if (other < 0) continue;
+          if (!(g.flow[j] & (1 << opp(other)))) continue;
+          g.flow[c] &= ~(1 << d);
+          if (!(g.flow[j] & (1 << opp(d)))) {
+            g.conn[c] &= ~(1 << d);
+            g.conn[j] &= ~(1 << opp(d));
+          }
+        }
+      }
   }
 }

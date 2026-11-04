@@ -8,7 +8,7 @@ import {
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
 import {
-  applyCloverleaf, applyDiamond, applyTerrain, planTerrain, TerrainOp, applyRamp, applyTransitLine, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
+  applyCloverleaf, applyDiamond, applyTerrain, snapRoadEnds, planTerrain, TerrainOp, applyRamp, applyTransitLine, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
 } from './plan';
 import { CELL } from './constants';
 import { ADVISORS, Advice, computeRating, Loan, LOAN_AMOUNTS, loanRate, makeAdvice, MAX_LOANS, newLoan, ordinanceCost, ordinanceEffects, OrdinanceEffects, OrdinanceId, ORDINANCES, payLoan, rewardUnlocked, REWARD_REQ } from './governance';
@@ -339,7 +339,8 @@ export class World {
     const g = this.g;
     switch (c.t) {
       case 'road': {
-        const path = planLine(g, c.x0, c.y0, c.x1, c.y1);
+        const [sx0, sy0, sx1, sy1] = snapRoadEnds(g, c.road, c.x0, c.y0, c.x1, c.y1);
+        const path = planLine(g, sx0, sy0, sx1, sy1);
         const plan = planRoad(g, path, c.road);
         if (!plan.ok) return { ok: false, msg: plan.reason || '道路を引けません' };
         if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };

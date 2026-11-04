@@ -1,6 +1,6 @@
 // ツールの定義と、ドラッグ中のプレビュー・確定
 import { BUS_STOP_COST, CIVIC, CivicId, DENSITY_NAMES, LINES, LineKind, ROADS, RoadType, ZoneType, ZONE_COST, ZONE_NAMES, POWER_LINE_COST, RAMP_COST } from '../sim/defs';
-import { normRect, planBulldoze, planBusStop, planCloverleaf, planTransitLine, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone, planTerrain, TERRAIN_STEP, TerrainOp } from '../sim/plan';
+import { normRect, planBulldoze, planBusStop, planCloverleaf, planTransitLine, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone, planTerrain, TERRAIN_STEP, TerrainOp, snapRoadEnds } from '../sim/plan';
 import type { Command } from '../sim/world';
 import type { GameClient } from '../game';
 import type { CityRenderer } from '../render/renderer';
@@ -177,7 +177,8 @@ export class ToolController {
     this.r.kick();
     if (t.startsWith('road:')) {
       const type = Number(t.split(':')[1]) as RoadType;
-      const path = planLine(g, d.x0, d.y0, x, y);
+      const [sx0, sy0, sx1, sy1] = snapRoadEnds(g, type, d.x0, d.y0, x, y);
+      const path = planLine(g, sx0, sy0, sx1, sy1);
       const plan = planRoad(g, path, type);
       const cells = plan.lanes.flatMap((l) => l.cells);
       const conv = new Set(plan.converts);

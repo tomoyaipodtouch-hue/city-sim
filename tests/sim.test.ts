@@ -126,6 +126,36 @@ describe('stage 2a roads', () => {
     expect([s2.w, s2.h]).toEqual([3, 2]);
   });
 
+  it('continuing an avenue does not leave a junction, even if the tap is on the other lane', () => {
+    for (const startY of [10, 9]) {
+      const w = new World(32);
+      w.g.heights.fill(6);
+      w.funds = 1e6;
+      expect(w.exec({ t: 'road', x0: 2, y0: 10, x1: 10, y1: 10, road: RoadType.Avenue }).ok).toBe(true);
+      // 続きを引く（2回目は、わざと反対車線のマスから始める）
+      expect(w.exec({ t: 'road', x0: 10, y0: startY, x1: 18, y1: 10, road: RoadType.Avenue }).ok).toBe(true);
+      const g = w.g, idx = (x: number, y: number) => g.idx(x, y);
+      // つなぎ目に、車線どうしの折り返しが残っていない
+      expect(g.conn[idx(10, 10)] & (1 << 6)).toBe(0);
+      expect(g.conn[idx(10, 9)] & (1 << 2)).toBe(0);
+      // 車線は2本だけ（3本目ができていない）
+      expect(g.road[idx(14, 8)]).toBe(0);
+      expect(g.road[idx(14, 11)]).toBe(0);
+      // 向こうの端には折り返しがある
+      expect(g.conn[idx(18, 10)] & (1 << 6)).not.toBe(0);
+    }
+  });
+
+  it('a road drawn from next to a dead end connects to it', () => {
+    const w = new World(32);
+    w.g.heights.fill(6);
+    w.funds = 1e6;
+    w.exec({ t: 'road', x0: 2, y0: 10, x1: 10, y1: 10, road: RoadType.Road });
+    // 行き止まりの斜め隣から引き始める
+    expect(w.exec({ t: 'road', x0: 11, y0: 11, x1: 18, y1: 11, road: RoadType.Road }).ok).toBe(true);
+    expect(w.g.conn[w.g.idx(10, 10)]).not.toBe(1 << 4);
+  });
+
   it('builds a bridge across water', () => {
     const w = new World(32);
     const V = 33;
