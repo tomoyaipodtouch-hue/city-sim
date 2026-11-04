@@ -1,5 +1,5 @@
 // オフライン用のキャッシュ（ページはネットワーク優先、それ以外はキャッシュ優先）
-const CACHE = 'pocket-metro-v1';
+const CACHE = 'pocket-metro-v2';
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['./', './index.html', './manifest.webmanifest'])));
