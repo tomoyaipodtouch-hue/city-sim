@@ -8,7 +8,7 @@ import {
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
 import {
-  applyCloverleaf, applyDiamond, applyTerrain, applyURamp, linkURampMiddles, planURamp, snapRoadEnds, planTerrain, TerrainOp, applyRamp, applyTransitLine, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
+  applyCloverleaf, applyDiamond, applyTerrain, applyURamp, linkURampMiddles, linkUrbanEnds, planURamp, snapRoadEnds, planTerrain, TerrainOp, applyRamp, applyTransitLine, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
 } from './plan';
 import { CELL } from './constants';
 import { ADVISORS, Advice, computeRating, Loan, LOAN_AMOUNTS, loanRate, makeAdvice, MAX_LOANS, newLoan, ordinanceCost, ordinanceEffects, OrdinanceEffects, OrdinanceId, ORDINANCES, payLoan, rewardUnlocked, REWARD_REQ } from './governance';
@@ -326,6 +326,7 @@ export class World {
     w.loans = (d.loans ?? []).map((l) => ({ ...l }));
     w.nextLoanId = Math.max(1, ...w.loans.map((l) => l.id + 1));
     w.rating = d.rating ?? 55;
+    linkUrbanEnds(g);
     linkURampMiddles(g); // 以前の版で、ランプの横に後から引いた一般道がつながっていなかった
     w.recomputeAll();
     return w;
@@ -355,6 +356,7 @@ export class World {
         if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
         applyRoad(g, plan);
         linkURampMiddles(g);
+        linkUrbanEnds(g);
         if (plan.vertexH.size) this.heightVersion++;
         this.afterGridChange();
         return { ok: true, cost: plan.cost };

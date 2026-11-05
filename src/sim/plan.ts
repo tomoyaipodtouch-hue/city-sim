@@ -1619,6 +1619,45 @@ export function planURamp(g: Grid, x: number, y: number): URampPlan {
   return fail('都市高速（片側1車線）の横に置いてください', lastCells.length ? lastCells : [g.idx(x, y)]);
 }
 
+// 高架の都市高速の行き止まりの端の下に、後から一般道を引いたとき：端のマスを地上の一般道にして、高架から降りてつながるようにする
+export function linkUrbanEnds(g: Grid) {
+  const n = g.n;
+  for (let c = 0; c < n * n; c++) {
+    if (g.up[c] !== RoadType.UrbanHighway) continue;
+    const t = g.road[c];
+    if (!t || isHighway(t) || t === RoadType.Ramp) continue;
+    const m = g.conn1[c];
+    if (!m || m & (m - 1)) continue; // つながりが1つだけ（行き止まり）
+    const b = 31 - Math.clz32(m);
+    const px = (c % n) + DX[b], py = ((c / n) | 0) + DY[b];
+    if (!g.inb(px, py)) continue;
+    const p = g.idx(px, py);
+    if (g.up[p] !== RoadType.UrbanHighway) continue;
+    g.up[c] = 0;
+    g.conn1[c] = 0;
+    g.flow1[c] = 0;
+    g.upH[c] = 0;
+    link(g, p, 1, c, 0, opp(b), false);
+    // 端に向かって、高架をなめらかに下げる（引いたときの始まり側と同じ勾配）
+    let cur = p, from = c;
+    for (let k = 0; k < 40; k++) {
+      const x = cur % n, y = (cur / n) | 0;
+      const h = g.cellH(x, y) + 1.8 + 1.5 * k;
+      if (g.upH[cur] <= h) break;
+      g.upH[cur] = h;
+      let next = -1;
+      for (let d = 0; d < 8; d++) {
+        if (!(g.conn1[cur] & (1 << d)) || !g.inb(x + DX[d], y + DY[d])) continue;
+        const j = g.idx(x + DX[d], y + DY[d]);
+        if (j !== from && g.up[j] === RoadType.UrbanHighway) { next = j; break; }
+      }
+      if (next < 0) break;
+      from = cur;
+      cur = next;
+    }
+  }
+}
+
 // 都市高速のランプの真ん中のマスを、外側に後から引いた一般道（横切る道でも、平行な道でも）とつなぐ
 export function linkURampMiddles(g: Grid) {
   const n = g.n;

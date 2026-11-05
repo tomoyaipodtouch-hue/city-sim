@@ -3,7 +3,7 @@ import { World } from '../src/sim/world';
 import { plantPower, RoadType, ZoneType } from '../src/sim/defs';
 import { planLine } from '../src/sim/plan';
 import { buildTestCity } from './helpers';
-import { urbanTurnOk } from '../src/sim/traffic';
+import { assignTrips, buildJunctions, urbanTurnOk } from '../src/sim/traffic';
 
 describe('simulation', () => {
   it('plans 8-direction lines', () => {
@@ -269,6 +269,26 @@ describe('stage 2a roads', () => {
       expect(g.flow[g.idx(20, 22)] & (1 << 6)).not.toBe(0);
       // ランプの端のマスは一般道とつながらない
       expect(g.conn[g.idx(18, 21)] & (1 << 2)).toBe(0);
+    }
+  });
+
+  it('cars drive through diagonal sections and bends of an urban highway', () => {
+    for (const type of [RoadType.UrbanGroundHighway, RoadType.UrbanHighway]) {
+      for (const [bx, by] of [[30, 6], [30, 34]]) {
+        const w = new World(48);
+        w.g.heights.fill(6);
+        w.funds = 1e6;
+        const g = w.g;
+        expect(w.exec({ t: 'road', x0: 3, y0: 14, x1: 3, y1: 26, road: RoadType.Road }).ok).toBe(true);
+        expect(w.exec({ t: 'road', x0: 3, y0: 20, x1: 16, y1: 20, road: type }).ok).toBe(true);
+        expect(w.exec({ t: 'road', x0: 16, y0: 20, x1: bx, y1: by, road: type }).ok).toBe(true);
+        expect(w.exec({ t: 'road', x0: bx, y0: by, x1: 44, y1: by, road: RoadType.Road }).ok).toBe(true);
+        const N = g.n * g.n;
+        const J = buildJunctions(g, new Float32Array(2 * N));
+        const dest = new Map([[g.idx(44, by), [{ id: 1, free: 10 }]]]);
+        const r = assignTrips(g, [{ cell: g.idx(3, 15), trips: 10, buildings: [{ id: 9, trips: 10 }] }], dest, new Float32Array(2 * N).fill(1), J, () => 0.5, { externalCap: 0, maxMinutes: 120, weight: 1 });
+        expect(r.filled.get(1)).toBe(10);
+      }
     }
   });
 

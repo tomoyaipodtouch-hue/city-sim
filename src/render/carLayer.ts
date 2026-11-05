@@ -309,7 +309,12 @@ export class CarLayer {
     let total = 0;
     const add = (v: number, d: number) => {
       if (din >= 0 && d === opp(din)) return;
-      if (f.track === 'road' && isUrbanHighway(g.nodeType(node)) && !urbanTurnOk(din, d)) return;
+      if ((f.track === 'road' || f.track === 'bus') && din >= 0 && isUrbanHighway(g.nodeType(node)) && !urbanTurnOk(din, d)) {
+        // ランプへの出入りのときだけ（本線の斜めの区間・曲がり角は通れる）
+        const n = g.n, c = node % (n * n), px = (c % n) - DX[din], py = ((c / n) | 0) - DY[din];
+        const fromRamp = g.inb(px, py) && (g.road[g.idx(px, py)] === RoadType.Ramp || g.up[g.idx(px, py)] === RoadType.Ramp);
+        if (fromRamp || g.nodeType(v) === RoadType.Ramp) return;
+      }
       const w = (tr[v] || 0) + 2;
       opts.push([v, d]);
       ws.push(w);
