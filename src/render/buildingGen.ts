@@ -161,7 +161,10 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     case 'college': college(mb, f, rng, tf); break;
     case 'library': library(mb, f, tf); break;
     case 'landfill': landfill(mb, f, rng); break;
-    case 'incinerator': incinerator(mb, f); break;
+    case 'incinerator': incinerator(mb, f, tf, false); break;
+    case 'incinerator_l': incinerator(mb, f, tf, true); break;
+    case 'water_plant': waterPlant(mb, f, tf); break;
+    case 'desal': desalPlant(mb, f, tf); break;
     case 'recycling': recycling(mb, f, rng); break;
     case 'mayor_house': mansion(mb, f, rng, tf); break;
     case 'city_hall': cityHall(mb, f, tf); break;
@@ -2091,11 +2094,126 @@ function landfill(mb: MeshBuilder, f: LotFrame, rng: Rng) {
   mb.box(-f.W / 2 + 0.5, 0, f.D / 2 - 1, f.W / 2 - 0.5, 2, f.D / 2 - 0.8, PALETTE.steel);
 }
 
-function incinerator(mb: MeshBuilder, f: LotFrame) {
-  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.concrete);
-  mb.box(-18, 0, -10, 12, 16, 14, PALETTE.indWall[1], PAT.industrial, PALETTE.steel);
-  mb.cylinder(16, -12, 0, 45, 2.6, 12, PALETTE.white, PALETTE.dark, 2);
-  mb.cylinder(16, -12, 38, 42, 2.25, 12, RED, undefined, 2.15);
+// 弓なりの屋根（x0..x1 の方向に弧を描く。幅を細かく切った箱を並べる）
+function archRoof(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, rise: number, c: THREE.Color, alongX = true) {
+  const N = 12;
+  for (let k = 0; k < N; k++) {
+    const u0 = k / N, u1 = (k + 1) / N, h = rise * Math.sin(Math.PI * (u0 + u1) / 2);
+    if (alongX) mb.box(x0 + (x1 - x0) * u0, y, z0, x0 + (x1 - x0) * u1, y + h, z1, c);
+    else mb.box(x0, y, z0 + (z1 - z0) * u0, x1, y + h, z0 + (z1 - z0) * u1, c);
+  }
+}
+
+// ごみ焼却場（クリーンセンター）。big = 大型（4×6）。白と銀の建屋、ガラスの正面、弓なりの屋根、
+// 細い煙突（大型は展望室のリングつき）、収集車が上がるスロープ。スロープの位置は propsLayer の INCIN_RAMP と合わせる
+export const INCIN_RAMP = { x: 0.36, z0: 0.5, z1: -0.02, h: 9 }; // 敷地の幅・奥行きに対する割合。h はプラットホームの高さ（m）
+function incinerator(mb: MeshBuilder, f: LotFrame, tf: TF, big: boolean) {
+  const W = f.W, D = f.D, hw = W / 2, hd = D / 2;
+  const white = C(0xf1f1ee), silver = C(0xc4cad0), dark = C(0x4a5058), glass = C(0x4f7fae);
+  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.08, PALETTE.concrete);
+  mb.ground(-hw + 1, hd - 9, hw - 1, hd - 1, 0.1, PALETTE.lawn2);
+  // 本館（ごみピットと炉）：横長の白い箱と、弓なりの銀色の屋根
+  const bx0 = -hw + 3, bx1 = hw * (big ? 0.18 : 0.3), bz0 = -hd + 4, bz1 = hd * (big ? 0.0 : 0.15);
+  const H = big ? 30 : 20;
+  mb.box(bx0, 0, bz0, bx1, H, bz1, white, PAT.ribbon, silver);
+  archRoof(mb, bx0, bz0, bx1, bz1, H, big ? 9 : 6, silver, false);
+  // 正面のガラスの見学ロビー（2層吹き抜け）
+  mb.box(bx0 + 2, 0, bz1, bx1 - 2, big ? 12 : 8, bz1 + (big ? 10 : 6), glass, PAT.fullglass, white);
+  mb.box(bx0 + 1, big ? 12 : 8, bz1 - 0.5, bx1 - 1, (big ? 12 : 8) + 0.6, bz1 + (big ? 12 : 7), white);
+  // 横の排ガス処理棟と、発電棟（大型）
+  mb.box(bx1, 0, bz0 + 4, bx1 + (big ? 14 : 8), H * 0.7, bz0 + (big ? 30 : 18), silver, PAT.industrial, dark);
+  if (big) {
+    mb.box(bx1 + 16, 0, bz0 + 2, hw - 3, 16, bz0 + 22, white, PAT.ribbon, silver);
+    // 屋上の空冷の復水器（ファンの列）
+    for (let x = bx1 + 18; x < hw - 6; x += 6) for (const z of [bz0 + 7, bz0 + 15]) {
+      mb.box(x, 16, z - 2.5, x + 5, 18, z + 2.5, C(0x9aa1a7));
+      mb.cylinder(x + 2.5, z, 18, 18.1, 2, 12, dark, dark);
+    }
+  }
+  // 煙突：細くて高い銀色の筒。大型は展望室のリング
+  const cx = bx1 + (big ? 7 : 4), cz = bz0 + (big ? 17 : 11), ch = big ? 100 : 60;
+  mb.cylinder(cx, cz, 0, ch, big ? 3.4 : 2.4, 20, silver, dark, big ? 2.8 : 2.0);
+  mb.cylinder(cx, cz, ch - 6, ch - 4.5, big ? 2.95 : 2.15, 20, C(0x2f86d0));
+  if (big) {
+    mb.cylinder(cx, cz, 72, 79, 7.5, 24, glass, white, 7.5);
+    mb.cylinder(cx, cz, 79, 80, 8, 24, white, white, 8);
+    mb.cylinder(cx, cz, 71, 72, 8, 24, white, white, 8);
+  }
+  // 収集車のスロープ（道路からプラットホームへ）と入口
+  const rx = INCIN_RAMP.x * W, rz0 = INCIN_RAMP.z0 * D - 1, rz1 = INCIN_RAMP.z1 * D, rh = big ? INCIN_RAMP.h : 6;
+  const rw = 3.5;
+  mb.quad([rx - rw, 0.15, rz0], [rx + rw, 0.15, rz0], [rx + rw, rh, rz1], [rx - rw, rh, rz1], PALETTE.asphalt);
+  for (const sx of [-1, 1]) {
+    mb.quad([rx + sx * rw, 0, rz0], [rx + sx * rw, 0.9, rz0], [rx + sx * rw, rh + 0.9, rz1], [rx + sx * rw, rh, rz1], silver);
+    mb.box(rx + sx * rw - 0.3, 0, rz1 - 0.3, rx + sx * rw + 0.3, rh, rz1 + 0.3, C(0xb5b1a8));
+  }
+  mb.box(rx - rw - 1, rh, rz1 - 8, rx + rw + 1, rh + 0.4, rz1, PALETTE.asphalt);
+  mb.box(rx - rw - 1, 0, rz1 - 8, rx + rw + 1, rh, rz1 - 7.6, C(0xb5b1a8));
+  mb.box(Math.min(rx - rw - 2, bx1), rh, rz1 - 9, rx + rw + 2, rh + 7, rz1 - 8, dark); // プラットホームの入口
+  // 植え込み
+  for (let x = -hw + 4; x < hw - 4; x += 8) tf(x, hd - 4, 0.8 + ((x * 7) % 3) * 0.1);
+}
+
+// 浄水場（4×6、奥（-z）が水辺）：川の中の取水塔、青緑の沈殿池・ろ過池の列、ふた付きの浄水池、ポンプ棟、管理棟
+function waterPlant(mb: MeshBuilder, f: LotFrame, tf: TF) {
+  const W = f.W, D = f.D, hw = W / 2, hd = D / 2;
+  const rim = C(0xc9c5bc), basinA = C(0x6f9a8a), basinB = C(0x4f9fa8), white = C(0xf1f0ea);
+  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.08, PALETTE.lawn2);
+  mb.ground(-3, -hd + 1, 3, hd - 1, 0.1, PALETTE.asphalt);
+  // 取水塔（水の中）と、岸への連絡橋
+  mb.cylinder(0, -hd - 16, -4, 12, 4.2, 16, white, C(0x5c636a));
+  mb.box(-1.2, 9, -hd - 12, 1.2, 10, -hd + 2, C(0x9da3a8));
+  // 池：中央の道の左右に、沈殿池（くすんだ緑）とろ過池（青）を並べる
+  const z0 = -hd + 6, z1 = hd * 0.35;
+  const rows = Math.max(2, Math.floor((z1 - z0) / 15));
+  const rh = (z1 - z0) / rows;
+  for (const side of [-1, 1]) {
+    const x0 = side < 0 ? -hw + 3 : 5, x1 = side < 0 ? -5 : hw - 3;
+    for (let r = 0; r < rows; r++) {
+      const a = z0 + r * rh + 1, b = z0 + (r + 1) * rh - 1;
+      mb.box(x0, 0, a, x1, 1.4, b, rim, PAT.none, rim);
+      mb.ground(x0 + 0.8, a + 0.8, x1 - 0.8, b - 0.8, 1.45, r % 2 ? basinB : basinA);
+      // 池をまたぐ通路
+      mb.box(x0, 1.4, (a + b) / 2 - 0.5, x1, 1.7, (a + b) / 2 + 0.5, C(0x9da3a8));
+    }
+  }
+  // ふた付きの浄水池（芝生の屋上）と、ポンプ棟・管理棟
+  mb.box(-hw + 3, 0, z1 + 2, -5, 4, hd - 14, rim, PAT.none, PALETTE.lawn);
+  mb.box(5, 0, z1 + 2, hw - 3, 10, hd - 16, white, PAT.dock, C(0x6d7781));
+  mb.box(5, 0, hd - 14, hw - 3, 9, hd - 4, white, PAT.office, PALETTE.roof[3]);
+  // 薬品のタンク
+  for (const x of [-hw + 6, -hw + 11]) mb.cylinder(x, hd - 9, 0, 7, 2.2, 12, white, white);
+  tf(-hw + 3, hd - 3, 0.9);
+  tf(-8, hd - 3, 0.9);
+}
+
+// 海水淡水化プラント（4×6、奥（-z）が海）：取水管と放水管、前処理の池、膜処理の長い建屋、青いタンクの列、白い水タンク
+function desalPlant(mb: MeshBuilder, f: LotFrame, tf: TF) {
+  const W = f.W, D = f.D, hw = W / 2, hd = D / 2;
+  const white = C(0xf2f2ee), silver = C(0xc4cad0), blue = C(0x2e6da4), dark = C(0x4a5058);
+  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.08, PALETTE.concrete);
+  // 取水管と放水管（海へのびる）
+  for (const x of [-hw * 0.5, hw * 0.5]) {
+    mb.box(x - 1.2, -1, -hd - 26, x + 1.2, 1.4, -hd + 6, C(0x8f969c));
+    mb.cylinder(x, -hd - 26, -3, 2.5, 3, 12, white, dark);
+  }
+  // 前処理の池（海側）
+  mb.box(-hw + 3, 0, -hd + 4, hw - 3, 1.4, -hd + 18, C(0xc9c5bc), PAT.none, C(0xc9c5bc));
+  mb.ground(-hw + 4, -hd + 5, hw - 4, -hd + 17, 1.45, C(0x3f8fa0));
+  // 膜処理の建屋：銀色の長い建屋と、弓なりの屋根。正面はガラス
+  const z0 = -hd + 22, z1 = hd * 0.3;
+  mb.box(-hw + 3, 0, z0, hw - 3, 14, z1, silver, PAT.ribbon, silver);
+  archRoof(mb, -hw + 3, z0, hw - 3, z1, 14, 5, white, true);
+  mb.box(-hw + 6, 0, z1, hw - 6, 9, z1 + 3, C(0x4f7fae), PAT.fullglass, white);
+  // 青いタンクの列（高圧ポンプと膜の容器）と、白い水タンク
+  for (let x = -hw + 6; x < hw - 4; x += 6) mb.cylinder(x, z1 + 8, 0, 6, 2.2, 12, blue, blue);
+  for (const x of [-hw * 0.45, hw * 0.45]) {
+    mb.cylinder(x, hd - 12, 0, 12, 7, 20, white, C(0xdcdcd6));
+    mb.cylinder(x, hd - 12, 3, 3.6, 7.05, 20, blue);
+  }
+  mb.box(-5, 0, hd - 9, 5, 7, hd - 3, white, PAT.office, PALETTE.roof[3]);
+  tf(-hw + 3, hd - 2, 0.8);
+  tf(hw - 3, hd - 2, 0.8);
 }
 
 function recycling(mb: MeshBuilder, f: LotFrame, rng: Rng) {

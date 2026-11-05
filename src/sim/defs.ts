@@ -190,7 +190,7 @@ export const SERVICE_DEPT: Record<ServiceKind, Dept> = {
 export const GARBAGE_PER_RES = 0.9;
 export const GARBAGE_PER_JOB = 0.6;
 
-export type CivicId = 'coal' | 'gas' | 'oil' | 'nuclear' | 'nuclear_in' | 'nuclear_sea' | 'wind' | 'solar' | 'pump' | 'tower' | 'park_s' | 'park_l' | 'plaza' | 'playground' | 'greenway' | 'sports' | 'garden' | 'cpark_a' | 'cpark_b' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station'
+export type CivicId = 'coal' | 'gas' | 'oil' | 'nuclear' | 'nuclear_in' | 'nuclear_sea' | 'wind' | 'solar' | 'pump' | 'tower' | 'water_plant' | 'desal' | 'incinerator_l' | 'park_s' | 'park_l' | 'plaza' | 'playground' | 'greenway' | 'sports' | 'garden' | 'cpark_a' | 'cpark_b' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station'
   | 'ferry_p' | 'ferry_c' | 'seaport' | 'airport_s' | 'airport_l' | 'freight_st'
   | 'police_s' | 'police_l' | 'fire_s' | 'fire_l' | 'clinic' | 'hospital' | 'school_e' | 'school_h' | 'college' | 'library'
   | 'landfill' | 'incinerator' | 'recycling'
@@ -233,6 +233,8 @@ export const CIVIC: Record<CivicId, CivicDef> = {
   wind: { id: 'wind', name: '風力発電機', w: 1, h: 1, cost: 1500, upkeep: 20, power: 40, pollution: 0, desc: '小さくて汚染がない。高い場所ほど発電量が多い（最大 64 MW）' },
   solar: { id: 'solar', name: '太陽光発電所', w: 3, h: 3, cost: 20000, upkeep: 110, power: 300, pollution: 0, desc: '汚染がないが、広さの割に発電量が少ない' },
   pump: { id: 'pump', name: '揚水ポンプ', w: 2, h: 2, cost: 2500, upkeep: 80, water: 1200, needsPower: true, desc: '周りの道路に沿って水を送る。電力が必要' },
+  water_plant: { id: 'water_plant', name: '浄水場', w: 4, h: 6, cost: 30000, upkeep: 520, water: 6000, needsPower: true, waterfront: true, desc: '川や海から水を取り、きれいにして送る。水辺に置く。電力が必要' },
+  desal: { id: 'desal', name: '海水淡水化プラント', w: 4, h: 6, cost: 38000, upkeep: 650, water: 6000, needsPower: true, waterfront: true, desc: '海水から真水を作って送る。水辺に置く。電力が必要' },
   tower: { id: 'tower', name: '給水塔', w: 1, h: 1, cost: 600, upkeep: 25, water: 350, needsPower: true, desc: '小さな給水施設。電力が必要' },
   park_s: { id: 'park_s', name: '小さな公園', w: 1, h: 1, cost: 150, upkeep: 6, park: 0.12, desc: '周りの地価が少し上がる' },
   park_l: { id: 'park_l', name: '大きな公園', w: 3, h: 3, cost: 1200, upkeep: 30, park: 0.3, desc: '周りの地価が上がる' },
@@ -264,6 +266,7 @@ export const CIVIC: Record<CivicId, CivicDef> = {
   college: { id: 'college', name: '大学', w: 4, h: 4, cost: 30000, upkeep: 900, service: 'college', capacity: 5000, desc: '大人の教育水準を上げる。街全体に効く' },
   library: { id: 'library', name: '図書館', w: 2, h: 2, cost: 2500, upkeep: 100, service: 'library', radius: 16, desc: '周りの住人の教育水準を少し上げる' },
   landfill: { id: 'landfill', name: '埋立地', w: 4, h: 4, cost: 2000, upkeep: 80, service: 'landfill', capacity: 6000, pollution: 4, desc: '月 6,000 のゴミを処理する。周りの地価が下がる' },
+  incinerator_l: { id: 'incinerator_l', name: '大型焼却場（クリーンセンター）', w: 4, h: 6, rotate: true, cost: 42000, upkeep: 720, service: 'incinerator', capacity: 22000, pollution: 8, power: 600, desc: '月 22,000 のゴミを処理し、ごみ発電で電気も少し作る。排ガス処理で汚染は少なめ' },
   incinerator: { id: 'incinerator', name: '焼却場', w: 3, h: 3, cost: 9000, upkeep: 260, service: 'incinerator', capacity: 9000, pollution: 14, desc: '月 9,000 のゴミを処理する。大気汚染がある' },
   mayor_house: { id: 'mayor_house', name: '市長公邸', w: 2, h: 2, cost: 1000, upkeep: 20, park: 0.15, reward: true, desc: '記念施設。周りの地価が上がり、市長評価が上がる' },
   city_hall: { id: 'city_hall', name: '市役所', w: 4, h: 3, cost: 12000, upkeep: 120, park: 0.2, reward: true, desc: '記念施設。周りの地価が上がり、市長評価が上がる' },

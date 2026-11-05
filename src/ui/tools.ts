@@ -74,6 +74,8 @@ export const TOOL_GROUPS: ToolGroup[] = [
     id: 'water', name: '水道', icon: 'water', items: [
       { tool: 'plop:pump', name: CIVIC.pump.name, note: yen(CIVIC.pump.cost) },
       { tool: 'plop:tower', name: CIVIC.tower.name, note: yen(CIVIC.tower.cost) },
+      { tool: 'plop:water_plant', name: `${CIVIC.water_plant.name}（4×6・水辺）`, note: yen(CIVIC.water_plant.cost) },
+      { tool: 'plop:desal', name: `${CIVIC.desal.name}（4×6・水辺）`, note: yen(CIVIC.desal.cost) },
     ],
   },
   {
@@ -99,6 +101,7 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { tool: 'plop:library', name: CIVIC.library.name, note: yen(CIVIC.library.cost) },
       { tool: 'plop:landfill', name: CIVIC.landfill.name, note: yen(CIVIC.landfill.cost) },
       { tool: 'plop:incinerator', name: CIVIC.incinerator.name, note: yen(CIVIC.incinerator.cost) },
+      { tool: 'plop:incinerator_l', name: `${CIVIC.incinerator_l.name}（4×6）`, note: yen(CIVIC.incinerator_l.cost) },
       { tool: 'plop:recycling', name: CIVIC.recycling.name, note: yen(CIVIC.recycling.cost) },
       { tool: 'plop:mayor_house', name: `記念：${CIVIC.mayor_house.name}`, note: '人口2千・評価55' },
       { tool: 'plop:statue', name: `記念：${CIVIC.statue.name}`, note: '人口5千・評価70' },

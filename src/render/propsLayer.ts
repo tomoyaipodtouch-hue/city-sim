@@ -6,7 +6,8 @@ import { CIVIC, CivicId } from '../sim/defs';
 import type { Building } from '../sim/world';
 import { labelWater } from '../sim/plan';
 import { MeshBuilder } from './builder';
-import { airportLayout, bigNuclearScale, boat, containerShip, COOLING_TOWERS, plane } from './buildingGen';
+import { airportLayout, bigNuclearScale, boat, containerShip, COOLING_TOWERS, INCIN_RAMP, plane } from './buildingGen';
+import { garbageTruck } from './vehicles';
 
 interface Route {
   ax: number;
@@ -67,6 +68,9 @@ export class PropsLayer {
   private steam: THREE.InstancedMesh;
   private towers: { x: number; y: number; z: number; k: number }[] = [];
   private steamT = 0;
+  // 大型焼却場のスロープを上り下りする収集車
+  private ramps: { ax: number; az: number; ay: number; bx: number; bz: number; by: number; t: number }[] = [];
+  private rampTrucks: THREE.InstancedMesh;
   private runways: Runway[] = [];
   private mtx = new THREE.Matrix4();
   private q = new THREE.Quaternion();
@@ -81,6 +85,12 @@ export class PropsLayer {
     this.planes = new THREE.InstancedMesh(geo((mb) => plane(mb, 0, 0, 1)), mat, 20);
     this.shipMesh = new THREE.InstancedMesh(geo((mb) => containerShip(mb, SHIP_LEN, 7)), mat, 40);
     this.steam = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshLambertMaterial({ color: 0xf4f4f2, transparent: true, opacity: 0.55, depthWrite: false }), 240);
+    this.rampTrucks = new THREE.InstancedMesh(garbageTruck(), new THREE.MeshLambertMaterial({ vertexColors: true }), 40);
+    this.rampTrucks.count = 0;
+    this.rampTrucks.castShadow = true;
+    this.rampTrucks.frustumCulled = false;
+    this.rampTrucks.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.group.add(this.rampTrucks);
     this.steam.count = 0;
     this.steam.frustumCulled = false;
     this.steam.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -97,6 +107,18 @@ export class PropsLayer {
   setBuildings(g: Grid, list: Building[]) {
     const water = labelWater(g);
     this.towers = [];
+    const oldRamps = this.ramps;
+    this.ramps = [];
+    for (const b of list) {
+      if (b.type !== 'incinerator_l') continue;
+      const [W, D] = lotDepth(b);
+      let base = -Infinity;
+      for (let y = b.y; y < b.y + b.h; y++) for (let x = b.x; x < b.x + b.w; x++) base = Math.max(base, g.cellMaxH(x, y));
+      const [ax, az] = lotToWorld(b, INCIN_RAMP.x * W, INCIN_RAMP.z0 * D + 6);
+      const [bx, bz] = lotToWorld(b, INCIN_RAMP.x * W, INCIN_RAMP.z1 * D - 4);
+      const prev = oldRamps.find((r) => r.ax === ax && r.az === az);
+      this.ramps.push({ ax, az, ay: base + 0.2, bx, bz, by: base + INCIN_RAMP.h + 0.4, t: prev?.t ?? Math.random() * 24 });
+    }
     for (const b of list) {
       if (b.type !== 'nuclear_in') continue;
       const [W, D] = lotDepth(b);
@@ -305,7 +327,36 @@ export class PropsLayer {
     this.steam.instanceMatrix.needsUpdate = true;
   }
 
+  // 収集車：スロープを上がって入口に入り、しばらくして下りてくる（24 秒でひとまわり）
+  private updateRampTrucks(dt: number) {
+    let n = 0;
+    const v = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1);
+    for (const r of this.ramps) {
+      r.t = (r.t + dt) % 24;
+      const t = r.t;
+      let u: number, down = false;
+      if (t < 8) u = t / 8;
+      else if (t < 14) continue; // 中でごみを降ろしている
+      else if (t < 22) { u = 1 - (t - 14) / 8; down = true; }
+      else continue;
+      const s = u * u * (3 - 2 * u);
+      // 下りは反対側の車線
+      const dx = r.bx - r.ax, dz = r.bz - r.az, l = Math.hypot(dx, dz) || 1, px = -dz / l, pz = dx / l, o = down ? -1.6 : 1.6;
+      v.set(r.ax + dx * s + px * o, r.ay + (r.by - r.ay) * s, r.az + dz * s + pz * o);
+      this.q.setFromEuler(new THREE.Euler(down ? Math.atan2(r.by - r.ay, l) : -Math.atan2(r.by - r.ay, l), Math.atan2(dx, dz) + (down ? Math.PI : 0), 0, 'YXZ'));
+      this.mtx.compose(v, this.q, one);
+      this.rampTrucks.setMatrixAt(n, this.mtx);
+      this.rampTrucks.setColorAt(n, new THREE.Color(0x2e8b57));
+      n++;
+      if (n >= 40) break;
+    }
+    this.rampTrucks.count = n;
+    this.rampTrucks.instanceMatrix.needsUpdate = true;
+    if (this.rampTrucks.instanceColor) this.rampTrucks.instanceColor.needsUpdate = true;
+  }
+
   update(dt: number) {
+    this.updateRampTrucks(dt);
     this.updateSteam(dt);
     this.updateShips(dt);
     const counts = [0, 0];
