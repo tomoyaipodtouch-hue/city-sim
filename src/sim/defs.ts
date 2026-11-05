@@ -12,6 +12,8 @@ export enum RoadType {
   Ramp = 7, // ランプ（高速道路の出入口）
   UrbanHighway = 8, // 都市高速（片側1車線、高架）
   UrbanGroundHighway = 9, // 都市高速（片側1車線、地上）
+  UrbanHighway1W = 10, // 都市高速（一方通行2車線、高架）
+  UrbanGroundHighway1W = 11, // 都市高速（一方通行2車線、地上）
 }
 
 export interface RoadDef {
@@ -40,13 +42,18 @@ export const ROADS: Record<number, RoadDef> = {
   [RoadType.Ramp]: { id: RoadType.Ramp, name: 'ランプ', speedKmh: 50, capacity: 3000, cost: 0, upkeep: 0.3, width: 9, rank: 0 },
   [RoadType.UrbanHighway]: { id: RoadType.UrbanHighway, name: '高架の都市高速（片側1車線）', speedKmh: 80, capacity: 3400, cost: 90, upkeep: 0.7, width: 9, rank: 6, highway: true, elevated: true, lift: 9 },
   [RoadType.UrbanGroundHighway]: { id: RoadType.UrbanGroundHighway, name: '地上の都市高速（片側1車線）', speedKmh: 80, capacity: 3200, cost: 45, upkeep: 0.45, width: 9, rank: 5, highway: true },
+  [RoadType.UrbanHighway1W]: { id: RoadType.UrbanHighway1W, name: '高架の都市高速（一方通行2車線）', speedKmh: 80, capacity: 5100, cost: 100, upkeep: 0.8, width: 9, oneWay: true, rank: 6, highway: true, elevated: true, lift: 9 },
+  [RoadType.UrbanGroundHighway1W]: { id: RoadType.UrbanGroundHighway1W, name: '地上の都市高速（一方通行2車線）', speedKmh: 80, capacity: 4800, cost: 50, upkeep: 0.5, width: 9, oneWay: true, rank: 5, highway: true },
 };
 
 export const OVERPASS_LIFT = 7.5; // 地上の高速道路をまたぐ道路の高さ
 export const RAMP_COST = 600; // ランプ1か所
-export const isHighway = (t: number) => t === RoadType.Highway || t === RoadType.GroundHighway || t === RoadType.UrbanHighway || t === RoadType.UrbanGroundHighway;
+export const isHighway = (t: number) => t === RoadType.Highway || t === RoadType.GroundHighway || t === RoadType.UrbanHighway || t === RoadType.UrbanGroundHighway || t === RoadType.UrbanHighway1W || t === RoadType.UrbanGroundHighway1W;
 // 地上の高速道路（一般の道路は立体交差でまたぐ）
-export const isGroundHighway = (t: number) => t === RoadType.GroundHighway || t === RoadType.UrbanGroundHighway;
+export const isGroundHighway = (t: number) => t === RoadType.GroundHighway || t === RoadType.UrbanGroundHighway || t === RoadType.UrbanGroundHighway1W;
+// 都市高速（片側1車線・一方通行2車線）。ランプ（1×5）を横に置ける
+export const isUrbanElevated = (t: number) => t === RoadType.UrbanHighway || t === RoadType.UrbanHighway1W;
+export const isUrbanGround = (t: number) => t === RoadType.UrbanGroundHighway || t === RoadType.UrbanGroundHighway1W;
 
 export const BRIDGE_COST_MUL = 6; // 橋は建設費が何倍か
 export const MAX_BRIDGE = 24; // 橋の最大の長さ（マス）

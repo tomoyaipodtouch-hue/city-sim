@@ -272,6 +272,35 @@ describe('stage 2a roads', () => {
     }
   });
 
+  it('one-way two-lane urban highways run only in the drawn direction and take ramps on either side', () => {
+    for (const type of [RoadType.UrbanGroundHighway1W, RoadType.UrbanHighway1W]) {
+      const w = new World(48);
+      w.g.heights.fill(6);
+      w.funds = 1e6;
+      const g = w.g;
+      const L = type === RoadType.UrbanHighway1W ? 1 : 0;
+      const fl = L ? g.flow1 : g.flow;
+      // 東向きに引く
+      expect(w.exec({ t: 'road', x0: 2, y0: 20, x1: 45, y1: 20, road: type }).ok).toBe(true);
+      expect(fl[g.idx(20, 20)] & 1).not.toBe(0);
+      expect(fl[g.idx(20, 20)] & (1 << 4)).toBe(0);
+      // 南側にも北側にもランプを置ける（どちらも東向き：西の端が出口、東の端が入口）
+      expect(w.exec({ t: 'uramp', x: 15, y: 21 }).ok).toBe(true);
+      expect(fl[g.idx(12, 20)] & (1 << 1)).not.toBe(0);
+      expect(w.exec({ t: 'uramp', x: 30, y: 19 }).ok).toBe(true);
+      expect(fl[g.idx(27, 20)] & (1 << 7)).not.toBe(0);
+      // ランプの外側の一般道（後から引く）と、東へ向かう車
+      expect(w.exec({ t: 'road', x0: 15, y0: 22, x1: 15, y1: 30, road: RoadType.Road }).ok).toBe(true);
+      expect(w.exec({ t: 'road', x0: 30, y0: 18, x1: 30, y1: 10, road: RoadType.Road }).ok).toBe(true);
+      const N = g.n * g.n;
+      const J = buildJunctions(g, new Float32Array(2 * N));
+      const go = (from: number, to: number) => assignTrips(g, [{ cell: from, trips: 10, buildings: [{ id: 9, trips: 10 }] }], new Map([[to, [{ id: 1, free: 10 }]]]), new Float32Array(2 * N).fill(1), J, () => 0.5, { externalCap: 0, maxMinutes: 120, weight: 1 }).filled.get(1);
+      expect(go(g.idx(15, 30), g.idx(30, 10))).toBe(10);
+      // 逆向き（西へ）には走れない
+      expect(go(g.idx(30, 10), g.idx(15, 30))).toBeUndefined();
+    }
+  });
+
   it('cars drive through diagonal sections and bends of an urban highway', () => {
     for (const type of [RoadType.UrbanGroundHighway, RoadType.UrbanHighway]) {
       for (const [bx, by] of [[30, 6], [30, 34]]) {

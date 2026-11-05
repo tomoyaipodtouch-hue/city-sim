@@ -308,6 +308,13 @@ export class RoadLayer {
           line(pts, (p) => -(p.hw - 0.45), COL.white, 0.15);
           line(pts, (p) => p.hw - 0.45, COL.white, 0.15);
           break;
+        case RoadType.UrbanHighway1W:
+        case RoadType.UrbanGroundHighway1W:
+          // 一方通行2車線：真ん中に白の破線、両端に白線
+          line(pts, () => 0, COL.white, 0.14, true);
+          line(pts, (p) => -(p.hw - 0.45), COL.white, 0.15);
+          line(pts, (p) => p.hw - 0.45, COL.white, 0.15);
+          break;
         // ランプは短く斜めに重なるので、線は引かない
       }
     };

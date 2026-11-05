@@ -35,6 +35,8 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { tool: 'road:6', name: `${ROADS[RoadType.GroundHighway].name}（2マス幅）`, note: `${yen(ROADS[6].cost * 2)}/マス` },
       { tool: 'road:8', name: ROADS[RoadType.UrbanHighway].name, note: `${yen(ROADS[8].cost)}/マス` },
       { tool: 'road:9', name: ROADS[RoadType.UrbanGroundHighway].name, note: `${yen(ROADS[9].cost)}/マス` },
+      { tool: 'road:10', name: ROADS[RoadType.UrbanHighway1W].name, note: `${yen(ROADS[10].cost)}/マス（引いた向きに走る）` },
+      { tool: 'road:11', name: ROADS[RoadType.UrbanGroundHighway1W].name, note: `${yen(ROADS[11].cost)}/マス（引いた向きに走る）` },
       { tool: 'ramp', name: 'ランプ（出入口）', note: yen(RAMP_COST) },
       { tool: 'uramp', name: '都市高速のランプ（1×5）', note: yen(RAMP_COST * 3) },
       { tool: 'diamond', name: 'ダイヤモンド型インターチェンジ', note: '高速道路をタップ' },

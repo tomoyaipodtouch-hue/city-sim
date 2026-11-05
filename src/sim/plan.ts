@@ -1,7 +1,7 @@
 // ツールの計画（プレビューと実行の両方で使う）
 import { Grid } from './grid';
 import { DX, DY, MAX_ROAD_GRADE, CELL, WATER_LEVEL, dirOf, isDiag, opp } from './constants';
-import { ROADS, RoadType, ZoneType, ZONE_COST, POWER_LINE_COST, CIVIC, CivicId, BRIDGE_COST_MUL, MAX_BRIDGE, OVERPASS_LIFT, RAMP_COST, isHighway, isGroundHighway, LINES, LineKind, BUS_STOP_COST } from './defs';
+import { ROADS, RoadType, ZoneType, ZONE_COST, POWER_LINE_COST, CIVIC, CivicId, BRIDGE_COST_MUL, MAX_BRIDGE, OVERPASS_LIFT, RAMP_COST, isHighway, isGroundHighway, isUrbanElevated, isUrbanGround, LINES, LineKind, BUS_STOP_COST } from './defs';
 
 export interface LinePath {
   cells: number[]; // マスの番号
@@ -226,7 +226,7 @@ function planLane(
       return 1;
     }
     if (def.highway) {
-      if (end && (g.up[i] === RoadType.Highway || g.up[i] === RoadType.UrbanHighway) && !g.road[i]) return 1;
+      if (end && (g.up[i] === RoadType.Highway || isUrbanElevated(g.up[i])) && !g.road[i]) return 1;
       return 0;
     }
     // 一般の道路
@@ -1570,10 +1570,18 @@ export function planURamp(g: Grid, x: number, y: number): URampPlan {
     const hx = x + DX[s], hy = y + DY[s];
     if (!g.inb(hx, hy)) continue;
     const h0 = g.idx(hx, hy);
-    const level = g.up[h0] === RoadType.UrbanHighway ? 1 : g.road[h0] === RoadType.UrbanGroundHighway ? 0 : -1;
+    const level = isUrbanElevated(g.up[h0]) ? 1 : isUrbanGround(g.road[h0]) ? 0 : -1;
     if (level < 0) continue;
-    const type = level ? RoadType.UrbanHighway : RoadType.UrbanGroundHighway;
-    const a = (s + 2) & 7;
+    const type = level ? g.up[h0] : g.road[h0];
+    // 片側1車線は、置いた側を走る向き（右側通行）。一方通行は、走る向きに合わせる（どちら側にも置ける）
+    let a = (s + 2) & 7;
+    if (ROADS[type].oneWay) {
+      const f = level ? g.flow1[h0] : g.flow[h0];
+      const b1 = (s + 2) & 7, b2 = (s + 6) & 7;
+      if (f & (1 << b1) && !(f & (1 << b2))) a = b1;
+      else if (f & (1 << b2) && !(f & (1 << b1))) a = b2;
+      else continue;
+    }
     const at = (bx: number, by: number, k: number) => {
       const xx = bx + DX[a] * k, yy = by + DY[a] * k;
       return g.inb(xx, yy) ? g.idx(xx, yy) : -1;
@@ -1623,7 +1631,8 @@ export function planURamp(g: Grid, x: number, y: number): URampPlan {
 export function linkUrbanEnds(g: Grid) {
   const n = g.n;
   for (let c = 0; c < n * n; c++) {
-    if (g.up[c] !== RoadType.UrbanHighway) continue;
+    const ut = g.up[c];
+    if (!isUrbanElevated(ut)) continue;
     const t = g.road[c];
     if (!t || isHighway(t) || t === RoadType.Ramp) continue;
     const m = g.conn1[c];
@@ -1632,12 +1641,16 @@ export function linkUrbanEnds(g: Grid) {
     const px = (c % n) + DX[b], py = ((c / n) | 0) + DY[b];
     if (!g.inb(px, py)) continue;
     const p = g.idx(px, py);
-    if (g.up[p] !== RoadType.UrbanHighway) continue;
+    if (g.up[p] !== ut) continue;
+    const outward = !!(g.flow1[p] & (1 << opp(b))), inward = !!(g.flow1[c] & (1 << b));
     g.up[c] = 0;
     g.conn1[c] = 0;
     g.flow1[c] = 0;
     g.upH[c] = 0;
-    link(g, p, 1, c, 0, opp(b), false);
+    // 一方通行は、走る向きのとおりにだけつなぐ
+    if (!ROADS[ut].oneWay || (outward && inward)) link(g, p, 1, c, 0, opp(b), false);
+    else if (outward) link(g, p, 1, c, 0, opp(b), true);
+    else link(g, c, 0, p, 1, b, true);
     // 端に向かって、高架をなめらかに下げる（引いたときの始まり側と同じ勾配）
     let cur = p, from = c;
     for (let k = 0; k < 40; k++) {
@@ -1649,7 +1662,7 @@ export function linkUrbanEnds(g: Grid) {
       for (let d = 0; d < 8; d++) {
         if (!(g.conn1[cur] & (1 << d)) || !g.inb(x + DX[d], y + DY[d])) continue;
         const j = g.idx(x + DX[d], y + DY[d]);
-        if (j !== from && g.up[j] === RoadType.UrbanHighway) { next = j; break; }
+        if (j !== from && g.up[j] === ut) { next = j; break; }
       }
       if (next < 0) break;
       from = cur;
@@ -1662,7 +1675,7 @@ export function linkUrbanEnds(g: Grid) {
 export function linkURampMiddles(g: Grid) {
   const n = g.n;
   const isRamp = (x: number, y: number) => g.inb(x, y) && (g.road[g.idx(x, y)] === RoadType.Ramp || g.up[g.idx(x, y)] === RoadType.Ramp);
-  const isUrban = (x: number, y: number) => g.inb(x, y) && (g.road[g.idx(x, y)] === RoadType.UrbanGroundHighway || g.up[g.idx(x, y)] === RoadType.UrbanHighway);
+  const isUrban = (x: number, y: number) => g.inb(x, y) && (isUrbanGround(g.road[g.idx(x, y)]) || isUrbanElevated(g.up[g.idx(x, y)]));
   for (let c = 0; c < n * n; c++) {
     if (g.road[c] !== RoadType.Ramp || g.conn[c] & 0b10101010) continue;
     const x = c % n, y = (c / n) | 0;
