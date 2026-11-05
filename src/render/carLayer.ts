@@ -477,7 +477,8 @@ export class CarLayer {
       let k = 0, hk = 0, mk = 0;
       for (const c of f.cars) {
         const def = ROADS[line ? 1 : g.nodeType(c.from)] || ROADS[1];
-        const turning = c.din !== c.d;
+        // 曲がるときは減速する。ただし高速道路（都市高速を含む）の本線のカーブはそのままの速さ
+        const turning = c.din !== c.d && !(!line && !walk && isHighway(g.nodeType(c.from)) && isHighway(g.nodeType(c.to)));
         const len = CarLayer.cellLen(c);
         const cg = line || walk ? 1 : Math.max(this.cong![c.from], 1);
         const kmh = walk ? 4.5 + (c.col % 3) * 0.6 : line ? LINES[f.track as LineKind].speedKmh * 1.2 : def.speedKmh * (f.track === 'bus' ? 0.8 : f.trailer ? 0.85 : 1);
