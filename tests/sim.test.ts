@@ -255,6 +255,23 @@ describe('stage 2a roads', () => {
     }
   });
 
+  it('a road drawn later alongside an urban highway ramp connects to its middle', () => {
+    for (const type of [RoadType.UrbanGroundHighway, RoadType.UrbanHighway]) {
+      const w = new World(48);
+      w.g.heights.fill(6);
+      w.funds = 1e6;
+      const g = w.g;
+      expect(w.exec({ t: 'road', x0: 2, y0: 20, x1: 45, y1: 20, road: type }).ok).toBe(true);
+      expect(w.exec({ t: 'uramp', x: 20, y: 21 }).ok).toBe(true);
+      // ランプの外側に平行な一般道を後から引く
+      expect(w.exec({ t: 'road', x0: 5, y0: 22, x1: 40, y1: 22, road: RoadType.Road }).ok).toBe(true);
+      expect(g.flow[g.idx(20, 21)] & (1 << 2)).not.toBe(0);
+      expect(g.flow[g.idx(20, 22)] & (1 << 6)).not.toBe(0);
+      // ランプの端のマスは一般道とつながらない
+      expect(g.conn[g.idx(18, 21)] & (1 << 2)).toBe(0);
+    }
+  });
+
   it('on urban highways, ramps are entered and left only with right turns (no crossing the center line)', () => {
     // 東向き(0)から南側のランプ(南東 1)へは右折なので可、西向き(4)からは中央線をまたぐので不可
     expect(urbanTurnOk(0, 1)).toBe(true);

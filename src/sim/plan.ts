@@ -1619,6 +1619,31 @@ export function planURamp(g: Grid, x: number, y: number): URampPlan {
   return fail('都市高速（片側1車線）の横に置いてください', lastCells.length ? lastCells : [g.idx(x, y)]);
 }
 
+// 都市高速のランプの真ん中のマスを、外側に後から引いた一般道（横切る道でも、平行な道でも）とつなぐ
+export function linkURampMiddles(g: Grid) {
+  const n = g.n;
+  const isRamp = (x: number, y: number) => g.inb(x, y) && (g.road[g.idx(x, y)] === RoadType.Ramp || g.up[g.idx(x, y)] === RoadType.Ramp);
+  const isUrban = (x: number, y: number) => g.inb(x, y) && (g.road[g.idx(x, y)] === RoadType.UrbanGroundHighway || g.up[g.idx(x, y)] === RoadType.UrbanHighway);
+  for (let c = 0; c < n * n; c++) {
+    if (g.road[c] !== RoadType.Ramp || g.conn[c] & 0b10101010) continue;
+    const x = c % n, y = (c / n) | 0;
+    for (const a of [0, 2]) {
+      const b = opp(a);
+      if (!(g.conn[c] & (1 << a)) || !(g.conn[c] & (1 << b))) continue;
+      if (![1, 2].every((k) => isRamp(x + DX[a] * k, y + DY[a] * k) && isRamp(x + DX[b] * k, y + DY[b] * k))) continue;
+      for (const s of [(a + 2) & 7, (a + 6) & 7]) {
+        if (!isUrban(x + DX[s], y + DY[s])) continue;
+        const o = opp(s), ox = x + DX[o], oy = y + DY[o];
+        if (!g.inb(ox, oy)) continue;
+        const j = g.idx(ox, oy), t = g.road[j];
+        if (!t || isHighway(t) || t === RoadType.Ramp || g.up[j]) continue;
+        if ((g.flow[c] & (1 << o)) && (g.flow[j] & (1 << s))) continue;
+        link(g, c, 0, j, 0, o, false);
+      }
+    }
+  }
+}
+
 export function applyURamp(g: Grid, p: URampPlan) {
   const n = g.n;
   const { cells, hw, level, a } = p;
