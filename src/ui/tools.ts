@@ -66,6 +66,8 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { tool: 'plop:wind', name: CIVIC.wind.name, note: yen(CIVIC.wind.cost) },
       { tool: 'plop:solar', name: CIVIC.solar.name, note: yen(CIVIC.solar.cost) },
       { tool: 'plop:nuclear', name: CIVIC.nuclear.name, note: yen(CIVIC.nuclear.cost) },
+      { tool: 'plop:nuclear_in', name: `${CIVIC.nuclear_in.name}（10×8）`, note: yen(CIVIC.nuclear_in.cost) },
+      { tool: 'plop:nuclear_sea', name: `${CIVIC.nuclear_sea.name}（10×8）`, note: yen(CIVIC.nuclear_sea.cost) },
     ],
   },
   {

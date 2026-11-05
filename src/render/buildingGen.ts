@@ -125,6 +125,8 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     case 'gas': gasPlant(mb, f); break;
     case 'oil': oilPlant(mb, f); break;
     case 'nuclear': nuclearPlant(mb, f); break;
+    case 'nuclear_in': bigNuclear(mb, f, tf, false); break;
+    case 'nuclear_sea': bigNuclear(mb, f, tf, true); break;
     case 'wind': windTurbine(mb, f, rng); break;
     case 'solar': solarFarm(mb, f); break;
     case 'pump': pump(mb, f); break;
@@ -746,6 +748,105 @@ function nuclearPlant(mb: MeshBuilder, f: LotFrame) {
   mb.box(-30, 0, 6, 4, 14, 28, PALETTE.indWall[1], PAT.industrial, PALETTE.steel);
   mb.box(-30, 0, 30, -12, 8, 37, PALETTE.white, PAT.office, PALETTE.roof[3]);
   mb.box(5, 0, 26, 7, 10, 28, PALETTE.steel);
+}
+
+// 冷却塔（双曲線の形）。設計図（160×128m）での位置と大きさ。湯気の位置は propsLayer でも使う
+export const COOLING_TOWERS = { H: 118, R: 31, pos: [[-47, -32], [47, -32]] as [number, number][] };
+export const bigNuclearScale = (W: number, D: number) => Math.min(W / 160, D / 128);
+
+// 大型の原子力発電所（原子炉2基）。sea = 臨海型（冷却塔なし、奥（-z）が水辺）。設計図は 160×128m で、敷地に合わせて縮める
+function bigNuclear(mb: MeshBuilder, f: LotFrame, tf: TF, sea: boolean) {
+  const k = bigNuclearScale(f.W, f.D);
+  const white = C(0xf2f1ec), lightBlue = C(0xb9d3e6), grey = C(0x9da3a8), dark = C(0x5c636a), glow = C(0xfff3d0);
+  const box = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, c: THREE.Color, pat: number = PAT.none, roof?: THREE.Color) => mb.box(x0 * k, y0 * k, z0 * k, x1 * k, y1 * k, z1 * k, c, pat, roof);
+  const gnd = (x0: number, z0: number, x1: number, z1: number, y: number, c: THREE.Color) => mb.ground(x0 * k, z0 * k, x1 * k, z1 * k, y, c);
+  const cyl = (x: number, z: number, y0: number, y1: number, r0: number, c: THREE.Color, top?: THREE.Color, r1 = r0, seg = 32) => mb.cylinder(x * k, z * k, y0 * k, y1 * k, r0 * k, seg, c, top, r1 * k);
+  mb.ground(-f.W / 2 + 0.3, -f.D / 2 + 0.3, f.W / 2 - 0.3, f.D / 2 - 0.3, 0.08, PALETTE.concrete);
+  // 構内道路
+  gnd(-74, 36, 74, 40, 0.1, PALETTE.asphalt);
+  gnd(-3, -60, 3, 62, 0.1, PALETTE.asphalt);
+  // 二重のフェンスと、正面の警備ゲート
+  for (const ins of [1.5, 3.5]) {
+    const x0 = -80 + ins, x1 = 80 - ins, z0 = -64 + ins, z1 = 64 - ins;
+    box(x0, 0, z0, x1, 2.6, z0 + 0.12, grey);
+    box(x0, 0, z0, x0 + 0.12, 2.6, z1, grey);
+    box(x1 - 0.12, 0, z0, x1, 2.6, z1, grey);
+    box(x0, 0, z1 - 0.12, -6, 2.6, z1, grey);
+    box(6, 0, z1 - 0.12, x1, 2.6, z1, grey);
+  }
+  box(7, 0, 54, 14, 3.5, 59, white, PAT.office, PALETTE.roof[3]); // 詰所
+  box(-6, 3.6, 56, 6, 4.1, 61, dark); // ゲートの屋根
+  box(-5.5, 0, 59.5, 5.5, 1.1, 59.9, C(0xd9a400)); // 遮断機
+  // 事務棟と駐車場（正面の左）
+  box(-74, 0, 46, -42, 13, 58, white, PAT.office, PALETTE.roof[3]);
+  gnd(-38, 46, -10, 58, 0.11, PALETTE.asphalt);
+  for (let x = -37; x < -11; x += 2.6) gnd(x, 46, x + 0.12, 51, 0.13, PALETTE.white);
+  if (!sea) {
+    // ---- 内陸型：ドームの原子炉2基、真ん中にタービン建屋、奥に巨大な冷却塔2本 ----
+    for (const sx of [-1, 1]) {
+      const rx = sx * 46, rz = 18;
+      cyl(rx, rz, 0, 38, 16, white);
+      let y0 = 38, r0 = 16;
+      for (const [y1, r1] of [[44, 14.6], [49, 11.6], [52.5, 7.5], [54.5, 0.01]] as const) {
+        cyl(rx, rz, y0, y1, r0, white, r1 < 0.1 ? white : undefined, r1);
+        y0 = y1; r0 = r1;
+      }
+      box(rx + sx * 16, 0, rz - 8, rx + sx * 24, 26, rz + 8, grey, PAT.industrial, PALETTE.steel); // 補助建屋
+    }
+    box(-25, 0, 4, 25, 26, 32, lightBlue, PAT.industrial, PALETTE.steel); // タービン建屋
+    box(-25.1, 23, 3.9, 25.1, 24, 32.1, dark);
+    // 冷却塔：根元が広く、上の 4 分の 3 でくびれ、上でまた少し広がる
+    const { H, R } = COOLING_TOWERS;
+    const rad = (t: number) => (t <= 0.75 ? R * (0.62 + 0.38 * ((0.75 - t) / 0.75) ** 2) : R * (0.62 + 0.1 * ((t - 0.75) / 0.25)));
+    for (const [x, z] of COOLING_TOWERS.pos) {
+      const tw = C(0xe9e6de), band = C(0xd2cdc0);
+      for (let s2 = 0; s2 < 14; s2++) {
+        const t0 = s2 / 14, t1 = (s2 + 1) / 14;
+        cyl(x, z, t0 * H, t1 * H, rad(t0), s2 === 9 ? band : tw, undefined, rad(t1));
+      }
+      cyl(x, z, H, H + 0.7, rad(1), band, C(0x3e4044), rad(1) - 1.4);
+      cyl(x, z, -0.5, 3.5, R + 0.8, C(0xb9b4a8), undefined, R);
+    }
+  } else {
+    // ---- 臨海型：角型の原子炉建屋2基（上部は明るい色）、海側にタービン建屋、排気筒、取水口と防潮堤 ----
+    for (const sx of [-1, 1]) {
+      const rx = sx * 36, rz = 14;
+      box(rx - 21, 0, rz - 19, rx + 21, 46, rz + 19, white, PAT.industrial, white);
+      box(rx - 21.2, 34, rz - 19.2, rx + 21.2, 46, rz + 19.2, lightBlue, PAT.none, lightBlue);
+      box(rx - 21.3, 46, rz - 19.3, rx + 21.3, 47, rz + 19.3, dark);
+      box(rx - 24, 0, -50, rx + 24, 28, -8, C(0xdfe7ee), PAT.industrial, PALETTE.steel); // タービン建屋
+      box(rx - 24.1, 26, -50.1, rx + 24.1, 27, -7.9, C(0x4f7fae));
+    }
+    // 排気筒（紅白の筒と、支える鉄塔）
+    const sh = 120;
+    for (let s2 = 0; s2 < 8; s2++) cyl(0, 14, (s2 * sh) / 8, ((s2 + 1) * sh) / 8, 2.2, s2 % 2 ? C(0xd23a3a) : white, s2 === 7 ? dark : undefined, 2.2, 12);
+    for (const [px, pz] of [[-5, -5], [5, -5], [-5, 5], [5, 5]]) box(px - 0.3, 0, 14 + pz - 0.3, px + 0.3, sh * 0.85, 14 + pz + 0.3, grey);
+    // 取水口（奥の水辺へのびる水路）と防潮堤
+    gnd(-12, -96, 12, -54, 0.05, PALETTE.water);
+    for (const sx of [-1, 1]) box(sx * 12 - 1.5, -5, -100, sx * 12 + 1.5, 2.2, -54, PALETTE.concrete);
+    box(-80, -5, -68, 80, 4, -63, PALETTE.concrete);
+  }
+  // 変電所（正面の右）と送電鉄塔
+  gnd(30, 42, 74, 60, 0.11, C(0x8a8378));
+  for (let x = 34; x < 72; x += 7)
+    for (let z = 50; z < 59; z += 7) {
+      box(x - 0.25, 0, z - 0.25, x + 0.25, 9, z + 0.25, grey);
+      box(x - 2.5, 8.5, z - 0.15, x + 2.5, 8.8, z + 0.15, grey);
+      box(x - 0.8, 0, z - 4.2, x + 0.8, 3, z - 2.5, dark); // 変圧器
+    }
+  for (const px of [38, 66]) {
+    const pz = 43;
+    for (const [ox, oz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) box(px + ox - 0.25, 0, pz + oz - 0.25, px + ox + 0.25, 46, pz + oz + 0.25, grey);
+    for (const y of [30, 37, 44]) box(px - 7, y, pz - 0.3, px + 7, y + 0.6, pz + 0.3, grey);
+  }
+  // 夜の照明（構内の照明塔。上が光る）
+  for (const [x, z] of [[-74, -58], [74, -58], [-74, 34], [74, 34], [0, -8]]) {
+    box(x - 0.3, 0, z - 0.3, x + 0.3, 24, z + 0.3, grey);
+    box(x - 1.6, 24, z - 0.6, x + 1.6, 25.2, z + 0.6, glow, PAT.glow);
+  }
+  tf(-70 * k, 62 * k, 1.0);
+  tf(-50 * k, 62 * k, 1.0);
+  tf(70 * k, 62 * k, 1.0);
 }
 
 function windTurbine(mb: MeshBuilder, f: LotFrame, rng: Rng) {

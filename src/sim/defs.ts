@@ -190,7 +190,7 @@ export const SERVICE_DEPT: Record<ServiceKind, Dept> = {
 export const GARBAGE_PER_RES = 0.9;
 export const GARBAGE_PER_JOB = 0.6;
 
-export type CivicId = 'coal' | 'gas' | 'oil' | 'nuclear' | 'wind' | 'solar' | 'pump' | 'tower' | 'park_s' | 'park_l' | 'plaza' | 'playground' | 'greenway' | 'sports' | 'garden' | 'cpark_a' | 'cpark_b' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station'
+export type CivicId = 'coal' | 'gas' | 'oil' | 'nuclear' | 'nuclear_in' | 'nuclear_sea' | 'wind' | 'solar' | 'pump' | 'tower' | 'park_s' | 'park_l' | 'plaza' | 'playground' | 'greenway' | 'sports' | 'garden' | 'cpark_a' | 'cpark_b' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station'
   | 'ferry_p' | 'ferry_c' | 'seaport' | 'airport_s' | 'airport_l' | 'freight_st'
   | 'police_s' | 'police_l' | 'fire_s' | 'fire_l' | 'clinic' | 'hospital' | 'school_e' | 'school_h' | 'college' | 'library'
   | 'landfill' | 'incinerator' | 'recycling'
@@ -227,6 +227,8 @@ export const CIVIC: Record<CivicId, CivicDef> = {
   coal: { id: 'coal', name: '石炭火力発電所', w: 4, h: 4, cost: 12000, upkeep: 220, power: 900, pollution: 30, desc: '安くて発電量が多いが、大気汚染がひどい' },
   gas: { id: 'gas', name: 'ガス火力発電所', w: 3, h: 3, cost: 18000, upkeep: 260, power: 550, pollution: 8, desc: '汚染が少ないが、費用が高い' },
   oil: { id: 'oil', name: '石油火力発電所', w: 4, h: 4, cost: 15000, upkeep: 250, power: 700, pollution: 20, desc: '石炭より汚染が少なく、ガスより発電量が多い' },
+  nuclear_in: { id: 'nuclear_in', name: '大型原子力発電所（内陸型）', w: 10, h: 8, rotate: true, cost: 170000, upkeep: 2000, power: 10800, pollution: 0, desc: '原子炉2基と巨大な冷却塔。発電量がとても多く、大気を汚さない' },
+  nuclear_sea: { id: 'nuclear_sea', name: '大型原子力発電所（臨海型）', w: 10, h: 8, cost: 160000, upkeep: 1900, power: 10800, pollution: 0, waterfront: true, desc: '原子炉2基。海水で冷やすので冷却塔はない。水辺に置く' },
   nuclear: { id: 'nuclear', name: '原子力発電所', w: 5, h: 5, cost: 60000, upkeep: 750, power: 3600, pollution: 0, desc: '発電量がとても多く、大気を汚さない。建設費と維持費が高い' },
   wind: { id: 'wind', name: '風力発電機', w: 1, h: 1, cost: 1500, upkeep: 20, power: 40, pollution: 0, desc: '小さくて汚染がない。高い場所ほど発電量が多い（最大 64 MW）' },
   solar: { id: 'solar', name: '太陽光発電所', w: 3, h: 3, cost: 20000, upkeep: 110, power: 300, pollution: 0, desc: '汚染がないが、広さの割に発電量が少ない' },

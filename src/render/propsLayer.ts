@@ -6,7 +6,7 @@ import { CIVIC, CivicId } from '../sim/defs';
 import type { Building } from '../sim/world';
 import { labelWater } from '../sim/plan';
 import { MeshBuilder } from './builder';
-import { airportLayout, boat, containerShip, plane } from './buildingGen';
+import { airportLayout, bigNuclearScale, boat, containerShip, COOLING_TOWERS, plane } from './buildingGen';
 
 interface Route {
   ax: number;
@@ -63,6 +63,10 @@ export class PropsLayer {
   private routes: Route[] = [];
   private ships: Ship[] = [];
   private shipMesh: THREE.InstancedMesh;
+  // 冷却塔の湯気（ふわっと膨らみながら上がって消える白いかたまり）
+  private steam: THREE.InstancedMesh;
+  private towers: { x: number; y: number; z: number; k: number }[] = [];
+  private steamT = 0;
   private runways: Runway[] = [];
   private mtx = new THREE.Matrix4();
   private q = new THREE.Quaternion();
@@ -76,6 +80,11 @@ export class PropsLayer {
     ];
     this.planes = new THREE.InstancedMesh(geo((mb) => plane(mb, 0, 0, 1)), mat, 20);
     this.shipMesh = new THREE.InstancedMesh(geo((mb) => containerShip(mb, SHIP_LEN, 7)), mat, 40);
+    this.steam = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshLambertMaterial({ color: 0xf4f4f2, transparent: true, opacity: 0.55, depthWrite: false }), 240);
+    this.steam.count = 0;
+    this.steam.frustumCulled = false;
+    this.steam.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.group.add(this.steam);
     for (const m of [...this.boats, this.planes, this.shipMesh]) {
       m.count = 0;
       m.castShadow = true;
@@ -87,6 +96,18 @@ export class PropsLayer {
 
   setBuildings(g: Grid, list: Building[]) {
     const water = labelWater(g);
+    this.towers = [];
+    for (const b of list) {
+      if (b.type !== 'nuclear_in') continue;
+      const [W, D] = lotDepth(b);
+      const k = bigNuclearScale(W, D);
+      let base = -Infinity;
+      for (let y = b.y; y < b.y + b.h; y++) for (let x = b.x; x < b.x + b.w; x++) base = Math.max(base, g.cellMaxH(x, y));
+      for (const [lx, lz] of COOLING_TOWERS.pos) {
+        const [x, z] = lotToWorld(b, lx * k, lz * k);
+        this.towers.push({ x, y: base + COOLING_TOWERS.H * k, z, k });
+      }
+    }
     const oldShips = this.ships;
     this.ships = [];
     const terms: { b: Building; kind: string; body: number; px: number; pz: number }[] = [];
@@ -260,7 +281,32 @@ export class PropsLayer {
     this.shipMesh.instanceMatrix.needsUpdate = true;
   }
 
+  private updateSteam(dt: number) {
+    this.steamT += dt;
+    const P = 10, period = 16;
+    let n = 0;
+    const v = new THREE.Vector3(), sc = new THREE.Vector3();
+    this.q.identity();
+    for (let ti = 0; ti < this.towers.length && n < 240 - P; ti++) {
+      const t0 = this.towers[ti];
+      for (let p = 0; p < P; p++) {
+        const t = ((this.steamT / period + p / P + ti * 0.37) % 1 + 1) % 1;
+        const fade = 1 - Math.max(0, (t - 0.7) / 0.3);
+        const r = (9 + t * 26) * t0.k * fade;
+        if (r < 0.5) continue;
+        // 風で少し流されながら上がる
+        v.set(t0.x + t * 38 * t0.k + Math.sin(p * 2.1) * 3, t0.y + 4 + t * 75 * t0.k, t0.z + t * 14 * t0.k + Math.cos(p * 1.7) * 3);
+        sc.set(r, r * 0.8, r);
+        this.mtx.compose(v, this.q, sc);
+        this.steam.setMatrixAt(n++, this.mtx);
+      }
+    }
+    this.steam.count = n;
+    this.steam.instanceMatrix.needsUpdate = true;
+  }
+
   update(dt: number) {
+    this.updateSteam(dt);
     this.updateShips(dt);
     const counts = [0, 0];
     for (const r of this.routes) {
