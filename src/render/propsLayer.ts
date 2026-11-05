@@ -1,12 +1,12 @@
 // 動く船と飛行機（フェリーは乗り場の間を行き来し、飛行機は空港から離陸する）
 import * as THREE from 'three';
 import { Grid } from '../sim/grid';
-import { CELL } from '../sim/constants';
+import { CELL, DX, DY } from '../sim/constants';
 import { CIVIC, CivicId } from '../sim/defs';
 import type { Building } from '../sim/world';
 import { labelWater } from '../sim/plan';
 import { MeshBuilder } from './builder';
-import { airportLayout, boat, plane } from './buildingGen';
+import { airportLayout, boat, containerShip, plane } from './buildingGen';
 
 interface Route {
   ax: number;
@@ -17,6 +17,16 @@ interface Route {
   t: number;
   mesh: number; // 0 = 旅客船, 1 = カーフェリー
 }
+// 貨物船：外洋（マップの外）と港の岸壁の間を行き来する
+interface Ship {
+  px: Float32Array; // 航路（外洋 → 岸壁の手前）
+  pz: Float32Array;
+  acc: Float32Array; // 先頭からの距離
+  berth: [number, number, number]; // 岸壁での位置と向き
+  t: number; // 周期の中の時刻（秒）
+  hd: number; // 今の向き
+}
+const SHIP_LEN = 110, SHIP_SPEED = 9, DOCK_SECS = 70, AWAY_SECS = 50;
 interface Runway {
   x: number;
   z: number;
@@ -51,6 +61,8 @@ export class PropsLayer {
   private boats: THREE.InstancedMesh[];
   private planes: THREE.InstancedMesh;
   private routes: Route[] = [];
+  private ships: Ship[] = [];
+  private shipMesh: THREE.InstancedMesh;
   private runways: Runway[] = [];
   private mtx = new THREE.Matrix4();
   private q = new THREE.Quaternion();
@@ -63,7 +75,8 @@ export class PropsLayer {
       new THREE.InstancedMesh(geo((mb) => boat(mb, 0, 0, 26, 9, true, 0)), mat, 40),
     ];
     this.planes = new THREE.InstancedMesh(geo((mb) => plane(mb, 0, 0, 1)), mat, 20);
-    for (const m of [...this.boats, this.planes]) {
+    this.shipMesh = new THREE.InstancedMesh(geo((mb) => containerShip(mb, SHIP_LEN, 7)), mat, 40);
+    for (const m of [...this.boats, this.planes, this.shipMesh]) {
       m.count = 0;
       m.castShadow = true;
       m.frustumCulled = false;
@@ -74,6 +87,8 @@ export class PropsLayer {
 
   setBuildings(g: Grid, list: Building[]) {
     const water = labelWater(g);
+    const oldShips = this.ships;
+    this.ships = [];
     const terms: { b: Building; kind: string; body: number; px: number; pz: number }[] = [];
     this.runways = [];
     for (const b of list) {
@@ -87,6 +102,7 @@ export class PropsLayer {
         const [px, pz] = lotToWorld(b, 0, -D / 2 - 18);
         terms.push({ b, kind: def.ferry, body, px, pz });
       }
+      if (def.seaport) this.addShips(g, water, b, oldShips);
       if (def.airport) {
         const [W, D] = lotDepth(b);
         const Y = airportLayout(W, D, def.airport);
@@ -107,7 +123,145 @@ export class PropsLayer {
       }
   }
 
+  // 港から外洋までの航路を探す（幅3マス以上の水面だけを通る）
+  private addShips(g: Grid, water: { label: Int32Array; edge: Set<number> }, b: Building, old: Ship[]) {
+    const n = g.n;
+    let body = -1;
+    const start: number[] = [];
+    for (let yy = b.y - 1; yy <= b.y + b.h; yy++)
+      for (let xx = b.x - 1; xx <= b.x + b.w; xx++)
+        if (g.inb(xx, yy) && water.label[g.idx(xx, yy)] >= 0) { body = water.label[g.idx(xx, yy)]; start.push(g.idx(xx, yy)); }
+    if (body < 0 || !water.edge.has(body)) return;
+    const wet = (x: number, y: number) => !g.inb(x, y) || water.label[y * n + x] === body;
+    const nav = new Uint8Array(n * n);
+    for (let y = 0; y < n; y++)
+      for (let x = 0; x < n; x++) {
+        let ok = water.label[y * n + x] === body;
+        for (let dy = -1; dy <= 1 && ok; dy++) for (let dx = -1; dx <= 1 && ok; dx++) if (!wet(x + dx, y + dy)) ok = false;
+        nav[y * n + x] = ok ? 1 : 0;
+      }
+    // 岸壁の前から幅広い水面へは、どの水面も通れる。幅広い水面に入ったらそこだけを通ってマップの端へ
+    const prev = new Int32Array(n * n).fill(-2);
+    const q: number[] = [];
+    for (const c of start) { prev[c] = -1; q.push(c); }
+    let end = -1;
+    for (let h = 0; h < q.length && end < 0; h++) {
+      const c = q[h], x = c % n, y = (c / n) | 0;
+      if (nav[c] && (x === 0 || y === 0 || x === n - 1 || y === n - 1)) { end = c; break; }
+      for (let d = 0; d < 8; d++) {
+        const nx = x + DX[d], ny = y + DY[d];
+        if (!g.inb(nx, ny)) continue;
+        const j = ny * n + nx;
+        if (prev[j] !== -2 || water.label[j] !== body) continue;
+        if (nav[c] && !nav[j]) continue; // 一度広い水面に出たら、狭いところへは戻らない
+        if (d & 1 && nav[c] && (!nav[y * n + nx] || !nav[ny * n + x])) continue;
+        if (d & 1 && (water.label[y * n + nx] !== body || water.label[ny * n + x] !== body)) continue;
+        prev[j] = c;
+        q.push(j);
+      }
+    }
+    if (end < 0) return;
+    // マスの列（外洋側から港へ）
+    const cells: number[] = [];
+    for (let c = end; c >= 0; c = prev[c]) cells.push(c);
+    const ex = end % n, ey = (end / n) | 0;
+    // 見通しのきくところは直線にする
+    const clear = (a: number, c: number) => {
+      const ax = a % n + 0.5, ay = ((a / n) | 0) + 0.5, cx = c % n + 0.5, cy = ((c / n) | 0) + 0.5;
+      const steps = Math.ceil(Math.hypot(cx - ax, cy - ay) * 3);
+      for (let k = 0; k <= steps; k++) {
+        const x = Math.floor(ax + ((cx - ax) * k) / steps), y = Math.floor(ay + ((cy - ay) * k) / steps);
+        if (!g.inb(x, y) || water.label[y * n + x] !== body) return false;
+        if (nav[a] && nav[c] && !nav[y * n + x]) return false;
+      }
+      return true;
+    };
+    const keep = [cells[0]];
+    let i = 0;
+    while (i < cells.length - 1) {
+      let j = cells.length - 1;
+      while (j > i + 1 && !clear(cells[i], cells[j])) j--;
+      keep.push(cells[j]);
+      i = j;
+    }
+    const pts: [number, number][] = [];
+    // マップの外から入ってくる
+    const ox = ex === 0 ? -1 : ex === n - 1 ? 1 : 0, oy = ey === 0 ? -1 : ey === n - 1 ? 1 : 0;
+    pts.push([(ex + 0.5 + ox * 25) * CELL, (ey + 0.5 + oy * 25) * CELL]);
+    for (const c of keep) pts.push([(c % n + 0.5) * CELL, (((c / n) | 0) + 0.5) * CELL]);
+    // 岸壁：敷地の水側に横付けする（向きは岸壁に沿う）
+    const [W, D] = lotDepth(b);
+    const [bx, bz] = lotToWorld(b, 0, -D / 2 - 13);
+    const [ax, az] = lotToWorld(b, 0, -D / 2 - 55);
+    const acx = Math.floor(ax / CELL), acy = Math.floor(az / CELL);
+    if (g.inb(acx, acy) && water.label[acy * n + acx] === body && clear(acy * n + acx, keep[keep.length - 2] ?? keep[0])) {
+      pts.pop();
+      pts.push([ax, az]);
+    }
+    void W;
+    const [fx, fz] = lotToWorld(b, 1, 0), [f0x, f0z] = lotToWorld(b, 0, 0);
+    const berthHd = Math.atan2(-(fx - f0x), -(fz - f0z)); // 敷地の -x 向き（到着した向きのまま）
+    const px = new Float32Array(pts.length), pz = new Float32Array(pts.length), acc = new Float32Array(pts.length);
+    pts.forEach(([x, z], k) => {
+      px[k] = x; pz[k] = z;
+      if (k) acc[k] = acc[k - 1] + Math.hypot(x - px[k - 1], z - pz[k - 1]);
+    });
+    const L = acc[pts.length - 1];
+    const count = L > 900 ? 2 : 1;
+    const cycle = (2 * L) / SHIP_SPEED + DOCK_SECS + AWAY_SECS + 40;
+    for (let k = 0; k < count; k++) {
+      const prevShip = old.find((s) => s.berth[0] === bx && s.berth[1] === bz && old.indexOf(s) % 2 === k % 2);
+      this.ships.push({ px, pz, acc, berth: [bx, bz, berthHd], t: prevShip?.t ?? (k * cycle) / 2 + Math.random() * 20, hd: prevShip?.hd ?? 0 });
+    }
+  }
+
+  // 航路の距離 d の位置
+  private along(s: Ship, d: number): [number, number, number] {
+    const m = s.acc.length;
+    let k = 1;
+    while (k < m - 1 && s.acc[k] < d) k++;
+    const seg = s.acc[k] - s.acc[k - 1] || 1, u = Math.max(0, Math.min(1, (d - s.acc[k - 1]) / seg));
+    const dx = s.px[k] - s.px[k - 1], dz = s.pz[k] - s.pz[k - 1];
+    return [s.px[k - 1] + dx * u, s.pz[k - 1] + dz * u, Math.atan2(dx, dz)];
+  }
+
+  private updateShips(dt: number) {
+    let k = 0;
+    for (const s of this.ships) {
+      const L = s.acc[s.acc.length - 1], run = L / SHIP_SPEED, fin = 20; // fin = 岸壁に寄せる時間
+      const cycle = 2 * run + 2 * fin + DOCK_SECS + AWAY_SECS;
+      s.t = (s.t + dt) % cycle;
+      let t = s.t, x: number, z: number, hd: number;
+      if (t < run) {
+        [x, z, hd] = this.along(s, t * SHIP_SPEED);
+      } else if ((t -= run) < fin * 2 + DOCK_SECS) {
+        // 岸壁へ寄せる → 停泊 → 離れる
+        const e = s.acc.length - 1;
+        const u = t < fin ? t / fin : t < fin + DOCK_SECS ? 1 : 1 - (t - fin - DOCK_SECS) / fin;
+        const sm = u * u * (3 - 2 * u);
+        x = s.px[e] + (s.berth[0] - s.px[e]) * sm;
+        z = s.pz[e] + (s.berth[1] - s.pz[e]) * sm;
+        hd = s.berth[2];
+      } else if ((t -= fin * 2 + DOCK_SECS) < run) {
+        [x, z, hd] = this.along(s, L - t * SHIP_SPEED);
+        hd += Math.PI;
+      } else continue; // 外洋にいる
+      // 向きはなめらかに変える
+      let dh = hd - s.hd;
+      dh = Math.atan2(Math.sin(dh), Math.cos(dh));
+      s.hd += dh * Math.min(1, dt * 0.6);
+      if (dt === 0 && s.hd === 0) s.hd = hd;
+      if (k >= 40) break;
+      this.q.setFromAxisAngle(this.up, s.hd);
+      this.mtx.compose(new THREE.Vector3(x, 0, z), this.q, new THREE.Vector3(1, 1, 1));
+      this.shipMesh.setMatrixAt(k++, this.mtx);
+    }
+    this.shipMesh.count = k;
+    this.shipMesh.instanceMatrix.needsUpdate = true;
+  }
+
   update(dt: number) {
+    this.updateShips(dt);
     const counts = [0, 0];
     for (const r of this.routes) {
       const len = Math.hypot(r.bx - r.ax, r.bz - r.az) || 1;

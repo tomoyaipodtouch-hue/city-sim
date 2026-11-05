@@ -1430,10 +1430,35 @@ function seaport(mb: MeshBuilder, f: LotFrame, rng: Rng) {
   }
   // 倉庫
   mb.box(-f.W / 2 + 3, 0, f.D / 2 - 14, f.W / 2 - 3, 9, f.D / 2 - 3, PALETTE.indWall[1], PAT.dock, PALETTE.steel);
-  // 停泊中の貨物船
-  mb.box(-f.W / 2 + 4, -2, -f.D / 2 - 14, f.W / 2 - 4, 3, -f.D / 2 - 5, PALETTE.dark);
-  for (let k = 0; k < 5; k++) mb.box(-f.W / 2 + 6 + k * 9, 3, -f.D / 2 - 13, -f.W / 2 + 13 + k * 9, 5.5, -f.D / 2 - 6, rng.pick(cols));
-  mb.box(f.W / 2 - 10, 3, -f.D / 2 - 13, f.W / 2 - 5, 12, -f.D / 2 - 6, PALETTE.white, PAT.apartment);
+  // 貨物船は外洋から行き来する（propsLayer）
+}
+
+// コンテナ船（船首が +z、長さ len m）
+export function containerShip(mb: MeshBuilder, len: number, seed = 1) {
+  const rng = new Rng(seed);
+  const w = len * 0.15, h = len / 2;
+  const hull = new THREE.Color(0x1f3550), red = new THREE.Color(0x8e2b22);
+  // 船体（喫水線の下は赤、上は紺）。船首は段々に細くする
+  mb.box(-w / 2, -3, -h, w / 2, -0.2, h - w, red);
+  mb.box(-w / 2, -0.2, -h, w / 2, 4, h - w, hull);
+  for (let k = 0; k < 3; k++) {
+    const ww = w * (0.8 - k * 0.25), z0 = h - w + k * (w / 3);
+    mb.box(-ww / 2, -2.5, z0, ww / 2, 4.2, z0 + w / 3, hull);
+  }
+  mb.box(-w / 2 + 0.3, 4, -h + 0.3, w / 2 - 0.3, 4.3, h - w, PALETTE.dark);
+  // コンテナ（列ごとに積む）
+  const cols = [0xc0392b, 0x2e6da4, 0xd9a400, 0x4c7a3b, 0x7f8c8d, 0xd35400, 0xe8e8e8].map((c) => new THREE.Color(c));
+  const bay = 6.4;
+  for (let z = -h + len * 0.2; z + bay < h - w; z += bay + 0.4)
+    for (let x = -w / 2 + 0.6; x + 2.5 <= w / 2 - 0.5; x += 2.5) {
+      const lv = 2 + rng.int(3);
+      for (let k = 0; k < lv; k++) mb.box(x, 4.3 + k * 2.6, z, x + 2.4, 4.3 + k * 2.6 + 2.5, z + bay, rng.pick(cols));
+    }
+  // 船橋（船尾）と煙突
+  const b0 = -h + len * 0.06, b1 = -h + len * 0.16;
+  mb.box(-w / 2 + 0.4, 4.3, b0, w / 2 - 0.4, 16, b1, PALETTE.white, PAT.apartment);
+  mb.box(-w / 2 - 1, 15, b1 - 3, w / 2 + 1, 16.5, b1, PALETTE.white);
+  mb.box(-1.5, 16, b0, 1.5, 21, b0 + 3, red);
 }
 
 // 飛行機（停まっているもの）
