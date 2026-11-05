@@ -325,6 +325,29 @@ describe('stage 2a roads', () => {
     expect(lean(mid)).toBeGreaterThan(lean(edge) + 0.3);
   });
 
+  it('track-only elevated stations go on straight (also diagonal) elevated track over a road', () => {
+    for (const diag of [false, true]) {
+      const w = new World(48);
+      w.g.heights.fill(6);
+      w.funds = 1e6;
+      const g = w.g;
+      const [x0, y0, x1, y1] = diag ? [5, 5, 35, 35] : [5, 20, 40, 20];
+      expect(w.exec({ t: 'road', x0, y0, x1, y1, road: RoadType.Road }).ok).toBe(true);
+      expect(w.exec({ t: 'transit', x0, y0, x1, y1, kind: 'erail' }).ok).toBe(true);
+      const [mx, my] = diag ? [20, 20] : [20, 20];
+      const r = w.exec({ t: 'estop', x: mx, y: my });
+      expect(r.ok).toBe(true);
+      let k = 0;
+      for (let i = 0; i < g.n * g.n; i++) if (g.estn[i]) k++;
+      expect(k).toBe(4);
+      // もう一度タップすると外れる
+      expect(w.exec({ t: 'estop', x: mx, y: my }).ok).toBe(true);
+      expect(g.estn.some((v) => v)).toBe(false);
+      // 線路のないところには置けない
+      expect(w.exec({ t: 'estop', x: 2, y: 44 }).ok).toBe(false);
+    }
+  });
+
   it('trees can be planted on empty land, but not on roads', () => {
     const w = new World(32);
     w.g.heights.fill(6);

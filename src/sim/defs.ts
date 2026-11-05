@@ -168,6 +168,8 @@ export const LINES: Record<LineKind, LineDef> = {
 export const BUS_WAIT = 5; // バスの平均の待ち時間（分）
 export const BUS_STOP_COST = 150;
 export const BUS_STOP_UPKEEP = 15;
+export const ESTOP_COST = 3500; // 線路の上だけの高架駅
+export const ESTOP_UPKEEP = 60; // 1駅・1か月
 export const FARE = 1.0; // 1日の乗客1人あたりの、月の運賃収入
 
 // ---- 公共サービス ----

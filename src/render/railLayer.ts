@@ -5,6 +5,7 @@ import { CELL, DX, DY, WATER_LEVEL } from '../sim/constants';
 import { CIVIC, CivicId, LINES, LineKind } from '../sim/defs';
 import type { Building } from '../sim/world';
 import { Buf, ROAD_LIFT } from './roadLayer';
+import { estopGroup } from '../sim/plan';
 
 const COL = {
   ballast: new THREE.Color(0x8a8378),
@@ -223,6 +224,8 @@ export class StationLayer {
       B.tri(t[0], t[1], t[2]);
       B.tri(t[0], t[2], t[3]);
     };
+    // 駅：敷地のある駅（まわりの線路にホーム）と、線路の上だけの高架駅
+    const groups: { kind: LineKind; cells: number[]; bx: number; bz: number; trackOnly: boolean }[] = [];
     for (const b of list) {
       if (!b.civic) continue;
       const kind = CIVIC[b.type as CivicId].transit;
@@ -231,9 +234,21 @@ export class StationLayer {
       const cells: number[] = [];
       for (let y = b.y - 1; y <= b.y + b.h; y++)
         for (let x = b.x - 1; x <= b.x + b.w; x++) if (g.inb(x, y) && mask[g.idx(x, y)]) cells.push(g.idx(x, y));
-      if (!cells.length) continue;
+      if (cells.length) groups.push({ kind, cells, bx: (b.x + b.w / 2) * CELL, bz: (b.y + b.h / 2) * CELL, trackOnly: false });
+    }
+    {
+      const seen = new Uint8Array(n * n);
+      for (let i = 0; i < n * n; i++) {
+        if (!g.estn[i] || seen[i] || !g.erail[i]) continue;
+        const cells = estopGroup(g, i).filter((c) => g.erail[c]);
+        for (const c of cells) seen[c] = 1;
+        const mid = cells[Math.min(1, cells.length - 1)];
+        groups.push({ kind: 'erail', cells, bx: ((mid % n) + 0.5) * CELL, bz: (((mid / n) | 0) + 0.5) * CELL, trackOnly: true });
+      }
+    }
+    for (const { kind, cells, bx, bz, trackOnly } of groups) {
+      const mask = g[kind];
       // 跨線橋は、駅舎にいちばん近いマスに置く
-      const bx = (b.x + b.w / 2) * CELL, bz = (b.y + b.h / 2) * CELL;
       let bridgeCell = cells[0], bd = Infinity;
       for (const c of cells) {
         const d = Math.hypot(((c % n) + 0.5) * CELL - bx, (((c / n) | 0) + 0.5) * CELL - bz);
@@ -266,7 +281,18 @@ export class StationLayer {
           const r0 = s * 3.9, r1 = s * 6.9;
           obox(cx, cz, ux, uz, -half, half, Math.min(r0, r1), Math.max(r0, r1), top + 3.4, top + 3.6, PC.roof);
         }
-        if (elevated) {
+        if (elevated && trackOnly && g.road[c]) {
+          // 道路の上の駅：高架下は道路のまま。ホームの外側に、歩道へ降りる階段の塔と、柱だけ
+          for (const a of [-half * 0.7, half * 0.7]) for (const s of [-1, 1]) obox(cx, cz, ux, uz, a - 0.4, a + 0.4, s * 5.6 - 0.4, s * 5.6 + 0.4, ground, top - 0.5, PC.hallWall);
+          if (c === bridgeCell) {
+            for (const s of [-1, 1]) {
+              const o0 = s * 6.7, o1 = s * 9.3;
+              obox(cx, cz, ux, uz, -3.5, 3.5, Math.min(o0, o1), Math.max(o0, o1), ground, top + 0.2, PC.hallWall);
+              obox(cx, cz, ux, uz, -3.3, 3.3, Math.min(o0, o1) + 0.1, Math.max(o0, o1) - 0.1, ground + 0.3, ground + 3.0, PC.hallGlass);
+              obox(cx, cz, ux, uz, -3.6, 3.6, Math.min(o0, o1) - 0.1, Math.max(o0, o1) + 0.1, top + 0.2, top + 0.6, PC.hallBand);
+            }
+          }
+        } else if (elevated) {
           // 高架下の駅舎：線路の真下に、ガラスの1階と白い壁、色の帯。ホームの床までを1つのかたまりにする
           const hallTop = top - 0.5;
           obox(cx, cz, ux, uz, -half, half, -6.6, 6.6, ground - 0.5, ground + 0.4, PC.slab);
@@ -278,7 +304,7 @@ export class StationLayer {
           // 1階の柱（ガラスの区切り）
           for (const a of [-half * 0.66, 0, half * 0.66]) for (const s of [-1, 1]) obox(cx, cz, ux, uz, a - 0.25, a + 0.25, s * 6.45 - 0.2, s * 6.45 + 0.2, ground + 0.4, ground + 3.8, PC.hallWall);
           // 入口のひさし（駅前広場の側）
-          if (c === bridgeCell) {
+          if (c === bridgeCell && !trackOnly) {
             const side = Math.sign((bx - cx) * -uz + (bz - cz) * ux) || 1;
             const o0 = side * 6.7, o1 = side * 9.6;
             obox(cx, cz, ux, uz, -4, 4, Math.min(o0, o1), Math.max(o0, o1), ground + 3.6, ground + 3.9, PC.roof);

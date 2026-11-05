@@ -1,6 +1,6 @@
 // ツールの定義と、ドラッグ中のプレビュー・確定
-import { BUS_STOP_COST, CIVIC, CivicId, DENSITY_NAMES, LINES, LineKind, ROADS, RoadType, ZoneType, ZONE_COST, ZONE_NAMES, POWER_LINE_COST, RAMP_COST } from '../sim/defs';
-import { normRect, planBulldoze, planBusStop, planCloverleaf, planTransitLine, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone, planURamp, planTerrain, TERRAIN_STEP, TerrainOp, planTrees, TREE_COST, snapRoadEnds } from '../sim/plan';
+import { BUS_STOP_COST, CIVIC, CivicId, DENSITY_NAMES, LINES, LineKind, ROADS, RoadType, ZoneType, ZONE_COST, ZONE_NAMES, POWER_LINE_COST, RAMP_COST , ESTOP_COST } from '../sim/defs';
+import { normRect, planBulldoze, planBusStop, planCloverleaf, planTransitLine, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone, planURamp, planTerrain, TERRAIN_STEP, TerrainOp, planTrees, TREE_COST, planEStop, snapRoadEnds } from '../sim/plan';
 import type { Command } from '../sim/world';
 import type { GameClient } from '../game';
 import type { CityRenderer } from '../render/renderer';
@@ -111,6 +111,7 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { tool: 'plop:station', name: CIVIC.station.name, note: yen(CIVIC.station.cost) },
       { tool: 'line:erail', name: '高架鉄道の線路', note: `${yen(LINES.erail.cost)}/マス` },
       { tool: 'plop:el_station', name: CIVIC.el_station.name, note: yen(CIVIC.el_station.cost) },
+      { tool: 'estop', name: '高架鉄道の駅（線路の上だけ・線路をタップ）', note: yen(ESTOP_COST) },
       { tool: 'line:mono', name: 'モノレールの線路', note: `${yen(LINES.mono.cost)}/マス` },
       { tool: 'plop:mono_station', name: CIVIC.mono_station.name, note: yen(CIVIC.mono_station.cost) },
       { tool: 'line:sub', name: '地下鉄の線路', note: `${yen(LINES.sub.cost)}/マス` },
@@ -263,6 +264,12 @@ export class ToolController {
       pv.setPath(g, []);
       return cells.size ? { text: `取り壊し ${yen(plan.cost)}`, bad: false } : { text: '取り壊すものがありません', bad: true };
     }
+    if (t === 'estop') {
+      const plan = planEStop(g, x, y);
+      pv.setTiles(g, plan.cells, () => (plan.ok ? (plan.remove ? 0xf0b429 : 0x5cc46a) : 0xe5534b));
+      pv.setPath(g, []);
+      return plan.ok ? { text: plan.remove ? '駅を外す' : `高架駅 ${yen(plan.cost)}`, bad: false } : { text: plan.reason, bad: true };
+    }
     if (t === 'busstop') {
       const plan = planBusStop(g, x, y);
       pv.setTiles(g, [g.idx(x, y)], () => (plan.ok ? (plan.remove ? 0xf0b429 : 0x5cc46a) : 0xe5534b));
@@ -329,13 +336,14 @@ export class ToolController {
     else if (t === 'ramp') cmd = { t: 'ramp', x: d.x1, y: d.y1 };
     else if (t === 'uramp') cmd = { t: 'uramp', x: d.x1, y: d.y1 };
     else if (t === 'busstop') cmd = { t: 'busstop', x: d.x1, y: d.y1 };
+    else if (t === 'estop') cmd = { t: 'estop', x: d.x1, y: d.y1 };
     else if (t === 'diamond') cmd = { t: 'diamond', x: d.x1, y: d.y1 };
     else if (t === 'clover') cmd = { t: 'clover', x: d.x1, y: d.y1 };
     if (!cmd) return;
     const res = await this.game.exec(cmd);
     if (res.ok) {
       if (cmd.t === 'road' || cmd.t === 'pline' || cmd.t === 'ramp' || cmd.t === 'uramp' || cmd.t === 'diamond' || cmd.t === 'clover' || cmd.t === 'transit') sfx.road();
-      else if (cmd.t === 'busstop') sfx.plop();
+      else if (cmd.t === 'busstop' || cmd.t === 'estop') sfx.plop();
       else if (cmd.t === 'zone') sfx.zone();
       else if (cmd.t === 'bulldoze' || cmd.t === 'terrain') sfx.bulldoze();
       else sfx.plop();

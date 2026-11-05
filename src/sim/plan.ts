@@ -1,7 +1,7 @@
 // ツールの計画（プレビューと実行の両方で使う）
 import { Grid } from './grid';
 import { DX, DY, MAX_ROAD_GRADE, CELL, WATER_LEVEL, dirOf, isDiag, opp } from './constants';
-import { ROADS, RoadType, ZoneType, ZONE_COST, POWER_LINE_COST, CIVIC, CivicId, BRIDGE_COST_MUL, MAX_BRIDGE, OVERPASS_LIFT, RAMP_COST, isHighway, isGroundHighway, isUrbanElevated, isUrbanGround, LINES, LineKind, BUS_STOP_COST } from './defs';
+import { ROADS, RoadType, ZoneType, ZONE_COST, POWER_LINE_COST, CIVIC, CivicId, BRIDGE_COST_MUL, MAX_BRIDGE, OVERPASS_LIFT, RAMP_COST, isHighway, isGroundHighway, isUrbanElevated, isUrbanGround, LINES, LineKind, BUS_STOP_COST, ESTOP_COST } from './defs';
 
 export interface LinePath {
   cells: number[]; // マスの番号
@@ -1734,4 +1734,79 @@ export function planTrees(g: Grid, x0: number, y0: number, x1: number, y1: numbe
       cells.push(i);
     }
   return { cells, cost: cells.length * TREE_COST };
+}
+
+// ---- 線路の上だけの高架駅（敷地なし）----
+// 高架鉄道のまっすぐな区間（斜めでもよい）の 4 マスにホームを作る。すでにある駅をタップすると外す
+export interface EStopPlan { ok: boolean; cells: number[]; remove: boolean; reason: string; cost: number }
+export const ESTOP_LEN = 4;
+export function estopGroup(g: Grid, start: number): number[] {
+  const n = g.n, out: number[] = [], seen = new Set([start]), st = [start];
+  while (st.length) {
+    const c = st.pop()!;
+    out.push(c);
+    const x = c % n, y = (c / n) | 0;
+    for (let d = 0; d < 8; d++) {
+      const nx = x + DX[d], ny = y + DY[d];
+      if (!g.inb(nx, ny)) continue;
+      const j = ny * n + nx;
+      if (seen.has(j) || !g.estn[j]) continue;
+      seen.add(j);
+      st.push(j);
+    }
+  }
+  return out;
+}
+// 駅から歩いて出入りできる一般の道路（ホームの下か、すぐ横）
+export function estopRoads(g: Grid, cells: number[]): number[] {
+  const n = g.n, out = new Set<number>();
+  for (const c of cells) {
+    const x = c % n, y = (c / n) | 0;
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!g.inb(x + dx, y + dy)) continue;
+        const j = g.idx(x + dx, y + dy), t = g.road[j];
+        if (t && !isHighway(t) && t !== RoadType.Ramp) out.add(j);
+      }
+  }
+  return [...out];
+}
+export function planEStop(g: Grid, x: number, y: number): EStopPlan {
+  const fail = (reason: string, cells: number[] = []): EStopPlan => ({ ok: false, cells, remove: false, reason, cost: 0 });
+  if (!g.inb(x, y)) return fail('マップの外です');
+  const i = g.idx(x, y);
+  if (g.estn[i]) return { ok: true, cells: estopGroup(g, i), remove: true, reason: '', cost: 0 };
+  const m = g.erail[i];
+  if (!m) return fail('高架鉄道の線路の上に置いてください', [i]);
+  const n = g.n;
+  let last: number[] = [i];
+  for (let d = 0; d < 4; d++) {
+    const along = (1 << d) | (1 << opp(d));
+    if ((m & along) !== along) continue;
+    // 4マスの並べ方：タップしたマスがなるべく真ん中になるように
+    for (const k0 of [-1, -2, 0, -3]) {
+      const cells: number[] = [];
+      let ok = true;
+      for (let k = k0; k < k0 + ESTOP_LEN; k++) {
+        const cx = x + DX[d] * k, cy = y + DY[d] * k;
+        if (!g.inb(cx, cy)) { ok = false; break; }
+        const c = cy * n + cx;
+        cells.push(c);
+        const mk = g.erail[c];
+        // まっすぐな区間だけ（分岐や曲がり角には置けない）。端のマスは外側へ曲がっていてもよい
+        const inner = k > k0 && k < k0 + ESTOP_LEN - 1;
+        if (!mk || (mk & along) === 0 || (inner && (mk & ~along) !== 0) || (inner && (mk & along) !== along)) ok = false;
+      }
+      last = cells;
+      if (!ok) continue;
+      // 端どうしもつながっていること
+      for (let k = 0; k + 1 < cells.length && ok; k++) if (!(g.erail[cells[k]] & (1 << d))) ok = false;
+      if (!ok) continue;
+      // ほかの駅のすぐ横には置かない
+      if (cells.some((c) => { const cx = c % n, cy = (c / n) | 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (g.inb(cx + dx, cy + dy) && g.estn[g.idx(cx + dx, cy + dy)]) return true; return false; })) return fail('ほかの駅のすぐ横には置けません', cells);
+      if (!estopRoads(g, cells).length) return fail('ホームの下か横に、一般の道路が必要です（歩いて出入りするため）', cells);
+      return { ok: true, cells, remove: false, reason: '', cost: ESTOP_COST };
+    }
+  }
+  return fail('高架鉄道のまっすぐな区間（4マス）に置いてください', last);
 }

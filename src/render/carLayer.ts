@@ -367,6 +367,8 @@ export class CarLayer {
       for (let y = b.y - 1; y <= b.y + b.h; y++)
         for (let x = b.x - 1; x <= b.x + b.w; x++) if (g.inb(x, y) && mask[g.idx(x, y)]) set.add(g.idx(x, y));
     }
+    // 線路の上だけの高架駅
+    for (let i = 0; i < g.estn.length; i++) if (g.estn[i] && g.erail[i]) (this.stations.get('erail') ?? this.stations.set('erail', new Set()).get('erail')!).add(i);
   }
   // 列車が占めているマス（進む向きで上り・下りの線路を分ける）
   private static occKey(cell: number, d: number) {

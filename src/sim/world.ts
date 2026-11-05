@@ -3,12 +3,12 @@ import { Grid, GRID_U8, GRID_F32, Ctl } from './grid';
 import { Rng } from './rng';
 import { DAYS_PER_MONTH, DX, DY } from './constants';
 import {
-  CIVIC, CivicId, plantPower, DEFAULT_TAX, DEPT_NAMES, Dept, DIFFICULTY, isHighway, SERVICE_DEPT, LineKind, LINES, FARE, BUS_STOP_UPKEEP, GROW, GROW_KINDS, GrowKind, IND_DENSITY_MUL, maxFloorsFor, POWER_LINE_UPKEEP, ROADS, RoadType,
+  CIVIC, CivicId, plantPower, DEFAULT_TAX, DEPT_NAMES, Dept, DIFFICULTY, isHighway, SERVICE_DEPT, LineKind, LINES, FARE, BUS_STOP_UPKEEP, ESTOP_UPKEEP, GROW, GROW_KINDS, GrowKind, IND_DENSITY_MUL, maxFloorsFor, POWER_LINE_UPKEEP, ROADS, RoadType,
   ZONE_KINDS, ZoneType,
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
 import {
-  applyCloverleaf, applyDiamond, applyTerrain, applyURamp, linkURampMiddles, linkUrbanEnds, planTrees, planURamp, snapRoadEnds, planTerrain, TerrainOp, applyRamp, applyTransitLine, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
+  applyCloverleaf, applyDiamond, applyTerrain, applyURamp, linkURampMiddles, linkUrbanEnds, planTrees, planEStop, estopGroup, estopRoads, planURamp, snapRoadEnds, planTerrain, TerrainOp, applyRamp, applyTransitLine, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
 } from './plan';
 import { CELL } from './constants';
 import { ADVISORS, Advice, computeRating, Loan, LOAN_AMOUNTS, loanRate, makeAdvice, MAX_LOANS, newLoan, ordinanceCost, ordinanceEffects, OrdinanceEffects, OrdinanceId, ORDINANCES, payLoan, rewardUnlocked, REWARD_REQ } from './governance';
@@ -160,6 +160,7 @@ export type Command =
   | { t: 'busstop'; x: number; y: number }
   | { t: 'junction'; cell: number; ctl: number; split: number; flags: number }
   | { t: 'bridgeStyle'; cell: number; style: number }
+  | { t: 'estop'; x: number; y: number }
   | { t: 'funding'; dept: Dept; value: number }
   | { t: 'facilityFund'; id: number; value: number }
   | { t: 'ordinance'; id: OrdinanceId; on: boolean }
@@ -466,6 +467,19 @@ export class World {
         this.afterGridChange();
         return { ok: true, cost: plan.cost };
       }
+      case 'estop': {
+        const plan = planEStop(g, c.x, c.y);
+        if (!plan.ok) return { ok: false, msg: plan.reason };
+        if (plan.remove) {
+          for (const i of plan.cells) g.estn[i] = 0;
+          this.afterGridChange();
+          return { ok: true, msg: '駅を外しました' };
+        }
+        if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
+        for (const i of plan.cells) g.estn[i] = 1;
+        this.afterGridChange();
+        return { ok: true, cost: plan.cost };
+      }
       case 'busstop': {
         const plan = planBusStop(g, c.x, c.y);
         if (!plan.ok) return { ok: false, msg: plan.reason };
@@ -577,6 +591,8 @@ export class World {
 
   private afterGridChange() {
     regradeApproaches(this.g);
+    // 線路がなくなった駅のホームは消す
+    for (let i = 0; i < this.g.estn.length; i++) if (this.g.estn[i] && !this.g.erail[i]) this.g.estn[i] = 0;
     this.gridVersion++;
     this.candidatesDirty = true;
     this.updatePower();
@@ -1356,6 +1372,17 @@ export class World {
       }
       stations.push({ kind: def.transit, roadCells, lineCells });
     }
+    // 線路の上だけの高架駅
+    {
+      const seen = new Uint8Array(N);
+      for (let i = 0; i < N; i++) {
+        if (!g.estn[i] || seen[i]) continue;
+        const cells = estopGroup(g, i);
+        for (const c of cells) seen[c] = 1;
+        const roadCells = estopRoads(g, cells);
+        if (roadCells.length) stations.push({ kind: 'erail', roadCells, lineCells: cells.filter((c) => g.erail[c]) });
+      }
+    }
     // 道路に重ねたバス停
     const roadStops: number[] = [];
     for (let i = 0; i < N; i++) if (g.bstop[i] && g.road[i]) roadStops.push(i);
@@ -1671,6 +1698,7 @@ export class World {
       if (g.up[i]) exp.道路 += ROADS[g.up[i]].upkeep;
       for (const k of ['rail', 'erail', 'mono', 'sub'] as const) if (g[k][i]) exp.公共交通 += LINES[k].upkeep;
       if (g.bstop[i]) exp.公共交通 += BUS_STOP_UPKEEP;
+      if (g.estn[i]) exp.公共交通 += ESTOP_UPKEEP / 4;
       if (g.pline[i]) exp.電力 += POWER_LINE_UPKEEP;
     }
     // 条例（カジノは収入）
