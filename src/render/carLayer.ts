@@ -235,7 +235,11 @@ export class CarLayer {
     build(this.people, traffic, 0.006);
     if (riders && riders.length === 5 * N) {
       // バスは40人に1台、電車は1両に乗る人数を多めに見て台数を決める
-      build(this.bus, riders.subarray(0, N), 0.002);
+      // バスは前の 4 割の台数にし、バス停の数の 1.5 倍までにする
+      build(this.bus, riders.subarray(0, N), 0.0008);
+      let stops = 0;
+      for (let i = 0; i < N; i++) if (g.bstop[i]) stops++;
+      this.bus.target = Math.min(this.bus.target, Math.max(1, Math.ceil(stops * 1.5)));
       this.lineFleets.forEach((f, i) => build(f, riders.subarray((i + 1) * N, (i + 2) * N), 0.0012 / f.carsPer));
     }
   }
