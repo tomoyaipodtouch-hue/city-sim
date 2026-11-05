@@ -316,7 +316,11 @@ export class RoadLayer {
           line(pts, (p) => -(p.hw - 0.45), COL.white, 0.15);
           line(pts, (p) => p.hw - 0.45, COL.white, 0.15);
           break;
-        // ランプは短く斜めに重なるので、線は引かない
+        case RoadType.Ramp:
+          // ランプ：両端の白線（真ん中の線はない1車線）
+          line(pts, (p) => -(p.hw - 0.4), COL.white, 0.15);
+          line(pts, (p) => p.hw - 0.4, COL.white, 0.15);
+          break;
       }
     };
     // 円（転回場、ラウンドアバウト、つなぎ目）
@@ -660,6 +664,7 @@ export class RoadLayer {
             if (isHighway(level ? g.up[j] : g.road[j])) sides[DX[sd] * px + DY[sd] * pz > 0 ? 1 : 0] = false;
           }
           ribbon(pts, t, sides);
+          markings(pts, t);
           if (elevated) deckUnder(pts, level ? ground : null);
           continue;
         }
@@ -714,8 +719,19 @@ export class RoadLayer {
             if (elevated) deckUnder(pts, level ? ground : null);
           }
         }
-        // ランプへ分かれる部分：壁も線もない路面
-        for (const a of ramps) ribbon(armPts(a, 0).reverse(), t, [false, false]);
+        // ランプへ分かれる部分：壁のない路面。ランプの外側の縁に白線を続ける（本線側は本線の車線にかかるので引かない）
+        const mu = pair ? [pair[0].ux, pair[0].uz] : main.length ? [main[0].ux, main[0].uz] : null;
+        for (const a of ramps) {
+          const pts = armPts(a, 0).reverse();
+          ribbon(pts, t, [false, false]);
+          if (!mu) continue;
+          const p0 = pts[0], p1 = pts[pts.length - 1];
+          const dx = p1.x - p0.x, dz = p1.z - p0.z, l = Math.hypot(dx, dz) || 1;
+          const nx = -dz / l, nz = dx / l;
+          const far = (sd: number) => Math.abs((p0.x + nx * sd * 3 - cx) * mu[1] - (p0.z + nz * sd * 3 - cz) * mu[0]);
+          const outer = far(1) > far(-1) ? 1 : -1;
+          line(pts, (p) => outer * (p.hw - 0.4), COL.white, 0.15);
+        }
         disc(cx, cz, Math.min(...arms.map((q) => q.w)) / 2 > 0 ? ch : ch, Math.min(...arms.map((q) => q.w)) / 2, asph);
         continue;
       }

@@ -39,7 +39,7 @@ export const ROADS: Record<number, RoadDef> = {
   [RoadType.Avenue]: { id: RoadType.Avenue, name: '大通り', speedKmh: 60, capacity: 3600, cost: 30, upkeep: 0.3, width: 11, oneWay: true, wide: true, rank: 4 },
   [RoadType.Highway]: { id: RoadType.Highway, name: '高架高速道路', speedKmh: 100, capacity: 7000, cost: 120, upkeep: 1.0, width: 13, oneWay: true, wide: true, rank: 6, highway: true, elevated: true, lift: 10 },
   [RoadType.GroundHighway]: { id: RoadType.GroundHighway, name: '地上の高速道路', speedKmh: 90, capacity: 6500, cost: 60, upkeep: 0.6, width: 13, oneWay: true, wide: true, rank: 5, highway: true },
-  [RoadType.Ramp]: { id: RoadType.Ramp, name: 'ランプ', speedKmh: 50, capacity: 3000, cost: 0, upkeep: 0.3, width: 9, rank: 0 },
+  [RoadType.Ramp]: { id: RoadType.Ramp, name: 'ランプ', speedKmh: 60, capacity: 3000, cost: 0, upkeep: 0.3, width: 7.5, rank: 0 },
   [RoadType.UrbanHighway]: { id: RoadType.UrbanHighway, name: '高架の都市高速（片側1車線）', speedKmh: 80, capacity: 3400, cost: 90, upkeep: 0.7, width: 9, rank: 6, highway: true, elevated: true, lift: 9 },
   [RoadType.UrbanGroundHighway]: { id: RoadType.UrbanGroundHighway, name: '地上の都市高速（片側1車線）', speedKmh: 80, capacity: 3200, cost: 45, upkeep: 0.45, width: 9, rank: 5, highway: true },
   [RoadType.UrbanHighway1W]: { id: RoadType.UrbanHighway1W, name: '高架の都市高速（一方通行2車線）', speedKmh: 80, capacity: 5100, cost: 100, upkeep: 0.8, width: 9, oneWay: true, rank: 6, highway: true, elevated: true, lift: 9 },

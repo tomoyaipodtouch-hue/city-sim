@@ -478,10 +478,14 @@ export class CarLayer {
       for (const c of f.cars) {
         const def = ROADS[line ? 1 : g.nodeType(c.from)] || ROADS[1];
         // 曲がるときは減速する。ただし高速道路（都市高速を含む）の本線のカーブはそのままの速さ
-        const turning = c.din !== c.d && !(!line && !walk && isHighway(g.nodeType(c.from)) && isHighway(g.nodeType(c.to)));
+        // ランプから本線への合流・本線からランプへの分岐も、減速しない（合流は本線の速さまで加速する）
+        const tf = line || walk ? 0 : g.nodeType(c.from), tt = line || walk ? 0 : g.nodeType(c.to);
+        const fast = (q: number) => isHighway(q) || q === RoadType.Ramp;
+        const turning = c.din !== c.d && !(fast(tf) && fast(tt) && (isHighway(tf) || isHighway(tt)));
+        const merging = tf === RoadType.Ramp && isHighway(tt);
         const len = CarLayer.cellLen(c);
         const cg = line || walk ? 1 : Math.max(this.cong![c.from], 1);
-        const kmh = walk ? 4.5 + (c.col % 3) * 0.6 : line ? LINES[f.track as LineKind].speedKmh * 1.2 : def.speedKmh * (f.track === 'bus' ? 0.8 : f.trailer ? 0.85 : 1);
+        const kmh = walk ? 4.5 + (c.col % 3) * 0.6 : line ? LINES[f.track as LineKind].speedKmh * 1.2 : (merging ? ROADS[tt].speedKmh : def.speedKmh) * (f.track === 'bus' ? 0.8 : f.trailer ? 0.85 : 1);
         const speed = (((kmh / 3.6) * 0.9) / cg) * (turning ? 0.6 : 1);
         let adv = (dt * speed) / len;
         if (f.mid && occ) {
