@@ -233,13 +233,17 @@ export class CityRenderer {
       if (key !== this.lastRoadKey || heights) {
         this.lastRoadKey = key;
         this.roads.rebuild(g);
-        this.rails.rebuild(g);
+        this.rails.rebuild(g, this.stationCells());
         this.lights.rebuild(g);
         this.dirty.trees = true; // 街路樹
         this.stationsMesh.rebuild(g, this.buildingList);
       }
     }
     if (this.dirty.buildings || heights) {
+      // 駅が増えたり減ったりしたら、防音壁を開け直す
+      const sc = this.stationCells();
+      const sig = [...sc].sort((a, b) => a - b).join(',');
+      if (sig !== this.lastStationSig) { this.lastStationSig = sig; this.rails.rebuild(g, sc); }
       if (this.buildings.update(g, this.buildingList, heights)) this.dirty.trees = true;
       updateAO(g, this.buildingList);
       this.lights.setBeacons(this.buildings.allBeacons());
@@ -256,6 +260,17 @@ export class CityRenderer {
   }
 
   private lastRoadKey = -1;
+  private lastStationSig = '';
+  // 高架鉄道の駅のホームがあるマス（敷地のある駅のまわりと、線路の上だけの駅）
+  private stationCells(): Set<number> {
+    const g = this.grid!, out = new Set<number>();
+    for (const b of this.buildingList) {
+      if (!b.civic || b.type !== 'el_station') continue;
+      for (let y = b.y - 1; y <= b.y + b.h; y++) for (let x = b.x - 1; x <= b.x + b.w; x++) if (g.inb(x, y) && g.erail[g.idx(x, y)]) out.add(g.idx(x, y));
+    }
+    for (let i = 0; i < g.estn.length; i++) if (g.estn[i]) out.add(i);
+    return out;
+  }
   private roadKey(g: Grid) {
     let h = 2166136261;
     const mix = (v: number) => { h = Math.imul(h ^ v, 16777619); };

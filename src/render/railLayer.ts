@@ -14,6 +14,13 @@ const COL = {
   concrete: new THREE.Color(0xb5b1a8),
   beam: new THREE.Color(0xd6d3cc),
   tube: new THREE.Color(0xff8a3d),
+  slab: new THREE.Color(0xa7a59f), // スラブ軌道の板
+  deck: new THREE.Color(0xc4c1b9),
+  pad: new THREE.Color(0x6f6c66),
+  barrierGlass: new THREE.Color(0x9cc9d4), // ガラスの防音壁
+  barrierFrame: new THREE.Color(0x8d969c),
+  pole: new THREE.Color(0x9aa1a7),
+  wire: new THREE.Color(0x2c2f33),
 };
 
 interface P {
@@ -31,6 +38,7 @@ export class RailLayer {
   group = new THREE.Group();
   private solid: THREE.Mesh;
   private underground: THREE.Mesh;
+  private glass: THREE.Mesh; // ガラスの防音壁（半透明）
   showSubway = false;
 
   constructor() {
@@ -44,7 +52,8 @@ export class RailLayer {
     );
     this.underground.renderOrder = 10;
     this.underground.visible = false;
-    this.group.add(this.solid, this.underground);
+    this.glass = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.38, depthWrite: false, side: THREE.DoubleSide }));
+    this.group.add(this.solid, this.underground, this.glass);
   }
 
   setUnderground(on: boolean) {
@@ -60,9 +69,23 @@ export class RailLayer {
     return ground + LINES[kind].lift;
   }
 
-  rebuild(g: Grid) {
+  // stationCells：駅のホームがあるマス（防音壁を開ける）
+  rebuild(g: Grid, stationCells: Set<number> = new Set()) {
     const n = g.n, N = n * n;
-    const B = new Buf(), U = new Buf();
+    const B = new Buf(), U = new Buf(), G = new Buf();
+    // 向きのついた箱（中心 cx, cz、u = 線路の向き）
+    const obox = (cx: number, cz: number, ux: number, uz: number, a0: number, a1: number, o0: number, o1: number, y0: number, y1: number, c: THREE.Color) => {
+      const px = -uz, pz = ux;
+      const P = (a: number, o: number) => [cx + ux * a + px * o, cz + uz * a + pz * o];
+      const q = [P(a0, o0), P(a1, o0), P(a1, o1), P(a0, o1)];
+      for (let k = 0; k < 4; k++) {
+        const [x0, z0] = q[k], [x1, z1] = q[(k + 1) % 4];
+        B.wall(x0, z0, y0, y1, x1, z1, y0, y1, c);
+      }
+      const t = q.map(([x, z]) => B.v(x, y1, z, c));
+      B.tri(t[0], t[1], t[2]);
+      B.tri(t[0], t[2], t[3]);
+    };
 
     // 中心線に沿った帯（off = 中心からの横のずれ、w = 幅、dy = 高さのずれ）
     const strip = (buf: Buf, pts: P[], off: number, w: number, dy: number, c: THREE.Color) => {
@@ -78,14 +101,14 @@ export class RailLayer {
       }
     };
     // 帯の両側の縦の面
-    const sides = (pts: P[], half: number, y0: number, y1: number, c: THREE.Color, off = 0) => {
+    const sides = (pts: P[], half: number, y0: number, y1: number, c: THREE.Color, off = 0, buf: Buf = B) => {
       for (let k = 0; k + 1 < pts.length; k++) {
         const a = pts[k], b = pts[k + 1];
         const dx = b.x - a.x, dz = b.z - a.z, l = Math.hypot(dx, dz) || 1;
         const px = -dz / l, pz = dx / l;
         for (const s of [-1, 1]) {
           const o = off + s * half;
-          B.wall(a.x + px * o, a.z + pz * o, a.h + y0, a.h + y1, b.x + px * o, b.z + pz * o, b.h + y0, b.h + y1, c);
+          buf.wall(a.x + px * o, a.z + pz * o, a.h + y0, a.h + y1, b.x + px * o, b.z + pz * o, b.h + y0, b.h + y1, c);
         }
       }
     };
@@ -155,13 +178,25 @@ export class RailLayer {
               strip(B, pts, o + 0.72, 0.14, 0.3, COL.steel);
             }
           } else if (kind === 'erail') {
-            strip(B, pts, 0, 9.6, 0, COL.concrete);
-            sides(pts, 4.8, -1.1, 0.9, COL.concrete);
+            // 床版（厚みのある側面）
+            strip(B, pts, 0, 9.6, 0, COL.deck);
+            sides(pts, 4.8, -1.4, 0.6, COL.concrete);
+            // スラブ軌道：コンクリートの板と、その上のレール
             for (const o of [-T, T]) {
-              sleepers(pts, 0.1, o);
-              strip(B, pts, o - 0.72, 0.14, 0.28, COL.steel);
-              strip(B, pts, o + 0.72, 0.14, 0.28, COL.steel);
+              strip(B, pts, o, 2.5, 0.18, COL.slab);
+              sides(pts, 1.25, 0, 0.18, COL.pad, o);
+              strip(B, pts, o - 0.72, 0.16, 0.36, COL.steel);
+              strip(B, pts, o + 0.72, 0.16, 0.36, COL.steel);
             }
+            // ガラスの防音壁（駅のホームのところは開ける）
+            if (!stationCells.has(i)) {
+              sides(pts, 4.75, 0.6, 2.6, COL.barrierGlass, 0, G);
+              sides(pts, 4.75, 2.6, 2.8, COL.barrierFrame);
+              strip(B, pts, -4.75, 0.25, 2.8, COL.barrierFrame);
+              strip(B, pts, 4.75, 0.25, 2.8, COL.barrierFrame);
+            }
+            // 架線（上り・下りの上に細い線）
+            for (const o of [-T, T]) strip(B, pts, o, 0.07, 6.0, COL.wire);
           } else {
             // モノレール：コンクリートの桁（軌道けた）を2本
             for (const o of [-T, T]) {
@@ -170,8 +205,28 @@ export class RailLayer {
             }
           }
         }
-        // 橋脚（マスの中心に1本）
-        if (kind === 'erail' && ch - ground > 2) B.box(cx - 1.0, ground - 0.5, cz - 1.0, cx + 1.0, ch - 1.1, cz + 1.0, COL.concrete);
+        if (kind === 'erail') {
+          // 線路の向き（まっすぐつながる向きを優先）
+          let d = -1;
+          for (let k = 0; k < 4; k++) if (m & (1 << k) && m & (1 << (k + 4))) { d = k; break; }
+          if (d < 0) for (let k = 0; k < 8; k++) if (m & (1 << k)) { d = k & 3; break; }
+          const len = Math.hypot(DX[d], DY[d]);
+          const ux = DX[d] / len, uz = DY[d] / len;
+          if (ch - ground > 2) {
+            // ラーメン高架橋：左右2本の柱と横の梁。下が道路なら、柱は歩道の外側に
+            const wide = g.road[i] !== 0;
+            const co = wide ? 6.9 : 3.3, bh = ch - 1.4;
+            for (const s of [-1, 1]) obox(cx, cz, ux, uz, -0.55, 0.55, s * co - 0.55, s * co + 0.55, ground - 0.5, bh, COL.concrete);
+            obox(cx, cz, ux, uz, -0.6, 0.6, -co - 0.6, co + 0.6, bh - 1.1, bh, COL.concrete);
+          }
+          // 架線柱（2マスおきの門型）
+          if ((x + y) % 2 === 0) {
+            const top = ch + 6.6;
+            for (const s of [-1, 1]) obox(cx, cz, ux, uz, -0.18, 0.18, s * 5.15 - 0.18, s * 5.15 + 0.18, ch + 0.6, top, COL.pole);
+            obox(cx, cz, ux, uz, -0.14, 0.14, -5.3, 5.3, top - 0.35, top, COL.pole);
+            for (const o of [-TRACK_GAP, TRACK_GAP]) obox(cx, cz, ux, uz, -0.05, 0.05, o - 0.05, o + 0.05, ch + 6.0, top - 0.35, COL.wire);
+          }
+        }
         if (kind === 'mono' && ch - ground > 2) {
           // T字の柱の上に、2本の桁を載せる
           B.box(cx - 0.6, ground - 0.5, cz - 0.6, cx + 0.6, ch - 2.4, cz + 0.6, COL.beam);
@@ -179,7 +234,7 @@ export class RailLayer {
         }
       }
     }
-    for (const [mesh, buf] of [[this.solid, B], [this.underground, U]] as const) {
+    for (const [mesh, buf] of [[this.solid, B], [this.underground, U], [this.glass, G]] as const) {
       mesh.geometry.dispose();
       mesh.geometry = buf.geometry();
     }

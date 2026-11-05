@@ -215,13 +215,17 @@ export function trainCar(kind: TrainKind, head: boolean) {
   const mono = kind === 'mono';
   const W = mono ? 2.7 : 2.9;
   const y0 = mono ? -0.5 : 0.95, y1 = mono ? 2.9 : 4.0; // 車体の下と上
-  const BODY = mono ? 0xf2f4f6 : 0xe4e7ea;
+  // 高架鉄道は通勤電車：ステンレスの銀色の車体に色の帯、片側4ドア、平らな前面
+  const commuter = kind === 'erail';
+  const BODY = mono ? 0xf2f4f6 : commuter ? 0xc9ced3 : 0xe4e7ea;
   const parts: THREE.BufferGeometry[] = [];
   // 車体（横から見た輪郭）。先頭車は前が斜め、モノレールは丸みのある前
   const front: P[] = head
     ? mono
       ? [[hl - 2.6, y0], [hl - 0.6, y0 + 0.4], [hl, y0 + 1.4], [hl - 0.3, y1 - 0.8], [hl - 1.6, y1]]
-      : [[hl - 0.2, y0], [hl, y0 + 0.7], [hl, y0 + 1.6], [hl - 1.4, y1 - 0.15], [hl - 1.8, y1]]
+      : commuter
+        ? [[hl, y0], [hl, y1 - 0.35], [hl - 0.35, y1]]
+        : [[hl - 0.2, y0], [hl, y0 + 0.7], [hl, y0 + 1.6], [hl - 1.4, y1 - 0.15], [hl - 1.8, y1]]
     : [[hl, y0], [hl, y1]];
   parts.push(side([[-hl, y0], ...front, [-hl, y1]], W, BODY));
   // 屋根のまるみ（少し細い板を重ねる）
@@ -233,12 +237,20 @@ export function trainCar(kind: TrainKind, head: boolean) {
   parts.push(box(W + 0.05, 0.28, L - 0.4, 0, winY - winH / 2 - 0.25, 0, S.stripe));
   parts.push(box(W + 0.05, 0.12, L - 0.4, 0, winY - winH / 2 - 0.5, 0, S.stripe2));
   // ドア（片側 3〜4 か所、暗い色）
-  const doors = mono ? [-3.5, 2.0] : [-6.0, -1.5, 3.0];
-  for (const z of doors) parts.push(box(W + 0.07, mono ? 1.7 : 2.0, 1.2, 0, (mono ? 1.0 : 2.1), z + (head ? -0.8 : 0), 0xb4babf));
+  const doors = mono ? [-3.5, 2.0] : commuter ? [-6.4, -2.15, 2.15, 6.4] : [-6.0, -1.5, 3.0];
+  for (const z of doors) {
+    const dz = z + (head && !commuter ? -0.8 : head ? -0.6 : 0);
+    if (commuter) {
+      // 両開きのドア（銀色）と、ドアの窓
+      parts.push(box(W + 0.07, 2.0, 1.3, 0, 2.1, dz, 0xb2b8be));
+      parts.push(box(W + 0.09, 0.9, 0.9, 0, 2.55, dz, GLASS));
+    } else parts.push(box(W + 0.07, mono ? 1.7 : 2.0, 1.2, 0, (mono ? 1.0 : 2.1), dz, 0xb4babf));
+  }
   if (head) {
     // 前面のガラスとライト
     const gz = mono ? hl - 0.9 : hl - 0.75;
-    parts.push(side(mono ? [[hl - 1.0, y0 + 1.4], [hl - 0.25, y0 + 1.5], [hl - 0.55, y1 - 0.85], [hl - 1.5, y1 - 0.2]] : [[hl - 0.05, y0 + 1.7], [hl - 0.05, y0 + 1.75], [hl - 1.35, y1 - 0.2], [hl - 1.5, y1 - 0.25]], W - 0.3, GLASS));
+    parts.push(side(mono ? [[hl - 1.0, y0 + 1.4], [hl - 0.25, y0 + 1.5], [hl - 0.55, y1 - 0.85], [hl - 1.5, y1 - 0.2]] : commuter ? [[hl - 0.05, y0 + 1.5], [hl + 0.04, y0 + 1.5], [hl + 0.04, y1 - 0.5], [hl - 0.05, y1 - 0.5]] : [[hl - 0.05, y0 + 1.7], [hl - 0.05, y0 + 1.75], [hl - 1.35, y1 - 0.2], [hl - 1.5, y1 - 0.25]], W - 0.3, GLASS));
+    if (commuter) parts.push(box(W - 0.2, 0.5, 0.1, 0, y1 - 0.25, hl + 0.02, 0x22262b)); // 行き先表示
     parts.push(box(0.5, 0.2, 0.08, -W / 2 + 0.55, y0 + 0.75, gz + 0.7, HEAD), box(0.5, 0.2, 0.08, W / 2 - 0.55, y0 + 0.75, gz + 0.7, HEAD));
     parts.push(box(W - 0.6, 0.35, 0.1, 0, y0 + 0.35, hl - 0.1, S.stripe)); // 前の色の帯
   }
