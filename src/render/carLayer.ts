@@ -241,7 +241,8 @@ export class CarLayer {
       for (let i = 0; i < N; i++) if (g.bstop[i]) stops++;
       stops += this.busStopBuildings;
       this.bus.target = Math.min(this.bus.target, Math.max(1, Math.ceil(stops * 1.5)));
-      this.lineFleets.forEach((f, i) => build(f, riders.subarray((i + 1) * N, (i + 2) * N), 0.0012 / f.carsPer));
+      // 高架鉄道（i = 1）は本数を 4 割に
+      this.lineFleets.forEach((f, i) => build(f, riders.subarray((i + 1) * N, (i + 2) * N), (0.0012 / f.carsPer) * (i === 1 ? 0.4 : 1)));
     }
   }
 
