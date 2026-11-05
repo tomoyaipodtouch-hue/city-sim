@@ -513,7 +513,12 @@ export class World {
       case 'bridgeStyle': {
         // つながっている橋のマス全部の形を変える
         const n = g.n;
-        if (c.cell < 0 || c.cell >= n * n || !g.road[c.cell] || !(g.deck[c.cell] > 0)) return { ok: false, msg: '橋が見つかりません' };
+        if (c.cell < 0 || c.cell >= n * n) return { ok: false, msg: '橋が見つかりません' };
+        // 道路の橋か、川を渡る高架鉄道
+        const railB = (i: number) => g.erail[i] !== 0 && g.isWater(i % n, (i / n) | 0);
+        const roadB = (i: number) => g.road[i] !== 0 && g.deck[i] > 0;
+        const same = railB(c.cell) && !roadB(c.cell) ? railB : roadB;
+        if (!same(c.cell)) return { ok: false, msg: '橋が見つかりません' };
         const st = [c.cell], seen = new Set(st);
         while (st.length) {
           const i = st.pop()!;
@@ -523,7 +528,7 @@ export class World {
             for (let dx = -1; dx <= 1; dx++) {
               if (!g.inb(x + dx, y + dy)) continue;
               const j = g.idx(x + dx, y + dy);
-              if (seen.has(j) || !g.road[j] || !(g.deck[j] > 0)) continue;
+              if (seen.has(j) || !same(j)) continue;
               seen.add(j);
               st.push(j);
             }

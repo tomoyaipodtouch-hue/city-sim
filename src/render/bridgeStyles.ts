@@ -41,7 +41,32 @@ export function bridgeGroups(g: Grid): number[][] {
   return out;
 }
 
-export function addBridgeStructures(g: Grid, O: Buf, lift: number) {
+// 高架鉄道の、水の上の区間（川を渡る橋）
+export function railBridgeGroups(g: Grid): number[][] {
+  const n = g.n, N = n * n, seen = new Uint8Array(N), out: number[][] = [];
+  const isB = (i: number) => g.erail[i] !== 0 && g.isWater(i % n, (i / n) | 0);
+  for (let i = 0; i < N; i++) {
+    if (seen[i] || !isB(i)) continue;
+    const comp: number[] = [], st = [i];
+    seen[i] = 1;
+    while (st.length) {
+      const c = st.pop()!;
+      comp.push(c);
+      const x = c % n, y = (c / n) | 0;
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          if (!g.inb(x + dx, y + dy)) continue;
+          const j = (y + dy) * n + x + dx;
+          if (!seen[j] && isB(j)) { seen[j] = 1; st.push(j); }
+        }
+    }
+    out.push(comp);
+  }
+  return out;
+}
+
+// rail を渡すと、高架鉄道の橋（水の上の区間）に構造物を付ける。height = 線路の高さ
+export function addBridgeStructures(g: Grid, O: Buf, lift: number, rail?: { height: (c: number) => number }) {
   const n = g.n;
   // 細い部材（両面の角柱）
   const beam = (ax: number, ay: number, az: number, bx: number, by: number, bz: number, r: number, c: THREE.Color) => {
@@ -67,8 +92,10 @@ export function addBridgeStructures(g: Grid, O: Buf, lift: number) {
     }
   };
 
-  for (const comp of bridgeGroups(g)) {
+  for (const comp of rail ? railBridgeGroups(g) : bridgeGroups(g)) {
     const style = g.bstyle[comp[0]];
+    // 高架鉄道の桁橋は、ふつうの高架の柱（ラーメン高架橋）のままにする
+    if (rail && style === 0) continue;
     // 橋の向き：いちばん離れた2マス
     let A = comp[0], B = comp[0], best = -1;
     if (comp.length > 1) {
@@ -106,10 +133,10 @@ export function addBridgeStructures(g: Grid, O: Buf, lift: number) {
       for (const c of comp) s += ((c % n + 0.5) * CELL - mx) * px + ((((c / n) | 0) + 0.5) * CELL - mz) * pz;
       off = s / comp.length;
     }
-    const W = Math.max(half - Math.abs(off), 0) + 6.5; // 中心から構造物までの距離
+    const W = rail ? 6.2 : Math.max(half - Math.abs(off), 0) + 6.5; // 中心から構造物までの距離
     let hs = 0;
-    for (const c of comp) hs += g.deck[c];
-    const H = hs / comp.length + lift; // 路面の高さ
+    for (const c of comp) hs += rail ? rail.height(c) : g.deck[c];
+    const H = hs / comp.length + (rail ? 0 : lift); // 路面の高さ
     const base = WATER_LEVEL - 2;
     const P = (s: number, side: number, y: number): [number, number, number] => [sx + ux * s + px * (off + side * W), y, sz + uz * s + pz * (off + side * W)];
     const seg = (s0: number, side0: number, y0: number, s1: number, side1: number, y1: number, r: number, c: THREE.Color) => {

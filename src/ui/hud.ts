@@ -473,7 +473,7 @@ export class Hud {
     this.facilityId = 0;
     // 交差点の設定（地上の一般道で、3方向以上につながっている場所）
     this.junctionOpen = false;
-    if (g.road[i] && g.deck[i] > 0) {
+    if ((g.road[i] && g.deck[i] > 0) || (g.erail[i] && g.isWater(c.x, c.y))) {
       this.junctionOpen = true;
       this.info.append(this.bridgePanel(i));
     }

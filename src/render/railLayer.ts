@@ -6,6 +6,7 @@ import { CIVIC, CivicId, LINES, LineKind } from '../sim/defs';
 import type { Building } from '../sim/world';
 import { Buf, ROAD_LIFT } from './roadLayer';
 import { estopGroup } from '../sim/plan';
+import { addBridgeStructures } from './bridgeStyles';
 
 const COL = {
   ballast: new THREE.Color(0x8a8378),
@@ -66,7 +67,41 @@ export class RailLayer {
     const n = g.n;
     const ground = Math.max(g.cellH(i % n, (i / n) | 0), WATER_LEVEL);
     if (kind === 'rail') return g.road[i] ? g.roadH(i) + ROAD_LIFT : ground + 0.1;
+    // 高架（高架鉄道・モノレール）が水の上を渡るときは、両岸の高さを結んだ高さにする（川の上だけ低くならないように）
+    if (g.isWater(i % n, (i / n) | 0)) {
+      const banks = RailLayer.banks(g, kind, i);
+      if (banks) return Math.max(ground, banks) + LINES[kind].lift;
+    }
     return ground + LINES[kind].lift;
+  }
+
+  // 水の上の線路から、線路に沿って両側の岸まで進み、岸の高さを距離で内分した値を返す（岸が見つからなければ null）
+  private static banks(g: Grid, kind: LineKind, i: number): number | null {
+    const mask = g[kind], n = g.n;
+    const ends: { h: number; d: number }[] = [];
+    for (let d0 = 0; d0 < 8; d0++) {
+      if (!(mask[i] & (1 << d0))) continue;
+      let cur = i, dir = d0, dist = 0;
+      for (let step = 0; step < 64; step++) {
+        const x = cur % n + DX[dir], y = ((cur / n) | 0) + DY[dir];
+        if (!g.inb(x, y)) break;
+        const j = y * n + x;
+        if (!mask[j]) break;
+        dist += dir & 1 ? 1.41 : 1;
+        cur = j;
+        if (!g.isWater(x, y)) { ends.push({ h: g.cellH(x, y), d: dist }); break; }
+        // まっすぐ進めなければ、来た向き以外のつながりへ
+        if (!(mask[j] & (1 << dir))) {
+          let nd = -1;
+          for (let k = 0; k < 8; k++) if (mask[j] & (1 << k) && k !== ((dir + 4) & 7)) { nd = k; break; }
+          if (nd < 0) break;
+          dir = nd;
+        }
+      }
+      if (ends.length >= 2) break;
+    }
+    if (ends.length >= 2) return ends[0].h + (ends[1].h - ends[0].h) * (ends[0].d / (ends[0].d + ends[1].d));
+    return ends.length === 1 ? ends[0].h : null;
   }
 
   // stationCells：駅のホームがあるマス（防音壁を開ける）
@@ -212,7 +247,7 @@ export class RailLayer {
           if (d < 0) for (let k = 0; k < 8; k++) if (m & (1 << k)) { d = k & 3; break; }
           const len = Math.hypot(DX[d], DY[d]);
           const ux = DX[d] / len, uz = DY[d] / len;
-          if (ch - ground > 2) {
+          if (ch - ground > 2 && !(g.bstyle[i] && g.isWater(x, y))) {
             // ラーメン高架橋：左右2本の柱と横の梁。下が道路なら、柱は歩道の外側に
             const wide = g.road[i] !== 0;
             const co = wide ? 6.9 : 3.3, bh = ch - 1.4;
@@ -234,6 +269,8 @@ export class RailLayer {
         }
       }
     }
+    // 川を渡る高架鉄道の橋（情報ツールで選んだ形）
+    addBridgeStructures(g, B, 0, { height: (c) => RailLayer.lineH(g, 'erail', c) });
     for (const [mesh, buf] of [[this.solid, B], [this.underground, U], [this.glass, G]] as const) {
       mesh.geometry.dispose();
       mesh.geometry = buf.geometry();
