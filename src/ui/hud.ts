@@ -89,7 +89,8 @@ export class Hud {
   private sheetBg = el('div', 'sheet-bg hidden');
   private sheet = el('div', 'sheet hidden');
   private title = el('div', 'title hidden');
-  private group = '';
+  private group = ''; // 選んでいるツールのグループ
+  private subGroup = ''; // 開いているサブメニューのグループ
   private toastTimer = 0;
   private newsQueue: string[] = [];
   private newsTimer = 0;
@@ -118,7 +119,7 @@ export class Hud {
   setInGame(on: boolean) {
     for (const e of [this.toolbar, this.bar, this.news]) e.classList.toggle('hidden', !on || this.hidden);
     if (!on) {
-      this.sub.classList.add('hidden');
+      this.closeSub();
       this.info.classList.add('hidden');
       this.chips.classList.add('hidden');
       this.closeSheet();
@@ -133,11 +134,12 @@ export class Hud {
       b.dataset.g = g.id;
       b.onclick = () => {
         sfx.click();
+        b.blur();
         if (g.tool) {
           this.closeSub();
           const on = this.tools.tool !== g.tool;
           this.selectTool(on ? g.tool : '', g.id);
-        } else if (this.group === g.id && !this.sub.classList.contains('hidden')) {
+        } else if (this.subGroup === g.id && !this.sub.classList.contains('hidden')) {
           this.closeSub();
         } else this.openSub(g.id);
       };
@@ -147,7 +149,7 @@ export class Hud {
 
   private openSub(id: string) {
     const g = TOOL_GROUPS.find((x) => x.id === id)!;
-    this.group = id;
+    this.subGroup = id;
     this.sub.innerHTML = '';
     this.sub.append(el('h3', '', g.name));
     for (const it of g.items || []) {
@@ -169,6 +171,7 @@ export class Hud {
 
   private closeSub() {
     this.sub.classList.add('hidden');
+    this.subGroup = '';
     this.highlightToolbar();
   }
 
@@ -182,8 +185,9 @@ export class Hud {
   private highlightToolbar() {
     const subOpen = !this.sub.classList.contains('hidden');
     for (const b of this.toolbar.querySelectorAll<HTMLElement>('.tbtn')) {
-      const active = (this.tools.tool && b.dataset.g === this.group) || (subOpen && b.dataset.g === this.group);
-      b.classList.toggle('on', !!active);
+      // サブメニューを開いている間はそのグループだけ、閉じているときは選んでいるツールのグループだけを光らせる
+      const active = subOpen ? b.dataset.g === this.subGroup : !!this.tools.tool && b.dataset.g === this.group;
+      b.classList.toggle('on', active);
     }
   }
 
@@ -232,7 +236,7 @@ export class Hud {
     this.hidden = h;
     for (const e of [this.toolbar, this.bar, this.news]) e.classList.toggle('hidden', h);
     if (h) {
-      this.sub.classList.add('hidden');
+      this.closeSub();
       this.info.classList.add('hidden');
       this.chips.classList.add('hidden');
     }
