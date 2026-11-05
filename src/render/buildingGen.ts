@@ -71,7 +71,7 @@ const FLAT_ROOFS = [0x9b9891, 0x8a8a86, 0xb5b2aa, 0xcfcfc8, 0x7d7f80, 0xa59d8c].
 let curRoof = FLAT_ROOFS[0];
 const flatRoof = () => curRoof;
 
-export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, trees: TreeSpot[]) {
+export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, trees: TreeSpot[], isCpark: (x: number, y: number) => boolean = () => false) {
   const rng = new Rng(b.seed);
   curRoof = FLAT_ROOFS[b.seed % FLAT_ROOFS.length];
   mb.flatRoofMat = (b.seed >> 3) % 3 === 0 ? MAT.gravel : MAT.membrane;
@@ -127,6 +127,7 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     case 'greenway': greenway(mb, f, rng, tf); break;
     case 'sports': sportsPark(mb, f, rng, tf); break;
     case 'garden': pondGarden(mb, f, rng, tf); break;
+    case 'cpark_a': case 'cpark_b': centralPark(mb, b, f, trees, isCpark); break;
     case 'busstop': busStop(mb, f); break;
     case 'station': station(mb, f, 0); break;
     case 'el_station': station(mb, f, 8); break;
@@ -946,6 +947,81 @@ function sportsPark(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
   L.box(ta0 + 1, 0, Cw - 7.5, ta1 - 1, 3.4, Cw - 2, C(0xe6dfcf), PAT.house, flatRoof());
   L.tree(ta0 - 0.5, Cw - 2.5, 0.9);
   L.tree(-A + 1.5, -Cw + 1.5, 0.8 + rng.next() * 0.4);
+}
+
+// つなげられる大公園：模様はマップ全体で決まっているので、隣どうしで小道・池・芝生がつながる。
+// 外周（隣が大公園でない辺）だけに石垣と並木を付ける。
+const cpHash = (x: number, z: number) => {
+  let h = Math.imul(x | 0, 374761393) ^ Math.imul(z | 0, 668265263);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+};
+const cpLake = (x: number, z: number) => Math.sin(x / 61 + 1.3) * Math.sin(z / 47 + 0.4) + 0.45 * Math.sin((x - z) / 33);
+const cpMeadow = (x: number, z: number) => Math.sin(x / 83 + 2.1) * Math.sin(z / 71 + 1.7);
+const LAKE_T = 0.95;
+function centralPark(mb: MeshBuilder, b: Building, f: LotFrame, trees: TreeSpot[], isCpark: (x: number, y: number) => boolean) {
+  // 世界座標で描く
+  mb.setTransform(0, 0, f.base, 0);
+  const X0 = b.x * CELL, Z0 = b.y * CELL, X1 = (b.x + b.w) * CELL, Z1 = (b.y + b.h) * CELL;
+  const tree = (x: number, z: number, s: number, kind = 0) => trees.push({ x, y: f.base, z, s, kind });
+  const lake = (x: number, z: number) => cpLake(x, z) > LAKE_T;
+  // 芝生（広い芝生広場は明るい色）
+  const S = 4;
+  for (let z = Z0; z < Z1; z += S)
+    for (let x = X0; x < X1; x += S) {
+      const cx = x + S / 2, cz = z + S / 2, v = cpLake(cx, cz);
+      const col = v > LAKE_T ? PALETTE.water : v > LAKE_T - 0.08 ? C(0xb7ab92) : cpMeadow(cx, cz) > 0.55 ? PALETTE.lawn : PALETTE.lawn2;
+      mb.ground(x + (x === X0 ? 0.1 : 0), z + (z === Z0 ? 0.1 : 0), x + S - (x + S >= X1 ? 0.1 : 0), z + S - (z + S >= Z1 ? 0.1 : 0), v > LAKE_T ? 0.06 : 0.08, col);
+    }
+  // 小道：3マスおきに東西・南北へ、ゆるく曲がりながら続く
+  const pathCol = C(0xc8b896), PW = 1.6, step = 2;
+  const onPath = (x: number, z: number) => {
+    for (let j = Math.floor(z / (3 * CELL)) - 1; j <= Math.floor(z / (3 * CELL)) + 1; j++) if (Math.abs(z - ((3 * j + 1.5) * CELL + 9 * Math.sin(x / 41 + j * 1.9))) < PW + 1.5) return true;
+    for (let i = Math.floor(x / (3 * CELL)) - 1; i <= Math.floor(x / (3 * CELL)) + 1; i++) if (Math.abs(x - ((3 * i + 1.5) * CELL + 9 * Math.sin(z / 37 + i * 2.3))) < PW + 1.5) return true;
+    return false;
+  };
+  const seg = (x: number, z: number, horiz: boolean) => {
+    if (x < X0 || x > X1 || z < Z0 || z > Z1 || lake(x, z)) return;
+    const x0 = Math.max(X0, horiz ? x - step / 2 - 0.3 : x - PW), x1 = Math.min(X1, horiz ? x + step / 2 + 0.3 : x + PW);
+    const z0 = Math.max(Z0, horiz ? z - PW : z - step / 2 - 0.3), z1 = Math.min(Z1, horiz ? z + PW : z + step / 2 + 0.3);
+    if (x1 > x0 && z1 > z0) mb.ground(x0, z0, x1, z1, 0.11, pathCol);
+    // ベンチと街灯
+    const h = cpHash(Math.round(x / step), Math.round(z / step) * 7 + (horiz ? 1 : 2));
+    if (h < 0.035) {
+      const o = PW + 0.7;
+      if (horiz) mb.box(x - 0.9, 0, z + o - 0.25, x + 0.9, 0.5, z + o + 0.25, PALETTE.wood);
+      else mb.box(x + o - 0.25, 0, z - 0.9, x + o + 0.25, 0.5, z + 0.9, PALETTE.wood);
+    } else if (h > 0.97) {
+      const lx = horiz ? x : x - PW - 0.6, lz = horiz ? z - PW - 0.6 : z;
+      mb.box(lx - 0.08, 0, lz - 0.08, lx + 0.08, 3.6, lz + 0.08, PALETTE.dark);
+      mb.box(lx - 0.25, 3.6, lz - 0.25, lx + 0.25, 3.9, lz + 0.25, PALETTE.white);
+    }
+  };
+  for (let j = Math.floor(Z0 / (3 * CELL)) - 1; j <= Math.ceil(Z1 / (3 * CELL)); j++)
+    for (let x = Math.floor(X0 / step) * step + step / 2; x < X1; x += step) seg(x, (3 * j + 1.5) * CELL + 9 * Math.sin(x / 41 + j * 1.9), true);
+  for (let i = Math.floor(X0 / (3 * CELL)) - 1; i <= Math.ceil(X1 / (3 * CELL)); i++)
+    for (let z = Math.floor(Z0 / step) * step + step / 2; z < Z1; z += step) seg((3 * i + 1.5) * CELL + 9 * Math.sin(z / 37 + i * 2.3), z, false);
+  // 外周：隣が大公園でない辺に、低い石垣と並木
+  const wall = C(0x9a948a);
+  for (let x = b.x; x < b.x + b.w; x++) {
+    if (!isCpark(x, b.y - 1)) { mb.box(x * CELL, 0, Z0 + 0.2, (x + 1) * CELL, 0.9, Z0 + 0.7, wall); for (const o of [4, 12]) tree(x * CELL + o, Z0 + 2.6, 0.9 + cpHash(x, o) * 0.3); }
+    if (!isCpark(x, b.y + b.h)) { mb.box(x * CELL, 0, Z1 - 0.7, (x + 1) * CELL, 0.9, Z1 - 0.2, wall); for (const o of [4, 12]) tree(x * CELL + o, Z1 - 2.6, 0.9 + cpHash(x, o + 50) * 0.3); }
+  }
+  for (let y = b.y; y < b.y + b.h; y++) {
+    if (!isCpark(b.x - 1, y)) { mb.box(X0 + 0.2, 0, y * CELL, X0 + 0.7, 0.9, (y + 1) * CELL, wall); for (const o of [8]) tree(X0 + 2.6, y * CELL + o, 0.9 + cpHash(o, y) * 0.3); }
+    if (!isCpark(b.x + b.w, y)) { mb.box(X1 - 0.7, 0, y * CELL, X1 - 0.2, 0.9, (y + 1) * CELL, wall); for (const o of [8]) tree(X1 - 2.6, y * CELL + o, 0.9 + cpHash(o + 50, y) * 0.3); }
+  }
+  // 木立：芝生広場・池・小道を避けて、ところどころ森のように
+  for (let z = Z0 + 2; z < Z1 - 1; z += 4)
+    for (let x = X0 + 2; x < X1 - 1; x += 4) {
+      const h = cpHash(x, z);
+      const tx = x + (cpHash(z, x) - 0.5) * 2.4, tz = z + (h - 0.5) * 2.4;
+      if (tx < X0 + 3.5 || tx > X1 - 3.5 || tz < Z0 + 3.5 || tz > Z1 - 3.5) continue;
+      if (cpLake(tx, tz) > LAKE_T - 0.14 || onPath(tx, tz)) continue;
+      const m = cpMeadow(tx, tz);
+      const dens = m > 0.45 ? 0.04 : 0.3 + 0.35 * Math.max(0, -m);
+      if (h < dens) tree(tx, tz, 0.85 + cpHash(x + 3, z) * 0.6, cpHash(x, z + 9) < 0.25 ? 1 : 0);
+    }
 }
 
 // 池のある庭園（2×3）：池、太鼓橋、東屋、灯籠、飛び石

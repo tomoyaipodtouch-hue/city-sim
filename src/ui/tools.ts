@@ -80,6 +80,8 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { tool: 'plop:greenway', name: `${CIVIC.greenway.name}（1×3）`, note: yen(CIVIC.greenway.cost) },
       { tool: 'plop:sports', name: `${CIVIC.sports.name}（2×3）`, note: yen(CIVIC.sports.cost) },
       { tool: 'plop:garden', name: `${CIVIC.garden.name}（2×3）`, note: yen(CIVIC.garden.cost) },
+      { tool: 'plop:cpark_a', name: `${CIVIC.cpark_a.name}（3×3・つなげられる）`, note: yen(CIVIC.cpark_a.cost) },
+      { tool: 'plop:cpark_b', name: `${CIVIC.cpark_b.name}（3×4・つなげられる）`, note: yen(CIVIC.cpark_b.cost) },
       { tool: 'plop:police_s', name: CIVIC.police_s.name, note: yen(CIVIC.police_s.cost) },
       { tool: 'plop:police_l', name: CIVIC.police_l.name, note: yen(CIVIC.police_l.cost) },
       { tool: 'plop:fire_s', name: CIVIC.fire_s.name, note: yen(CIVIC.fire_s.cost) },

@@ -5,6 +5,7 @@ import type { Building } from '../sim/world';
 import { MeshBuilder } from './builder';
 import { generateBuilding, setupLot, TreeSpot } from './buildingGen';
 import { createBuildingMaterial } from './materials';
+import { CIVIC, CivicId } from '../sim/defs';
 
 const CHUNK = 16;
 
@@ -35,12 +36,24 @@ export class BuildingLayer {
     let treesChanged = false;
     const groundAt = (x: number, y: number) => g.cellMaxH(x, y);
     const minAt = (x: number, y: number) => g.cellMinH(x, y);
+    // つなげられる公園：隣が同じ公園かどうか（形が変わるので区画のキーにも入れる）
+    const cparkIds = new Set<number>();
+    for (const b of list) if (b.civic && CIVIC[b.type as CivicId]?.cpark) cparkIds.add(b.id);
+    const isCpark = (x: number, y: number) => g.inb(x, y) && cparkIds.has(g.bldg[g.idx(x, y)]);
     const all = new Set<number>([...byChunk.keys(), ...this.chunks.keys()]);
     for (const c of all) {
       const bs = byChunk.get(c) || [];
       bs.sort((a, b) => a.id - b.id);
       let key = '';
-      for (const b of bs) key += `${b.id}.${b.state}.${b.face};`;
+      for (const b of bs) {
+        key += `${b.id}.${b.state}.${b.face};`;
+        if (cparkIds.has(b.id)) {
+          let m = 0;
+          for (let x = b.x; x < b.x + b.w; x++) m = m * 4 + (isCpark(x, b.y - 1) ? 1 : 0) + (isCpark(x, b.y + b.h) ? 2 : 0);
+          for (let y = b.y; y < b.y + b.h; y++) m = m * 4 + (isCpark(b.x - 1, y) ? 1 : 0) + (isCpark(b.x + b.w, y) ? 2 : 0);
+          key += `c${m};`;
+        }
+      }
       // 区画の地形が変わったかどうか
       let hk = this.heightKeys.get(c) ?? 0;
       if (heightsChanged) {
@@ -69,7 +82,7 @@ export class BuildingLayer {
       for (const b of bs) {
         const f = setupLot(mb, b, groundAt, minAt);
         const v0 = mb.pos.length;
-        generateBuilding(mb, b, f, trees);
+        generateBuilding(mb, b, f, trees, isCpark);
         // 高さ 60m を超える建物のいちばん高いところに、航空障害灯を付ける
         let top = -Infinity, tx = 0, tz = 0;
         for (let k = v0; k < mb.pos.length; k += 3) if (mb.pos[k + 1] > top) { top = mb.pos[k + 1]; tx = mb.pos[k]; tz = mb.pos[k + 2]; }

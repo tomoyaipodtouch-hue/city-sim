@@ -177,7 +177,7 @@ export const SERVICE_DEPT: Record<ServiceKind, Dept> = {
 export const GARBAGE_PER_RES = 0.9;
 export const GARBAGE_PER_JOB = 0.6;
 
-export type CivicId = 'coal' | 'gas' | 'oil' | 'nuclear' | 'wind' | 'solar' | 'pump' | 'tower' | 'park_s' | 'park_l' | 'plaza' | 'playground' | 'greenway' | 'sports' | 'garden' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station'
+export type CivicId = 'coal' | 'gas' | 'oil' | 'nuclear' | 'wind' | 'solar' | 'pump' | 'tower' | 'park_s' | 'park_l' | 'plaza' | 'playground' | 'greenway' | 'sports' | 'garden' | 'cpark_a' | 'cpark_b' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station'
   | 'ferry_p' | 'ferry_c' | 'seaport' | 'airport_s' | 'airport_l' | 'freight_st'
   | 'police_s' | 'police_l' | 'fire_s' | 'fire_l' | 'clinic' | 'hospital' | 'school_e' | 'school_h' | 'college' | 'library'
   | 'landfill' | 'incinerator' | 'recycling'
@@ -205,6 +205,7 @@ export interface CivicDef {
   radius?: number; // 効果が届く範囲（マス）
   capacity?: number; // 受け入れ人数（学校の席、病院のベッドなど）／ゴミの処理量（月）
   reward?: boolean; // 記念施設（条件を満たすと建てられる）
+  cpark?: boolean; // つなげて大きな公園にできる
   rotate?: boolean; // 細長い施設：道路に面する向きに自動で回す
   desc: string;
 }
@@ -224,6 +225,8 @@ export const CIVIC: Record<CivicId, CivicDef> = {
   playground: { id: 'playground', name: '遊び場', w: 1, h: 2, cost: 350, upkeep: 8, park: 0.15, rotate: true, desc: 'ブランコやすべり台のある公園。周りの地価が少し上がる' },
   greenway: { id: 'greenway', name: '緑道', w: 1, h: 3, cost: 450, upkeep: 9, park: 0.16, rotate: true, desc: '並木と遊歩道。細長い空き地に置ける' },
   sports: { id: 'sports', name: '運動場', w: 2, h: 3, cost: 900, upkeep: 22, park: 0.22, rotate: true, desc: 'サッカー場とテニスコート。周りの地価が上がる' },
+  cpark_a: { id: 'cpark_a', name: '大公園', w: 3, h: 3, cost: 1500, upkeep: 32, park: 0.32, cpark: true, desc: 'いくつも並べると、小道と池がつながって1つの大きな公園になる。周りの地価がよく上がる' },
+  cpark_b: { id: 'cpark_b', name: '大公園', w: 3, h: 4, cost: 2000, upkeep: 42, park: 0.34, cpark: true, rotate: true, desc: 'いくつも並べると、小道と池がつながって1つの大きな公園になる。周りの地価がよく上がる' },
   garden: { id: 'garden', name: '池のある庭園', w: 2, h: 3, cost: 1100, upkeep: 26, park: 0.28, rotate: true, desc: '池と橋のある庭園。周りの地価がよく上がる' },
   busstop: { id: 'busstop', name: 'バス停', w: 1, h: 1, cost: 150, upkeep: 15, transit: 'bus', desc: '道路沿いに置くと、近くの住人がバスを使う。路線は自動で決まる' },
   station: { id: 'station', name: '鉄道の駅', w: 2, h: 2, cost: 3000, upkeep: 60, transit: 'rail', desc: '線路と道路の両方に接するように置く' },
