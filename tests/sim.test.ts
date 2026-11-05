@@ -352,7 +352,6 @@ describe('stage 2a roads', () => {
     const w = new World(48);
     w.g.heights.fill(6);
     w.funds = 1e7;
-    const g = w.g;
     // 道路の南側に 16×8 の農地（区画 2 つ分）
     expect(w.exec({ t: 'road', x0: 0, y0: 15, x1: 47, y1: 15, road: RoadType.Road }).ok).toBe(true);
     expect(w.exec({ t: 'zone', x0: 16, y0: 16, x1: 31, y1: 23, zone: ZoneType.F, den: 0 }).ok).toBe(true);
