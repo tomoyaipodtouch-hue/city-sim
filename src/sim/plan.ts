@@ -1721,3 +1721,17 @@ export function applyURamp(g: Grid, p: URampPlan) {
   link(g, cells[4], lv(4), hw[6], level, dir(cells[4], hw[6]), true);
   if (p.road >= 0) link(g, cells[2], 0, p.road, 0, dir(cells[2], p.road), false);
 }
+
+// 木を植える：道路・建物・線路・送電線・水のないマスに、木をいっぱいに植える（すでに満杯のマスは除く）
+export const TREE_COST = 3; // 1マス
+export function planTrees(g: Grid, x0: number, y0: number, x1: number, y1: number) {
+  const r = normRect(x0, y0, x1, y1, g.n);
+  const cells: number[] = [];
+  for (let y = r.y0; y <= r.y1; y++)
+    for (let x = r.x0; x <= r.x1; x++) {
+      const i = g.idx(x, y);
+      if (g.road[i] || g.up[i] || g.bldg[i] || g.pline[i] || g.tree[i] >= 3 || hasSurfaceLine(g, i) || g.isWater(x, y)) continue;
+      cells.push(i);
+    }
+  return { cells, cost: cells.length * TREE_COST };
+}

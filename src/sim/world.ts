@@ -8,7 +8,7 @@ import {
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
 import {
-  applyCloverleaf, applyDiamond, applyTerrain, applyURamp, linkURampMiddles, linkUrbanEnds, planURamp, snapRoadEnds, planTerrain, TerrainOp, applyRamp, applyTransitLine, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
+  applyCloverleaf, applyDiamond, applyTerrain, applyURamp, linkURampMiddles, linkUrbanEnds, planTrees, planURamp, snapRoadEnds, planTerrain, TerrainOp, applyRamp, applyTransitLine, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
 } from './plan';
 import { CELL } from './constants';
 import { ADVISORS, Advice, computeRating, Loan, LOAN_AMOUNTS, loanRate, makeAdvice, MAX_LOANS, newLoan, ordinanceCost, ordinanceEffects, OrdinanceEffects, OrdinanceId, ORDINANCES, payLoan, rewardUnlocked, REWARD_REQ } from './governance';
@@ -166,7 +166,8 @@ export type Command =
   | { t: 'loan'; amount: number }
   | { t: 'repay'; id: number }
   | { t: 'uramp'; x: number; y: number }
-  | { t: 'terrain'; op: TerrainOp; x0: number; y0: number; x1: number; y1: number };
+  | { t: 'terrain'; op: TerrainOp; x0: number; y0: number; x1: number; y1: number }
+  | { t: 'trees'; x0: number; y0: number; x1: number; y1: number };
 
 const emptyKinds = (v: number) => Object.fromEntries(GROW_KINDS.map((k) => [k, v])) as Record<GrowKind, number>;
 
@@ -369,6 +370,14 @@ export class World {
         applyURamp(g, plan);
         this.afterGridChange();
         return { ok: true, cost: plan.cost, msg: plan.road < 0 ? '真ん中のマスの外側に一般道をつないでください' : undefined };
+      }
+      case 'trees': {
+        const plan = planTrees(g, c.x0, c.y0, c.x1, c.y1);
+        if (!plan.cells.length) return { ok: false, msg: '木を植えられる場所がありません' };
+        if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
+        for (const i of plan.cells) g.tree[i] = 3;
+        this.afterGridChange();
+        return { ok: true, cost: plan.cost };
       }
       case 'terrain': {
         const plan = planTerrain(g, c.op, c.x0, c.y0, c.x1, c.y1);

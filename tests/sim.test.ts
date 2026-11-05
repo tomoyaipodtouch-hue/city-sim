@@ -301,6 +301,19 @@ describe('stage 2a roads', () => {
     }
   });
 
+  it('trees can be planted on empty land, but not on roads', () => {
+    const w = new World(32);
+    w.g.heights.fill(6);
+    w.funds = 1e6;
+    const g = w.g;
+    expect(w.exec({ t: 'road', x0: 2, y0: 10, x1: 20, y1: 10, road: RoadType.Road }).ok).toBe(true);
+    const r = w.exec({ t: 'trees', x0: 5, y0: 8, x1: 7, y1: 12 });
+    expect(r.ok).toBe(true);
+    expect(g.tree[g.idx(6, 9)]).toBe(3);
+    expect(g.tree[g.idx(6, 10)]).toBe(0);
+    expect(w.exec({ t: 'trees', x0: 5, y0: 8, x1: 7, y1: 12 }).ok).toBe(false);
+  });
+
   it('cars drive through diagonal sections and bends of an urban highway', () => {
     for (const type of [RoadType.UrbanGroundHighway, RoadType.UrbanHighway]) {
       for (const [bx, by] of [[30, 6], [30, 34]]) {

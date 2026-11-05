@@ -1,6 +1,6 @@
 // ツールの定義と、ドラッグ中のプレビュー・確定
 import { BUS_STOP_COST, CIVIC, CivicId, DENSITY_NAMES, LINES, LineKind, ROADS, RoadType, ZoneType, ZONE_COST, ZONE_NAMES, POWER_LINE_COST, RAMP_COST } from '../sim/defs';
-import { normRect, planBulldoze, planBusStop, planCloverleaf, planTransitLine, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone, planURamp, planTerrain, TERRAIN_STEP, TerrainOp, snapRoadEnds } from '../sim/plan';
+import { normRect, planBulldoze, planBusStop, planCloverleaf, planTransitLine, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone, planURamp, planTerrain, TERRAIN_STEP, TerrainOp, planTrees, TREE_COST, snapRoadEnds } from '../sim/plan';
 import type { Command } from '../sim/world';
 import type { GameClient } from '../game';
 import type { CityRenderer } from '../render/renderer';
@@ -128,6 +128,7 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { tool: 'terrain:raise', name: '地面を上げる', note: `${TERRAIN_STEP}m ずつ` },
       { tool: 'terrain:lower', name: '地面を下げる', note: `${TERRAIN_STEP}m ずつ` },
       { tool: 'terrain:level', name: '平らにする', note: '始点の高さにそろえる' },
+      { tool: 'trees', name: '木を植える', note: `${yen(TREE_COST)}/マス` },
     ],
   },
   { id: 'bulldoze', name: '取り壊し', icon: 'bulldoze', tool: 'bulldoze' },
@@ -233,6 +234,12 @@ export class ToolController {
       if (!plan.cells.length) return { text: `${w}×${h}　指定できる場所がありません`, bad: true };
       return { text: `${w}×${h}　${zone ? yen(plan.cost) : 'ゾーン解除'}`, bad: false };
     }
+    if (t === 'trees') {
+      const plan = planTrees(g, d.x0, d.y0, x, y);
+      pv.setTiles(g, plan.cells, () => 0x4f9a3c);
+      pv.setPath(g, []);
+      return plan.cells.length ? { text: `木を植える ${yen(plan.cost)}`, bad: false } : { text: '木を植えられる場所がありません', bad: true };
+    }
     if (t.startsWith('terrain:')) {
       const op = t.split(':')[1] as TerrainOp;
       const plan = planTerrain(g, op, d.x0, d.y0, x, y);
@@ -316,6 +323,7 @@ export class ToolController {
       cmd = { t: 'zone', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1, zone: Number(z) as ZoneType, den: Number(den) };
     } else if (t === 'dezone') cmd = { t: 'zone', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1, zone: ZoneType.None, den: 0 };
     else if (t.startsWith('terrain:')) cmd = { t: 'terrain', op: t.split(':')[1] as TerrainOp, x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1 };
+    else if (t === 'trees') cmd = { t: 'trees', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1 };
     else if (t === 'bulldoze') cmd = { t: 'bulldoze', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1 };
     else if (t.startsWith('plop:')) cmd = { t: 'plop', id: t.split(':')[1] as CivicId, x: d.x1, y: d.y1 };
     else if (t === 'ramp') cmd = { t: 'ramp', x: d.x1, y: d.y1 };
