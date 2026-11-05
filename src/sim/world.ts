@@ -159,6 +159,7 @@ export type Command =
   | { t: 'transit'; x0: number; y0: number; x1: number; y1: number; kind: LineKind }
   | { t: 'busstop'; x: number; y: number }
   | { t: 'junction'; cell: number; ctl: number; split: number; flags: number }
+  | { t: 'bridgeStyle'; cell: number; style: number }
   | { t: 'funding'; dept: Dept; value: number }
   | { t: 'facilityFund'; id: number; value: number }
   | { t: 'ordinance'; id: OrdinanceId; on: boolean }
@@ -482,6 +483,27 @@ export class World {
         applyCloverleaf(g, plan);
         this.afterGridChange();
         return { ok: true, cost: plan.cost };
+      }
+      case 'bridgeStyle': {
+        // つながっている橋のマス全部の形を変える
+        const n = g.n;
+        if (c.cell < 0 || c.cell >= n * n || !g.road[c.cell] || !(g.deck[c.cell] > 0)) return { ok: false, msg: '橋が見つかりません' };
+        const st = [c.cell], seen = new Set(st);
+        while (st.length) {
+          const i = st.pop()!;
+          g.bstyle[i] = Math.max(0, Math.min(5, c.style | 0));
+          const x = i % n, y = (i / n) | 0;
+          for (let dy = -1; dy <= 1; dy++)
+            for (let dx = -1; dx <= 1; dx++) {
+              if (!g.inb(x + dx, y + dy)) continue;
+              const j = g.idx(x + dx, y + dy);
+              if (seen.has(j) || !g.road[j] || !(g.deck[j] > 0)) continue;
+              seen.add(j);
+              st.push(j);
+            }
+        }
+        this.gridVersion++;
+        return { ok: true };
       }
       case 'junction': {
         if (c.cell < 0 || c.cell >= g.n * g.n || !g.road[c.cell]) return { ok: false, msg: '交差点が見つかりません' };

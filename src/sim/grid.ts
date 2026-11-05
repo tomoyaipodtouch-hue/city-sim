@@ -9,7 +9,7 @@
 import { CELL, DX, DY, WATER_LEVEL, opp } from './constants';
 
 // 同期・保存の対象になる配列の名前
-export const GRID_U8 = ['road', 'conn', 'flow', 'pline', 'zone', 'zden', 'tree', 'up', 'conn1', 'flow1', 'ictl', 'isplit', 'iflags', 'rail', 'erail', 'mono', 'sub', 'bstop'] as const;
+export const GRID_U8 = ['road', 'conn', 'flow', 'pline', 'zone', 'zden', 'tree', 'up', 'conn1', 'flow1', 'ictl', 'isplit', 'iflags', 'rail', 'erail', 'mono', 'sub', 'bstop', 'bstyle'] as const;
 export const GRID_F32 = ['deck', 'upH', 'lift'] as const;
 export const GRID_I32 = ['bldg'] as const;
 export type GridU8Key = (typeof GRID_U8)[number];
@@ -54,6 +54,7 @@ export class Grid {
   mono: Uint8Array; // モノレール
   sub: Uint8Array; // 地下鉄
   bstop: Uint8Array; // 道路に重ねて置いたバス停（1 = あり）
+  bstyle: Uint8Array; // 橋の形（0 = 桁橋、1 = 吊り橋、2 = 斜張橋、3 = トラス橋、4 = アーチ橋、5 = ラーメン橋）
   zone: Uint8Array; // ゾーンの種類
   zden: Uint8Array; // ゾーンの密度
   bldg: Int32Array; // 建物ID（0 = なし）
@@ -73,6 +74,7 @@ export class Grid {
     this.upH = new Float32Array(c);
     this.lift = new Float32Array(c);
     this.ictl = new Uint8Array(c);
+    this.bstyle = new Uint8Array(c);
     this.isplit = new Uint8Array(c).fill(50);
     this.iflags = new Uint8Array(c);
     this.pline = new Uint8Array(c);

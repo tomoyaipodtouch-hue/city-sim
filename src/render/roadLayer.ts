@@ -10,6 +10,7 @@ import { withAO } from './ao';
 import { Grid } from '../sim/grid';
 import { CELL, DX, DY, isDiag } from '../sim/constants';
 import { ROADS, RoadType, isHighway } from '../sim/defs';
+import { addBridgeStructures } from './bridgeStyles';
 
 export const ROAD_LIFT = 0.3;
 const DIAG_LANE_W = 10.7; // 斜めの区間の、2マス幅の道路の1車線分の幅
@@ -978,6 +979,7 @@ export class RoadLayer {
       M.tri(ids[0], ids[1], ids[2]);
       M.tri(ids[0], ids[2], ids[3]);
     }
+    addBridgeStructures(g, O, ROAD_LIFT);
     for (const [mesh, buf, uv] of [[this.surface, S, true], [this.marks, M, false], [this.solid, O, false]] as const) {
       mesh.geometry.dispose();
       mesh.geometry = buf.geometry(uv);

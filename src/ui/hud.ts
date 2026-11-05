@@ -11,6 +11,7 @@ import { sfx, soundSettings } from '../sound';
 import type { SaveMeta } from '../save';
 import type { MapStyle } from '../sim/terrain';
 import type { NewCityOpts } from '../sim/protocol';
+import { BRIDGE_STYLES } from '../render/bridgeStyles';
 
 const ICONS: Record<string, string> = {
   road: '<path d="M8 21 10.5 3M16 21 13.5 3M12 6v2M12 11v2M12 16v2"/>',
@@ -472,6 +473,10 @@ export class Hud {
     this.facilityId = 0;
     // 交差点の設定（地上の一般道で、3方向以上につながっている場所）
     this.junctionOpen = false;
+    if (g.road[i] && g.deck[i] > 0) {
+      this.junctionOpen = true;
+      this.info.append(this.bridgePanel(i));
+    }
     if (g.road[i] && !isHighway(g.road[i]) && g.road[i] !== 7) {
       let deg = 0;
       for (let d = 0; d < 8; d++) if (g.conn[i] & (1 << d)) deg++;
@@ -484,6 +489,27 @@ export class Hud {
 
   private junctionOpen = false;
   private facilityId = 0;
+
+  // 橋の形
+  private bridgePanel(cell: number): HTMLElement {
+    const g = this.game.grid!;
+    const box = el('div', 'jpanel');
+    box.append(el('h5', '', '橋の形'));
+    const seg = el('div', 'seg wrap');
+    BRIDGE_STYLES.forEach((name, k) => {
+      const b = el('button', g.bstyle[cell] === k ? 'on' : '', name);
+      b.onclick = () => {
+        sfx.click();
+        seg.querySelectorAll('button').forEach((x) => x.classList.remove('on'));
+        b.classList.add('on');
+        void this.game.exec({ t: 'bridgeStyle', cell, style: k });
+      };
+      seg.append(b);
+    });
+    box.append(seg);
+    box.append(el('p', 'muted', '見た目だけが変わります（費用はかかりません）。'));
+    return box;
+  }
 
   private junctionPanel(cell: number): HTMLElement {
     const g = this.game.grid!;

@@ -13,6 +13,7 @@ const canvas = document.getElementById('view') as HTMLCanvasElement;
 const game = new GameClient();
 const renderer = new CityRenderer(canvas);
 const tools = new ToolController(game, renderer);
+if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__pm = { game, renderer };
 let inGame = false;
 
 const SETTINGS_KEY = 'pocket-metro-settings';
