@@ -11,6 +11,10 @@ export const PAT = {
   industrial: 4,
   apartment: 5,
   dock: 6,
+  curtain: 7, // 全面ガラス（カーテンウォール）：細い縦の窓枠と、階ごとの帯
+  ribbon: 8, // 横長の連続窓：明るい帯とガラスが交互
+  balcony: 9, // 高層マンション：床の帯、ガラスの手すり、奥の窓
+  glow: 11, // 夜に光る帯（頂部のライトアップ）
 } as const;
 
 export class MeshBuilder {
@@ -67,7 +71,7 @@ export class MeshBuilder {
     const k = this.abandoned ? 0.62 : 1;
     this.col.push(c.r * k, c.g * k, c.b * k);
     this.uvm.push(u, v);
-    this.pat.push(this.abandoned && p > 0 ? p + 10 : p);
+    this.pat.push(this.abandoned && p > 0 ? p + 20 : p);
     this.mat.push(this.curMat);
     return this.pos.length / 3 - 1;
   }

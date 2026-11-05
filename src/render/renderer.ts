@@ -382,6 +382,11 @@ export class CityRenderer {
     if (day > 0.02) su.uSunDir.value.set(-Math.cos(az), Math.max(-0.05, elev), 0.45 - Math.sin(az) * 0.25).normalize();
     this.renderer.toneMappingExposure = 1.15 - 0.1 * night;
     shared.uNight.value = smooth(0.25, 0.85, night);
+    // ガラスに映る空と太陽
+    shared.uSunDir.value.copy(this.sunDir);
+    shared.uSunCol.value.copy(sunCol).multiplyScalar(day);
+    shared.uSkyTop.value.copy(su.uZenith.value).lerp(new THREE.Color(1, 1, 1), 0.12);
+    shared.uSkyHz.value.copy(sky);
     this.lights.setNight(smooth(0.35, 0.9, night));
     this.cars.setNight(smooth(0.35, 0.9, night));
   }
