@@ -754,7 +754,9 @@ export class World {
       const z = GROW[b.type as GrowKind].zone;
       const zd = g.zden[g.idx(b.x, b.y)];
       if (g.zone[g.idx(b.x, b.y)] !== z) continue;
-      if (zd > b.den || (zd > 0 && b.stateDays > 720)) this.upgrades[z].push(b.id);
+      // ハイテク産業の需要があるときは、古くなった工場（1年以上）も建て替えの候補にする
+      const oldFactory = (b.type === 'ID' || b.type === 'IM') && zd > 0 && b.stateDays > 360 && this.demand.IH > 0.1;
+      if (zd > b.den || (zd > 0 && b.stateDays > 720) || oldFactory) this.upgrades[z].push(b.id);
     }
     for (let y = 0; y < n; y++)
       for (let x = 0; x < n; x++) {
@@ -806,7 +808,8 @@ export class World {
       case 'IA': return 0.75 - 0.6 * lv - 0.5 * res;
       case 'ID': return 0.7 - 0.2 * lv - water * 0.5;
       case 'IM': return 0.5 + 0.1 * lv - 0.3 * pol - water;
-      case 'IH': return 0.1 + 0.6 * lv - 1.0 * pol - water * 1.5 + Math.max(0, (eq - 70) / 80);
+      // 汚れた工場の近くはきらうが、工業地域でも建てられるくらいに（汚染の少ない工業地域ほど建ちやすい）
+      case 'IH': return 0.52 + 0.5 * lv - 0.45 * pol - water * 1.2 + Math.max(0, (eq - 50) / 100);
     }
   }
 
@@ -824,7 +827,9 @@ export class World {
       for (let a = 0; a < attempts; a++) {
         // 空き地か、建て替え（需要が高いときほど起きやすい）
         let i: number, replace = 0;
-        if (ups.length && (!list.length || this.rng.next() < 0.25 * maxDem)) {
+        // 工業はハイテク産業の需要があるとき、建て替えを多めにためす（空き地は小さなすき間が多く、ハイテク産業が入れない）
+        const upRate = z === ZoneType.I && this.demand.IH > 0.1 ? 0.5 : 0.25;
+        if (ups.length && (!list.length || this.rng.next() < upRate * maxDem)) {
           const b = this.buildings.get(ups[this.rng.int(ups.length)]);
           if (!b || b.state !== BState.Normal) continue;
           i = g.idx(b.x + this.rng.int(b.w), b.y + this.rng.int(b.h));
@@ -842,7 +847,9 @@ export class World {
         let total = 0;
         const scores: number[] = [];
         for (const k of kinds) {
-          const s = Math.max(0, this.demand[k]) * Math.max(0, this.desirability(k, i));
+          let s = Math.max(0, this.demand[k]) * Math.max(0, this.desirability(k, i));
+          // 古い工場の建て替えでは、ハイテク産業になりやすい（産業の高度化）
+          if (replace && k === 'IH') s *= 3;
           scores.push(s);
           total += s;
         }
@@ -1014,8 +1021,10 @@ export class World {
         cap = def.floorCap * area * floors * jitter;
       }
       cap = Math.max(1, Math.round(cap));
-      // 建て替えは、今より大きくなる場合だけ
-      if (old && cap <= old.cap * 1.15) return false;
+      // 建て替えは、今より大きくなる場合だけ。ただし、より豊かな産業への入れ替え（工場 → ハイテク産業など）は、
+      // 働く人が少し減っても認める（ハイテク産業は1マスあたりの人数が少ないので、これがないと工場と入れ替われない）
+      const upgradeKind = !!old && GROW[kind].wealth > GROW[old.type as GrowKind].wealth * 1.2 && cap >= old.cap * 0.5;
+      if (old && cap <= old.cap * 1.15 && !upgradeKind) return false;
       if (old) this.removeBuilding(old.id);
       const b: Building = {
         id: this.nextId++, civic: false, type: kind, x, y, w: sw, h: sh, face: this.findFace(x, y, sw, sh),
@@ -1543,7 +1552,8 @@ export class World {
       raw[k] = wantCO[k] > 0 ? (wantCO[k] - capK[k]) / Math.max(60, wantCO[k] * 0.5) : -0.3;
     }
     const eqA = this.services.eq.adult;
-    const wantIH = pop > 1500 && eqA > 70 ? pop * 0.07 * Math.min(1.5, (eqA - 70) / 50) : 0;
+    // ハイテク産業：大人の教育水準が 25 を超えると少しずつ来はじめ、高いほど多い（以前は 70 からで、ほとんど建たなかった）
+    const wantIH = pop > 1500 && eqA > 25 ? pop * 0.07 * Math.min(1.6, (eqA - 25) / 50) : 0;
     raw.IH = wantIH > 0 ? (wantIH - capK.IH) / Math.max(60, wantIH * 0.5) + unemployment * 0.6 : -0.3;
     // オフィスは教育水準が高いほど来やすい
     raw.CO2 += (eqA - 70) / 200;

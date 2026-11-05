@@ -116,7 +116,7 @@ export const GROW: Record<GrowKind, GrowDef> = {
   IA: { kind: 'IA', zone: ZoneType.I, name: '農業', capPerCell: 1.5, floorCap: 0, wealth: 0.5, dens: [0], sizes: [[[3, 3], [2, 3], [3, 2], [4, 4], [2, 2]]], floors: [[1, 1]], pollution: 0.05, powerPer: 0.05, waterPer: 0.3 },
   ID: { kind: 'ID', zone: ZoneType.I, name: '汚染型工業', capPerCell: 18, floorCap: 0, wealth: 0.8, dens: [0, 1, 2], sizes: [[[2, 2], [3, 2], [2, 3], [3, 3], [1, 2]], S_IND_MID, S_IND_HIGH], floors: [[1, 1], [1, 1], [1, 1]], pollution: 1.0, powerPer: 0.12, waterPer: 0.1 },
   IM: { kind: 'IM', zone: ZoneType.I, name: '製造業', capPerCell: 14, floorCap: 0, wealth: 1.1, dens: [0, 1, 2], sizes: [[[2, 2], [3, 2], [2, 3], [3, 3]], S_IND_MID, S_IND_HIGH], floors: [[1, 1], [1, 1], [1, 1]], pollution: 0.45, powerPer: 0.1, waterPer: 0.1 },
-  IH: { kind: 'IH', zone: ZoneType.I, name: 'ハイテク産業', capPerCell: 10, floorCap: 0, wealth: 1.7, dens: [1, 2], sizes: [[], S_IND_MID, S_IND_HIGH], floors: [[1, 1], [1, 1], [1, 1]], pollution: 0.05, powerPer: 0.14, waterPer: 0.06 },
+  IH: { kind: 'IH', zone: ZoneType.I, name: 'ハイテク産業', capPerCell: 10, floorCap: 0, wealth: 1.7, dens: [1, 2], sizes: [[], [[2, 2], [2, 1], [1, 2], ...S_IND_MID], [[2, 2], [3, 2], [2, 3], ...S_IND_HIGH]], floors: [[1, 1], [1, 1], [1, 1]], pollution: 0.05, powerPer: 0.14, waterPer: 0.06 },
 };
 
 // 工業は密度で1マスあたりの雇用数が増える
