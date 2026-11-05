@@ -239,6 +239,7 @@ export class CarLayer {
       build(this.bus, riders.subarray(0, N), 0.0008);
       let stops = 0;
       for (let i = 0; i < N; i++) if (g.bstop[i]) stops++;
+      stops += this.busStopBuildings;
       this.bus.target = Math.min(this.bus.target, Math.max(1, Math.ceil(stops * 1.5)));
       this.lineFleets.forEach((f, i) => build(f, riders.subarray((i + 1) * N, (i + 2) * N), 0.0012 / f.carsPer));
     }
@@ -347,8 +348,10 @@ export class CarLayer {
 
   // 駅のホームに接する線路のマス（路線ごと）
   private stations = new Map<string, Set<number>>();
+  private busStopBuildings = 0;
   setStations(g: Grid, list: Building[]) {
     this.stations.clear();
+    this.busStopBuildings = list.filter((b) => b.civic && CIVIC[b.type as CivicId].transit === 'bus').length;
     for (const b of list) {
       if (!b.civic) continue;
       const k = CIVIC[b.type as CivicId].transit;
