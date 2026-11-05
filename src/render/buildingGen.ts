@@ -79,7 +79,7 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
   curRoof = FLAT_ROOFS[b.seed % FLAT_ROOFS.length];
   // 外壁のデザイン（建物ごとに選ぶ）：全面ガラス・横長の連続窓・ふつうの窓、縦ルーバーの有無、マンションのバルコニー
   const fr = ((b.seed >>> 5) % 100) / 100;
-  officePat = fr < 0.55 ? PAT.curtain : fr < 0.9 ? PAT.ribbon : PAT.office;
+  officePat = fr < 0.35 ? PAT.curtain : fr < 0.65 ? PAT.fullglass : fr < 0.92 ? PAT.ribbon : PAT.office;
   louvers = ((b.seed >>> 9) % 100) < 35;
   resPat = ((b.seed >>> 12) % 100) < 80 ? PAT.balcony : PAT.apartment;
   mb.flatRoofMat = (b.seed >> 3) % 3 === 0 ? MAT.gravel : MAT.membrane;
@@ -1152,8 +1152,11 @@ function tower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, o
   mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.pavement);
   const fh = office ? 3.6 : 3.1;
   const wall = office ? rng.pick(GLASS) : rng.pick(TOWER_WALL);
-  const frame = office ? rng.pick([PALETTE.steel, PALETTE.white, PALETTE.dark, PALETTE.concrete]) : rng.pick(APT_WALL);
+  const frame0 = office ? rng.pick([PALETTE.steel, PALETTE.white, PALETTE.dark, PALETTE.concrete]) : rng.pick(APT_WALL);
   const pat = office ? officePat : resPat;
+  // ほぼガラスだけのビルは、帯や柱もガラスにする
+  const allGlass = office && officePat === PAT.fullglass;
+  const frame = allGlass ? wall : frame0;
   // 低層部（ポディウム）
   const podium = floors >= 8 ? 1 + rng.int(3) : 0;
   const PW = f.W - 2, PD = f.D - 3;
@@ -1161,8 +1164,8 @@ function tower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, o
   let y = 0;
   if (podium) {
     const ph = 4.5 + (podium - 1) * 4;
-    mb.box(-PW / 2, 0, pz1 - PD, PW / 2, ph, pz1, frame, PAT.shop, flatRoof());
-    roofRim(mb, -PW / 2, pz1 - PD, PW / 2, pz1, ph, frame, 0.8);
+    mb.box(-PW / 2, 0, pz1 - PD, PW / 2, ph, pz1, frame, allGlass ? PAT.fullglass : PAT.shop, flatRoof());
+    if (!allGlass) roofRim(mb, -PW / 2, pz1 - PD, PW / 2, pz1, ph, frame, 0.8);
     y = ph;
   }
   // 塔の部分。高いほど段々に細くする
@@ -1180,11 +1183,13 @@ function tower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, o
     if (round) mb.cylinder(0, cz, y, y + h, Math.min(tw, td) / 2, 16, wall, flatRoof());
     else {
       mb.box(-tw / 2, y, cz - td / 2, tw / 2, y + h, cz + td / 2, wall, pat, flatRoof());
-      roofRim(mb, -tw / 2, cz - td / 2, tw / 2, cz + td / 2, y + h, office ? frame : wall, 1.1);
+      // ガラスのビルは、屋上のふちもガラスの手すり（外壁がそのまま上まで続いて見える）
+      if (allGlass) glassParapet(mb, -tw / 2, cz - td / 2, tw / 2, cz + td / 2, y + h, wall, 1.4);
+      else roofRim(mb, -tw / 2, cz - td / 2, tw / 2, cz + td / 2, y + h, office ? frame : wall, 1.1);
       if (t < tiers - 1) roofUnits(mb, -tw / 2, cz - td / 2, tw / 2, cz + td / 2, y + h, rng, 2);
     }
     // 縦ルーバー（細いひれを密に並べる）か、ふつうの窓のビルは太い柱
-    if (office && !round && louvers) fins(mb, -tw / 2, cz - td / 2, tw / 2, cz + td / 2, y, y + h, frame);
+    if (office && !round && louvers && !allGlass) fins(mb, -tw / 2, cz - td / 2, tw / 2, cz + td / 2, y, y + h, frame);
     else if (office && !round && officePat === PAT.office) {
       for (let x = -tw / 2; x <= tw / 2 + 0.01; x += tw / Math.max(2, Math.round(tw / 6))) {
         mb.box(x - 0.18, y, cz + td / 2, x + 0.18, y + h, cz + td / 2 + 0.25, frame);
@@ -1204,7 +1209,8 @@ function tower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, o
     mb.box(-0.3, y, cz - 0.3, 0.3, y + Math.min(tw, td) * 0.9 + 18, cz + 0.3, PALETTE.steel);
   } else if (floors > 24 && crown < 0.75) {
     // 屋上の目隠しパネル（夜は光る帯）と、ヘリポート
-    crownScreen(mb, -tw / 2, cz - td / 2, tw / 2, cz + td / 2, y, office ? 5 : 3.5, frame);
+    if (allGlass) glassParapet(mb, -tw / 2, cz - td / 2, tw / 2, cz + td / 2, y, wall, 4);
+    else crownScreen(mb, -tw / 2, cz - td / 2, tw / 2, cz + td / 2, y, office ? 5 : 3.5, frame);
     if (office && Math.min(tw, td) > 16) helipad(mb, 0, cz, y + 0.3, Math.min(tw, td) * 0.42);
     else roofUnits(mb, -tw / 2 + 1, cz - td / 2 + 1, tw / 2 - 1, cz + td / 2 - 1, y, rng, 3);
   } else {
@@ -1237,6 +1243,47 @@ function rect(cx: number, cz: number, w: number, d: number, rot = 0): P2[] {
   return ([[-w / 2, -d / 2], [w / 2, -d / 2], [w / 2, d / 2], [-w / 2, d / 2]] as P2[]).map(([x, z]) => [cx + x * c - z * s, cz + x * s + z * c]);
 }
 const scaleP = (pts: P2[], cx: number, cz: number, k: number): P2[] => pts.map(([x, z]) => [cx + (x - cx) * k, cz + (z - cz) * k]);
+
+// ガラスの手すり（屋上のふち）。外壁のガラスがそのまま上に伸びて見える
+function glassParapet(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, col: THREE.Color, h: number) {
+  const t = 0.15;
+  mb.box(x0, y, z1 - t, x1, y + h, z1, col, PAT.fullglass, col);
+  mb.box(x0, y, z0, x1, y + h, z0 + t, col, PAT.fullglass, col);
+  mb.box(x0, y, z0 + t, x0 + t, y + h, z1 - t, col, PAT.fullglass, col);
+  mb.box(x1 - t, y, z0 + t, x1, y + h, z1 - t, col, PAT.fullglass, col);
+}
+
+// ほぼガラスだけの塔：角を丸めた（多角形の）ガラスの箱、斜めに切った頂部、ガラスのロビー
+function glassTower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number) {
+  const glass = rng.pick(GLASS);
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.pavement);
+  const PW = f.W - 3, PD = f.D - 4, pz1 = f.D / 2 - 2;
+  const cz = pz1 - PD / 2;
+  // ガラスの低層部（2層吹き抜け）と、薄い大きなひさし
+  const ph = 9;
+  mb.box(-PW / 2, 0, pz1 - PD, PW / 2, ph, pz1, glass, PAT.fullglass, flatRoof());
+  mb.box(-PW / 2 - 0.5, ph, pz1 - PD - 0.5, PW / 2 + 0.5, ph + 0.4, pz1 + 2.5, C(0xe8e8e6));
+  const fh = 3.8, H = (floors - 2) * fh;
+  const w = Math.min(44, PW * (0.62 + rng.next() * 0.15)), d = Math.min(36, PD * (0.6 + rng.next() * 0.12));
+  const shape = rng.next();
+  // 角を大きく落とした8角形（角の丸いガラスの箱に見える）か、細長い長方形
+  const c = shape < 0.5 ? Math.min(w, d) * 0.22 : 0.01;
+  const base: P2[] = [[-w / 2 + c, cz - d / 2], [w / 2 - c, cz - d / 2], [w / 2, cz - d / 2 + c], [w / 2, cz + d / 2 - c], [w / 2 - c, cz + d / 2], [-w / 2 + c, cz + d / 2], [-w / 2, cz + d / 2 - c], [-w / 2, cz - d / 2 + c]];
+  const taper = 0.9 + rng.next() * 0.1;
+  const topP = scaleP(base, 0, cz, taper);
+  // 頂部を斜めに切る（半分くらいのビル）
+  const slope = rng.next() < 0.5 ? Math.min(30, H * 0.12) : 0;
+  const topY = topP.map(([x]) => ph + H - slope * (0.5 - x / w));
+  mb.prism(base, ph, ph + H, glass, PAT.fullglass, glass, topP, slope ? topY : undefined);
+  if (!slope) {
+    glassParapet(mb, -w * taper / 2 + 1, cz - d * taper / 2 + 1, w * taper / 2 - 1, cz + d * taper / 2 - 1, ph + H, glass, 3.5);
+    if (floors >= 30) helipad(mb, 0, cz, ph + H + 0.4, Math.min(w, d) * taper * 0.3);
+  }
+  // 夜は頂部のふちが光る
+  mb.prism(scaleP(topP, 0, cz, 1.005), ph + H - 0.6, ph + H - 0.2, C(0xdfe6ee), PAT.glow, null);
+  tf(-f.W / 2 + 1.6, f.D / 2 - 1.0, 0.75);
+  tf(f.W / 2 - 1.6, f.D / 2 - 1.0, 0.75);
+}
 
 // 縦ルーバー：四方の面に細いひれを密に並べる
 function fins(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y0: number, y1: number, col: THREE.Color) {
@@ -1334,8 +1381,11 @@ function highrise(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number
     if (floors >= 28 && luxury && r < 0.75) return rng.next() < 0.5 ? roundTower(mb, f, rng, tf, floors, false) : steppedTower(mb, f, rng, tf, floors, false);
     return tower(mb, f, rng, tf, floors, office, luxury);
   }
+  if (floors >= 12 && officePat === PAT.fullglass && r < 0.6) return glassTower(mb, f, rng, tf, floors);
   if (floors < 24 && r < 0.65) return tower(mb, f, rng, tf, floors, office, luxury);
-  const designs = [twistedTower, taperedTower, steppedTower, roundTower, wedgeTower, twinTowers, tower, chamferTower, chamferTower];
+  // ほぼガラスだけの外壁を選んだビルは、半分以上をガラスの塔にする
+  if (officePat === PAT.fullglass && r < 0.7) return glassTower(mb, f, rng, tf, floors);
+  const designs = [twistedTower, taperedTower, steppedTower, roundTower, wedgeTower, twinTowers, tower, chamferTower, chamferTower, glassTower];
   let k = Math.floor(rng.next() * designs.length);
   if (designs[k] === twinTowers && !(f.W >= 40 && floors >= 30)) k = (k + 1) % designs.length;
   if (designs[k] === tower && floors >= 45) k = 0;

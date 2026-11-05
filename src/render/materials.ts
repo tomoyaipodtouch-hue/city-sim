@@ -170,6 +170,15 @@ export function createBuildingMaterial(): THREE.MeshLambertMaterial {
             gRefl = 0.9;
             // ガラスの手すりも少し映り込む
             gWin = rail * (1.0 - pier) * (1.0 - slab) * 0.35;
+          } else if (pat > 9.5 && pat < 10.5) { // ほぼガラスだけの外壁
+            vec2 w = max(fwidth(uv) * 0.7, vec2(1e-4));
+            float fy = mod(uv.y, 3.8);
+            float line = 1.0 - box1(0.07, 3.8, fy, w.y);
+            float mull = 1.0 - box1(0.035, 1.465, mod(uv.x, 1.5), w.x);
+            win = 1.0 - max(line, mull) * 0.75;
+            diffuseColor.rgb = mix(diffuseColor.rgb * 0.5, vec3(0.5, 0.53, 0.56), max(line, mull));
+            cellId = floor(vec2(uv.x / 4.5, uv.y / 3.8));
+            gRefl = 1.35;
           } else if (pat > 10.5 && pat < 11.5) { // 夜に光る帯
             gGlow = 1.0;
             diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.8, 0.82, 0.85), 0.5);
@@ -181,7 +190,7 @@ export function createBuildingMaterial(): THREE.MeshLambertMaterial {
           }
           float r = h21(cellId + floor(vWp.xz * 0.05));
           vec3 glass = mix(vec3(0.13, 0.17, 0.23), vec3(0.32, 0.4, 0.5), r * 0.6);
-          bool modern = pat > 6.5 && pat < 9.5;
+          bool modern = pat > 6.5 && pat < 10.5;
           // 近代的なガラスは、建物の色（ガラスの色合い）を暗くしたもの。映り込みは光の計算のところで足す
           if (modern) glass = vColor.rgb * (0.32 + 0.1 * r);
           // 空の映り込み（上の階ほど明るく、窓ごとに少し違う）
@@ -195,7 +204,7 @@ export function createBuildingMaterial(): THREE.MeshLambertMaterial {
           lit = win * step(0.45, r) * (1.0 - aband);
           if (modern) {
             // オフィスは天井の照明が帯のように光る（窓の上側が明るい）
-            float fy2 = mod(uv.y, pat > 8.5 ? 3.1 : 3.7);
+            float fy2 = mod(uv.y, abs(pat - 9.0) < 0.5 ? 3.1 : abs(pat - 10.0) < 0.5 ? 3.8 : 3.7);
             lit *= 0.65 + 0.6 * smoothstep(2.2, 3.4, fy2);
           }
           if (gRefl < 0.01) gRefl = pat < 3.5 && pat > 2.5 ? 0.55 : 0.3;
