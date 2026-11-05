@@ -315,6 +315,16 @@ describe('stage 2a roads', () => {
     expect(core[g.idx(70, 70)]).toBeGreaterThan(0.7);
   });
 
+  it('offices prefer the middle of a high-density district, shops its edge', () => {
+    const w = new World(64);
+    const g = w.g;
+    for (let y = 10; y < 40; y++) for (let x = 10; x < 40; x++) { g.zone[g.idx(x, y)] = ZoneType.C; g.zden[g.idx(x, y)] = 2; }
+    w.coreMap(true);
+    const mid = g.idx(25, 25), edge = g.idx(11, 11);
+    const lean = (i: number) => w.desirability('CO3', i) - w.desirability('CS2', i);
+    expect(lean(mid)).toBeGreaterThan(lean(edge) + 0.3);
+  });
+
   it('trees can be planted on empty land, but not on roads', () => {
     const w = new World(32);
     w.g.heights.fill(6);

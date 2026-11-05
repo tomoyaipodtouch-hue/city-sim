@@ -782,8 +782,14 @@ export class World {
     const eq = this.services.eq.adult;
     const svcR = -0.45 * crime - 0.25 * fire - 0.35 * garbage + 0.15 * hlt + 0.1 * edu + this.fx.rDesire;
     const svcC = -0.3 * crime - 0.2 * fire - 0.25 * garbage;
-    const base = this.desirabilityBase(kind, lv, pol, commutePen, res, traffic, water, eq);
+    let base = this.desirabilityBase(kind, lv, pol, commutePen, res, traffic, water, eq);
     const zone = GROW[kind].zone;
+    if (zone === ZoneType.C) {
+      // オフィスは高層ビル街の中心と、ほかのオフィスの近くに集まる。店舗は中心をさけ、住宅の近く・地区の外側に
+      const core = this.coreMap()[i], office = this.officeNear![i];
+      if (kind === 'CO2' || kind === 'CO3') base += 0.7 * core + 0.8 * office - 0.25 * res;
+      else base += -0.6 * core * (kind === 'CS1' ? 1.2 : 1) - 0.5 * office + 0.15 * res;
+    }
     return base + (zone === ZoneType.R ? svcR * (kind === 'R1' ? 0.6 : kind === 'R3' ? 1.4 : 1) : zone === ZoneType.C ? svcC : -0.15 * fire - 0.2 * garbage);
   }
 
@@ -858,6 +864,7 @@ export class World {
   // 高層ビル街の「中心らしさ」（0..1）。高密度の住宅・商業ゾーンが集まっているほど高く、
   // 近くの高密度地区の中でいちばん集まっている地点が 1 になる（地区ごとに山ができる）
   private core: Float32Array | null = null;
+  private officeNear: Float32Array | null = null;
   private coreDay = -1e9;
   coreMap(force = false): Float32Array {
     if (this.core && !force && this.day - this.coreDay < 30) return this.core;
@@ -915,6 +922,15 @@ export class World {
       core[i] = (a[i] / peak[i]) * (0.4 + 0.6 * big);
     }
     this.core = core;
+    // オフィスの集まり具合（0..1）：オフィスはオフィスの近くに集まる
+    const o = new Float32Array(N);
+    for (const b of this.buildings.values()) {
+      if (b.type !== 'CO2' && b.type !== 'CO3') continue;
+      for (let yy = b.y; yy < b.y + b.h; yy++) for (let xx = b.x; xx < b.x + b.w; xx++) o[yy * n + xx] = 1;
+    }
+    const ob = blur(blur(o, 4), 4);
+    for (let i = 0; i < N; i++) ob[i] = Math.min(1, ob[i] * 2.5);
+    this.officeNear = ob;
     this.coreDay = this.day;
     return core;
   }
