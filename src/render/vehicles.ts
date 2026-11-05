@@ -203,7 +203,7 @@ export function garbageTruck() {
 // kind：rail（鉄道）、erail（高架鉄道）、sub（地下鉄）、mono（モノレール）。head = 運転台つき（前が +z）
 export const TRAIN_SPEC = {
   rail: { L: 18, gap: 0.8, cars: 5, stripe: 0x2e9e5b, stripe2: 0xf08a24 },
-  erail: { L: 18, gap: 0.8, cars: 4, stripe: 0x1f6fd0, stripe2: 0x9ad0ff },
+  erail: { L: 18, gap: 0.8, cars: 3, stripe: 0x1f6fd0, stripe2: 0x9ad0ff },
   sub: { L: 17, gap: 0.8, cars: 5, stripe: 0xd23a3a, stripe2: 0xf2f2f2 },
   mono: { L: 13, gap: 0.6, cars: 4, stripe: 0x1aa38a, stripe2: 0x0f6f60 },
 } as const;

@@ -241,8 +241,8 @@ export class CarLayer {
       for (let i = 0; i < N; i++) if (g.bstop[i]) stops++;
       stops += this.busStopBuildings;
       this.bus.target = Math.min(this.bus.target, Math.max(1, Math.ceil(stops * 1.5)));
-      // 高架鉄道（i = 1）は本数を 4 割に
-      this.lineFleets.forEach((f, i) => build(f, riders.subarray((i + 1) * N, (i + 2) * N), (0.0012 / f.carsPer) * (i === 1 ? 0.4 : 1)));
+      // 高架鉄道（i = 1）は本数を 4 割に（3両編成なので、4両のときと本数が同じになるよう 0.3 倍）
+      this.lineFleets.forEach((f, i) => build(f, riders.subarray((i + 1) * N, (i + 2) * N), (0.0012 / f.carsPer) * (i === 1 ? 0.3 : 1)));
     }
   }
 
@@ -442,6 +442,18 @@ export class CarLayer {
     const tp = this.lightsTail.geometry.getAttribute('position') as THREE.BufferAttribute;
     let nh = 0, nt = 0;
     const P = this.pt;
+    // 車どうしの間隔：同じマス・同じ向き・同じ車線にいる車を集めておく（前の車に追いついたら待つ）
+    const lanes = new Map<number, { c: Car; h: number }[]>();
+    const laneOf = (c: Car) => ((ROADS[g.nodeType(c.from)] || ROADS[1]).oneWay ? c.lane : 0);
+    for (const f of this.fleets) {
+      if (f.track !== 'road' && f.track !== 'bus') continue;
+      for (const c of f.cars) {
+        const key = (c.from * 8 + c.d) * 2 + laneOf(c);
+        const a = lanes.get(key);
+        if (a) a.push({ c, h: f.halfLen });
+        else lanes.set(key, [{ c, h: f.halfLen }]);
+      }
+    }
     for (const f of this.fleets) {
       if ((f.track === 'sub' && !this.showSubway) || (f.track === 'walk' && this.viewDist > 450)) {
         f.mesh.count = 0;
@@ -501,6 +513,23 @@ export class CarLayer {
               }
             } else c.wait = 0;
           }
+        }
+        if (!line && !walk && adv > 0) {
+          // 前の車（同じマスの先、または次のマス）との間をあける
+          const lb = laneOf(c), me = f.halfLen;
+          let gap = Infinity;
+          for (const o of lanes.get((c.from * 8 + c.d) * 2 + lb) ?? []) if (o.c !== c && o.c.t > c.t) gap = Math.min(gap, (o.c.t - c.t) * len - o.h - me);
+          if (gap === Infinity)
+            for (let d = 0; d < 8; d++) {
+              if (d === opp(c.d)) continue;
+              for (const o of lanes.get((c.to * 8 + d) * 2 + lb) ?? []) if (o.c !== c) gap = Math.min(gap, (1 - c.t) * len + o.c.t * CarLayer.cellLen(o.c) - o.h - me);
+            }
+          const room = Math.max(0, gap - 1.5);
+          if (room < adv * len) {
+            // 長く詰まったら（交差点で行き詰まらないように）そのまま進む
+            c.wait = (c.wait ?? 0) + dt;
+            if (c.wait < 6) adv = room / len;
+          } else c.wait = 0;
         }
         c.t += adv;
         let guard = 0;
