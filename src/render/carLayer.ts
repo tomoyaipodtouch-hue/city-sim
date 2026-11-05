@@ -6,6 +6,7 @@ import { CELL, DX, DY, opp } from '../sim/constants';
 import { CIVIC, CivicId, isHighway, LINES, LineKind, ROADS, RoadType } from '../sim/defs';
 import type { Building } from '../sim/world';
 import { RailLayer, TRACK_GAP } from './railLayer';
+import { isUrbanHighway, urbanTurnOk } from '../sim/traffic';
 import { ROAD_LIFT } from './roadLayer';
 import { boxTruck, cityBus, garbageTruck, trainCar, TRAIN_SPEC, TrainKind, hatchback, minivan, pickup, sedan, suv, tractor, trailerBox, trailerTank, vc } from './vehicles';
 
@@ -302,6 +303,7 @@ export class CarLayer {
     let total = 0;
     const add = (v: number, d: number) => {
       if (din >= 0 && d === opp(din)) return;
+      if (f.track === 'road' && isUrbanHighway(g.nodeType(node)) && !urbanTurnOk(din, d)) return;
       const w = (tr[v] || 0) + 2;
       opts.push([v, d]);
       ws.push(w);

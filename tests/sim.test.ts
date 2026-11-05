@@ -3,6 +3,7 @@ import { World } from '../src/sim/world';
 import { plantPower, RoadType, ZoneType } from '../src/sim/defs';
 import { planLine } from '../src/sim/plan';
 import { buildTestCity } from './helpers';
+import { urbanTurnOk } from '../src/sim/traffic';
 
 describe('simulation', () => {
   it('plans 8-direction lines', () => {
@@ -252,6 +253,21 @@ describe('stage 2a roads', () => {
       expect(w.exec({ t: 'uramp', x: 30, y: 19 }).ok).toBe(true);
       expect(f0[g.idx(33, 20)] & (1 << 5)).not.toBe(0);
     }
+  });
+
+  it('on urban highways, ramps are entered and left only with right turns (no crossing the center line)', () => {
+    // 東向き(0)から南側のランプ(南東 1)へは右折なので可、西向き(4)からは中央線をまたぐので不可
+    expect(urbanTurnOk(0, 1)).toBe(true);
+    expect(urbanTurnOk(4, 1)).toBe(false);
+    // 南側のランプから合流（北東 7）：東向き(0)へは可、西向き(4)へは不可
+    expect(urbanTurnOk(7, 0)).toBe(true);
+    expect(urbanTurnOk(7, 4)).toBe(false);
+    // 北側のランプ（西向き用）：西向き(4)から北西(5)へは可、合流（南西 3）から西(4)へは可
+    expect(urbanTurnOk(4, 5)).toBe(true);
+    expect(urbanTurnOk(3, 4)).toBe(true);
+    expect(urbanTurnOk(3, 0)).toBe(false);
+    // まっすぐはいつでも可
+    expect(urbanTurnOk(0, 0)).toBe(true);
   });
 
   it('builds a bridge across water', () => {

@@ -252,6 +252,7 @@ export interface RoadGraph {
   jslot: Int32Array; // 交差点のマス → 待ち時間の表の番号（-1 = 交差点ではない）
   jdel: Float32Array; // [slot*64 + 入ってきた向き*8 + 出ていく向き] の待ち時間（-1 = 通れない）
   edge: Uint8Array; // マップの端のマス
+  urban: Uint8Array; // 都市高速（片側1車線）のノード：中央線をまたぐ右左折はできない
   extPen: Float32Array; // 隣の都市へ出るときの時間（ノードごと）
 }
 
@@ -279,7 +280,9 @@ export function buildRoadGraph(g: Grid, congestion: Float32Array, junctions: Jun
   for (let k = 0; k < n; k++) edge[k] = edge[(n - 1) * n + k] = edge[k * n] = edge[k * n + n - 1] = 1;
   const extPen = new Float32Array(M);
   for (let v = 0; v < M; v++) extPen[v] = isHighway(g.nodeType(v)) ? 6 : 14;
-  return { off, to: Int32Array.from(tmpTo), dir: Int8Array.from(tmpDir), min: Float32Array.from(tmpMin), jslot, jdel, edge, extPen };
+  const urban = new Uint8Array(M);
+  for (let v = 0; v < M; v++) urban[v] = isUrbanHighway(g.nodeType(v)) ? 1 : 0;
+  return { off, to: Int32Array.from(tmpTo), dir: Int8Array.from(tmpDir), min: Float32Array.from(tmpMin), jslot, jdel, edge, extPen, urban };
 }
 
 // 探索に使う作業用の配列（毎回作り直さない）
@@ -338,7 +341,7 @@ export function assignTrips(
     [order[i], order[j]] = [order[j], order[i]];
   }
 
-  const { edge, extPen } = G;
+  const { edge, extPen, urban } = G;
   const lineMask = [null, null, null, null, g.rail, g.erail, g.mono, g.sub] as (Uint8Array | null)[];
   const lineMin = [0, 0, 0, 0, LINES.rail, LINES.erail, LINES.mono, LINES.sub].map((d) => (typeof d === 'number' ? 0 : CELL / ((d.speedKmh * 1000) / 60)));
   const lineWait = [0, 0, 0, 0, LINES.rail.wait, LINES.erail.wait, LINES.mono.wait, LINES.sub.wait];
@@ -437,6 +440,7 @@ export function assignTrips(
             jd = jdel[js * 64 + din * 8 + d];
             if (jd < 0) continue;
           } else if (din >= 0 && ((d - din + 8) & 7) === 4) continue; // Uターンはしない
+          else if (urban[u] && !urbanTurnOk(din, d)) continue;
           relax(to[e], t + emin[e] + jd, u, d, 0);
         }
         if (extFree > 0 && edge[cell]) relax(EXT, t + extPen[u], u, -1, 0);
@@ -523,4 +527,11 @@ export function assignTrips(
 export function congestionFactor(volume: number, capacity: number) {
   const r = volume / capacity;
   return Math.min(8, 1 + 0.15 * r * r * r * r);
+}
+
+export const isUrbanHighway = (t: number) => t === RoadType.UrbanHighway || t === RoadType.UrbanGroundHighway;
+// 都市高速の上では、ランプ（斜め）への出入りは左側の車線からの右折だけ（右側通行：中央線をまたがない）
+export function urbanTurnOk(din: number, d: number) {
+  if (din < 0 || (!(din & 1) && !(d & 1))) return true;
+  return turnKind(din, d) === 1;
 }
