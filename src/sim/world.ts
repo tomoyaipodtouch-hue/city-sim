@@ -331,6 +331,9 @@ export class World {
     linkUrbanEnds(g);
     linkURampMiddles(g); // 以前の版で、ランプの横に後から引いた一般道がつながっていなかった
     w.recomputeAll();
+    // 高層ビル街の中心ほど高くなるように、高密度の建物の高さを合わせ直す
+    w.reshapeSkyline();
+    w.recomputeAll();
     return w;
   }
 
@@ -852,6 +855,103 @@ export class World {
     }
   }
 
+  // 高層ビル街の「中心らしさ」（0..1）。高密度の住宅・商業ゾーンが集まっているほど高く、
+  // 近くの高密度地区の中でいちばん集まっている地点が 1 になる（地区ごとに山ができる）
+  private core: Float32Array | null = null;
+  private coreDay = -1e9;
+  coreMap(force = false): Float32Array {
+    if (this.core && !force && this.day - this.coreDay < 30) return this.core;
+    const g = this.g, n = g.n, N = n * n;
+    let a = new Float32Array(N);
+    for (let i = 0; i < N; i++) if (g.zden[i] === 2 && (g.zone[i] === ZoneType.R || g.zone[i] === ZoneType.C)) a[i] = 1;
+    // ぼかし（横・縦の平均を2回）で、集まり具合にする
+    const blur = (src: Float32Array, r: number) => {
+      const tmp = new Float32Array(N), out = new Float32Array(N);
+      for (let y = 0; y < n; y++) {
+        let acc = 0;
+        for (let x = -r; x <= r; x++) acc += x >= 0 && x < n ? src[y * n + x] : 0;
+        for (let x = 0; x < n; x++) {
+          tmp[y * n + x] = acc / (2 * r + 1);
+          const xo = x - r, xi = x + r + 1;
+          if (xo >= 0) acc -= src[y * n + xo];
+          if (xi < n) acc += src[y * n + xi];
+        }
+      }
+      for (let x = 0; x < n; x++) {
+        let acc = 0;
+        for (let y = -r; y <= r; y++) acc += y >= 0 && y < n ? tmp[y * n + x] : 0;
+        for (let y = 0; y < n; y++) {
+          out[y * n + x] = acc / (2 * r + 1);
+          const yo = y - r, yi = y + r + 1;
+          if (yo >= 0) acc -= tmp[yo * n + x];
+          if (yi < n) acc += tmp[yi * n + x];
+        }
+      }
+      return out;
+    };
+    a = blur(blur(a, 8), 8);
+    // 近く（半径 24 マス）でいちばん高い値
+    const R = 24;
+    const mx = (src: Float32Array) => {
+      const tmp = new Float32Array(N), out = new Float32Array(N);
+      for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+        let m = 0;
+        for (let k = Math.max(0, x - R); k <= Math.min(n - 1, x + R); k += 2) m = Math.max(m, src[y * n + k]);
+        tmp[y * n + x] = m;
+      }
+      for (let x = 0; x < n; x++) for (let y = 0; y < n; y++) {
+        let m = 0;
+        for (let k = Math.max(0, y - R); k <= Math.min(n - 1, y + R); k += 2) m = Math.max(m, tmp[k * n + x]);
+        out[y * n + x] = m;
+      }
+      return out;
+    };
+    const peak = mx(a);
+    const core = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      if (peak[i] <= 0) continue;
+      // 小さな高密度地区は、山も低い
+      const big = Math.min(1, peak[i] / 0.45);
+      core[i] = (a[i] / peak[i]) * (0.4 + 0.6 * big);
+    }
+    this.core = core;
+    this.coreDay = this.day;
+    return core;
+  }
+
+  // 高密度の建物の階数：中心ほど上限に近く、外側ほど低い（ばらつきは少し）
+  private floorsFor(range: [number, number], pop: number, cx: number, cy: number, rnd: number) {
+    const [fmin, fmax] = range;
+    const top = Math.max(fmin, Math.min(fmax, maxFloorsFor(pop)));
+    const c = this.coreMap()[cy * this.g.n + cx];
+    const t = Math.min(1, Math.pow(c, 2.8) * 0.9 + rnd * 0.12);
+    return Math.max(fmin, Math.round(fmin + (top - fmin) * t));
+  }
+
+  // 読み込んだとき、高密度の建物の高さを高層ビル街の形に合わせて建て替える
+  private reshapeSkyline() {
+    const pop = this.stats?.population ?? 0;
+    this.coreMap(true);
+    for (const b of this.buildings.values()) {
+      if (b.civic || b.den < 2 || !b.floors) continue;
+      const def = GROW[b.type as GrowKind];
+      if (!def || def.zone === ZoneType.I) continue;
+      const rnd = ((b.seed >>> 3) % 1000) / 1000;
+      const nf = this.floorsFor(def.floors[b.den], Math.max(pop, this.popForFloors(b.floors)), b.x + (b.w >> 1), b.y + (b.h >> 1), rnd);
+      if (nf === b.floors) continue;
+      b.cap = Math.max(1, Math.round((b.cap / b.floors) * nf));
+      b.occ = Math.min(b.occ, b.cap);
+      b.floors = nf;
+    }
+  }
+
+  // その階数が建てられる人口（今の建物を、読み込んだだけで低くしすぎないように）
+  private popForFloors(floors: number) {
+    let p = 0;
+    while (p < 1e7 && maxFloorsFor(p) < floors) p = Math.max(1000, p * 1.5);
+    return p;
+  }
+
   // 敷地を決めて建物を建てる。replace は建て替える建物のID。
   private trySpawn(kind: GrowKind, i: number, pop: number, replace = 0): boolean {
     const g = this.g, n = g.n;
@@ -893,12 +993,8 @@ export class World {
       } else if (def.zone === ZoneType.I) {
         cap = def.capPerCell * area * IND_DENSITY_MUL[den] * jitter;
       } else {
-        // 階数は人口と地価で決まる
-        const [fmin, fmax] = def.floors[den];
-        const top = Math.max(fmin, Math.min(fmax, maxFloorsFor(pop)));
-        const lv = this.maps.landValue[i] / 255;
-        const t = Math.min(1, Math.pow(this.rng.next(), 1.6) * 0.65 + lv * 0.45);
-        floors = Math.round(fmin + (top - fmin) * t);
+        // 階数は人口の上限の範囲で、高層ビル街の中心に近いほど高い
+        floors = this.floorsFor(def.floors[den], pop, x + (sw >> 1), y + (sh >> 1), this.rng.next());
         cap = def.floorCap * area * floors * jitter;
       }
       cap = Math.max(1, Math.round(cap));

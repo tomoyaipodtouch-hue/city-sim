@@ -301,6 +301,20 @@ describe('stage 2a roads', () => {
     }
   });
 
+  it('the skyline peaks at the middle of each high-density district', () => {
+    const w = new World(96);
+    const g = w.g;
+    // 2つの高密度地区（30×30 と 20×20）
+    for (const [x0, y0, sz] of [[5, 5, 30], [60, 60, 20]])
+      for (let y = y0; y < y0 + sz; y++) for (let x = x0; x < x0 + sz; x++) { g.zone[g.idx(x, y)] = ZoneType.C; g.zden[g.idx(x, y)] = 2; }
+    const core = w.coreMap(true);
+    // それぞれの地区の真ん中が、端より高い
+    expect(core[g.idx(20, 20)]).toBeGreaterThan(core[g.idx(6, 6)] + 0.3);
+    expect(core[g.idx(70, 70)]).toBeGreaterThan(core[g.idx(61, 61)] + 0.3);
+    // 小さい地区にも、ちゃんと山ができる
+    expect(core[g.idx(70, 70)]).toBeGreaterThan(0.7);
+  });
+
   it('trees can be planted on empty land, but not on roads', () => {
     const w = new World(32);
     w.g.heights.fill(6);
