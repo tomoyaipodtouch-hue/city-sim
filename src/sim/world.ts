@@ -1511,6 +1511,7 @@ export class World {
   private svcCover = { police: 0, fire: 0, health: 0 };
   private schoolSeats = 1;
   private airportBoost = 0;
+  zoneDemand: [number, number, number] = [0, 0, 0];
   private seaportBoost = 0;
   modeShare = { car: 0, transit: 0, walk: 0 };
   static readonly CTL_AUTO = Ctl.Auto;
@@ -1583,9 +1584,25 @@ export class World {
     for (const k of GROW_KINDS) {
       let v = raw[k] - (this.taxes[k] - DEFAULT_TAX) * 0.08;
       if (v > 0) v *= mul;
-      v = Math.max(-1, Math.min(1, v));
+      // なめらかに頭打ちにする（すぐに ±1 に張り付かないように）
+      v = Math.tanh(v * 1.1);
       this.demand[k] = this.demand[k] * 0.5 + v * 0.5;
     }
+    // 画面の R・C・I のグラフ：種類ごとの需要を、その種類の街での大きさで重みをつけて平均する。
+    // （以前はいちばん大きい種類を出していたので、建たない種類（工業地域が全部高密度のときの農業など）が
+    //   いつも上限になり、グラフが動かなかった）
+    let lowI = false;
+    for (let i = 0; i < this.g.zden.length; i++) if (this.g.zone[i] === ZoneType.I && this.g.zden[i] === 0) { lowI = true; break; }
+    const wmean = (ks: GrowKind[], ws: number[]) => {
+      let a = 0, w = 0;
+      ks.forEach((k, j) => { a += this.demand[k] * ws[j]; w += ws[j]; });
+      return w > 0 ? a / w : 0;
+    };
+    this.zoneDemand = [
+      wmean(['R1', 'R2', 'R3'], [0.5, 0.35, pop > 600 ? 0.15 : 0]),
+      wmean(['CS1', 'CS2', 'CS3', 'CO2', 'CO3'], [desiredC * share[0], desiredC * share[1], desiredC * share[2], wantCO.CO2, wantCO.CO3]),
+      wmean(['IA', 'ID', 'IM', 'IH'], [lowI ? want.IA : 0, want.ID, want.IM, wantIH]),
+    ];
   }
 
   // ---------------- 建物の状態（入居、空き家） ----------------
@@ -1742,11 +1759,10 @@ export class World {
     for (let i = 0; i < g.n * g.n; i++) if (g.zone[i] && !g.bldg[i]) free[(['', 'R', 'C', 'I'] as const)[g.zone[i]] as 'R' | 'C' | 'I']++;
     let congested = 0, roads = 0;
     for (let i = 0; i < g.n * g.n; i++) if (g.road[i]) { roads++; if (this.maps.congestion[i] > 1.6) congested++; }
-    const d = this.demand;
     this.advice = makeAdvice({
       pop, funds: this.funds, net: this.lastMonthIncome - this.lastMonthExpense, avgTax: taxes.reduce((a, b) => a + b, 0) / taxes.length,
-      loans: this.loans.length, demandR: Math.max(d.R1, d.R2, d.R3), demandC: Math.max(d.CS1, d.CS2, d.CS3, d.CO2, d.CO3),
-      demandI: Math.max(d.IA, d.ID, d.IM, d.IH), freeZones: free, commute: this.avgCommute, congested: roads ? congested / roads : 0,
+      loans: this.loans.length, demandR: this.zoneDemand[0], demandC: this.zoneDemand[1],
+      demandI: this.zoneDemand[2], freeZones: free, commute: this.avgCommute, congested: roads ? congested / roads : 0,
       transitShare: this.modeShare.transit, crime: this.svc.crimeAvg, fireRisk: 0, policeCover: this.svcCover.police,
       fireCover: this.svcCover.fire, healthCover: this.svcCover.health, hq: this.services.hq, eqChild: this.services.eq.child,
       eqAdult: this.services.eq.adult, schoolSeats: this.schoolSeats,
@@ -1822,7 +1838,7 @@ export class World {
       workers: Math.round(pop * 0.5),
       employed: Math.round(this.employedTotal),
       demand: { ...d },
-      demandRCI: [Math.max(d.R1, d.R2, d.R3), Math.max(d.CS1, d.CS2, d.CS3, d.CO2, d.CO3), Math.max(d.IA, d.ID, d.IM, d.IH)],
+      demandRCI: [...this.zoneDemand] as [number, number, number],
       powerSupply: this.powerSupply,
       powerDemand: Math.round(this.powerDemand),
       waterSupply: this.waterSupply,
