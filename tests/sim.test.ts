@@ -348,6 +348,25 @@ describe('stage 2a roads', () => {
     }
   });
 
+  it('farm zones get one farmhouse per 8x8 tile, without power', () => {
+    const w = new World(48);
+    w.g.heights.fill(6);
+    w.funds = 1e7;
+    const g = w.g;
+    // 道路の南側に 16×8 の農地（区画 2 つ分）
+    expect(w.exec({ t: 'road', x0: 0, y0: 15, x1: 47, y1: 15, road: RoadType.Road }).ok).toBe(true);
+    expect(w.exec({ t: 'zone', x0: 16, y0: 16, x1: 31, y1: 23, zone: ZoneType.F, den: 0 }).ok).toBe(true);
+    // 人口がいないと需要が出ないので、住宅も少し
+    expect(w.exec({ t: 'zone', x0: 0, y0: 10, x1: 30, y1: 14, zone: ZoneType.R, den: 0 }).ok).toBe(true);
+    w.demand.IA = 1;
+    for (let d = 0; d < 360; d++) { w.demand.IA = 1; w.stepDay(); }
+    const farms = [...w.buildings.values()].filter((b) => b.type === 'IA');
+    expect(farms.length).toBeGreaterThanOrEqual(1);
+    expect(farms.length).toBeLessThanOrEqual(2);
+    const tiles = new Set(farms.map((b) => Math.floor(b.x / 8) + ',' + Math.floor(b.y / 8)));
+    expect(tiles.size).toBe(farms.length);
+  });
+
   it('trees can be planted on empty land, but not on roads', () => {
     const w = new World(32);
     w.g.heights.fill(6);

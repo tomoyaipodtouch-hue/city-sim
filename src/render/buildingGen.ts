@@ -5,6 +5,7 @@ import { MeshBuilder, PAT } from './builder';
 import { Rng } from '../sim/rng';
 import { CELL } from '../sim/constants';
 import type { Building } from '../sim/world';
+import type { Grid } from '../sim/grid';
 import { BState } from '../sim/world';
 
 export interface TreeSpot {
@@ -2095,4 +2096,64 @@ function stadium(mb: MeshBuilder, f: LotFrame, rng: Rng) {
     mb.box(x - 2, 30, z - 0.6, x + 2, 32, z + 0.6, PALETTE.white);
   }
   void rng;
+}
+
+// ---- 農地の畑（農家の区画の空いたマス全部）----
+// 畑の種類：0 = 麦、1 = 野菜、2 = 水田、3 = 牧草地（牛）、4 = 果樹園。農家ごとに決まり、畝の向きも農家ごと
+export const FARM_KINDS = ['麦畑', '野菜畑', '水田', '牧草地', '果樹園'] as const;
+export function farmFields(mb: MeshBuilder, g: Grid, b: Building, cells: number[], trees: TreeSpot[]) {
+  const n = g.n;
+  const kind = (b.seed >>> 4) % 5;
+  const alongX = ((b.seed >>> 8) & 1) === 0;
+  mb.setTransform(0, 0, 0, 0);
+  const keep = mb.matOverride;
+  mb.matOverride = MAT.ground;
+  const H = (x: number, z: number) => g.groundAt(x, z) + 0.09;
+  // 畝の帯（世界座標で続くので、隣のマスとつながる）
+  const strip = (x0: number, z0: number, x1: number, z1: number, c: THREE.Color, dy = 0) =>
+    mb.quad([x0, H(x0, z1) + dy, z1], [x1, H(x1, z1) + dy, z1], [x1, H(x1, z0) + dy, z0], [x0, H(x0, z0) + dy, z0], c);
+  const wheat = [C(0xd8b55a), C(0xcda64c)], veg = [C(0x5f9a3c), C(0x4c8a34), C(0x7a5a3a)];
+  const paddy = C(0x6f9f86), levee = C(0xa89a70), grass = C(0x82b04e), grass2 = C(0x76a447);
+  const hsh = (a: number, c: number) => { let h = Math.imul(a, 374761393) ^ Math.imul(c, 668265263) ^ b.seed; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+  for (const c of cells) {
+    const cx = c % n, cy = (c / n) | 0;
+    if (g.isWater(cx, cy)) continue;
+    const X0 = cx * CELL, Z0 = cy * CELL, X1 = X0 + CELL, Z1 = Z0 + CELL;
+    const band = (w: number, cols: THREE.Color[]) => {
+      for (let t = 0; t < CELL; t += w) {
+        const k = Math.floor(((alongX ? Z0 : X0) + t) / w) % cols.length;
+        if (alongX) strip(X0, Z0 + t, X1, Z0 + Math.min(CELL, t + w), cols[k]);
+        else strip(X0 + t, Z0, X0 + Math.min(CELL, t + w), Z1, cols[k]);
+      }
+    };
+    // 区画（8×8）の境目に、あぜ道（隣の農家との境）
+    const path = C(0xa58f68), pw = 1.1;
+    if (cx % 8 === 0) strip(X0, Z0, X0 + pw, Z1, path, 0.02);
+    if (cy % 8 === 0) strip(X0, Z0, X1, Z0 + pw, path, 0.02);
+    if (kind === 0) band(2, wheat);
+    else if (kind === 1) band(1.6, veg);
+    else if (kind === 2) {
+      // 水田：あぜ道で区切った水面
+      strip(X0, Z0, X1, Z1, levee);
+      strip(X0 + 0.6, Z0 + 0.6, X1 - 0.6, Z1 - 0.6, paddy, 0.03);
+    } else if (kind === 3) {
+      band(4, [grass, grass2]);
+      // 牛（白黒のかたまり）
+      for (let k = 0; k < 2; k++) {
+        if (hsh(c, k) > 0.45) continue;
+        const x = X0 + 3 + hsh(c, k + 7) * 10, z = Z0 + 3 + hsh(c, k + 11) * 10, y = H(x, z);
+        const col = hsh(c, k + 3) < 0.5 ? C(0xf2f0ea) : C(0x3a2e28);
+        if (alongX) mb.box(x - 1.1, y, z - 0.4, x + 1.1, y + 1.3, z + 0.4, col);
+        else mb.box(x - 0.4, y, z - 1.1, x + 0.4, y + 1.3, z + 1.1, col);
+      }
+    } else {
+      // 果樹園：草地に、まっすぐな列の低い木
+      strip(X0, Z0, X1, Z1, grass2);
+      for (let a = 2.5; a < CELL; a += 5) for (let d = 2.5; d < CELL; d += 5) {
+        const x = X0 + (alongX ? a : d), z = Z0 + (alongX ? d : a);
+        trees.push({ x, y: g.groundAt(x, z), z, s: 0.55 + hsh(Math.round(x), Math.round(z)) * 0.15, kind: 0 });
+      }
+    }
+  }
+  mb.matOverride = keep;
 }

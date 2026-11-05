@@ -53,6 +53,7 @@ export const TOOL_GROUPS: ToolGroup[] = [
           swatch: `color-mix(in srgb, ${['', 'var(--r)', 'var(--c)', 'var(--i)'][z]} ${[55, 80, 100][d]}%, #000)`,
         })),
       ),
+      { tool: 'zone:4:0', name: '農地（8×8ごとに農家1軒、残りは畑）', note: `${yen(ZONE_COST[4][0])}/マス`, swatch: '#b9a24e' },
       { tool: 'dezone', name: 'ゾーン解除', note: '空き地のみ' },
     ],
   },
@@ -148,7 +149,7 @@ export interface PreviewInfo {
   bad: boolean;
 }
 
-const ZONE_HEX = [0, 0x49c25a, 0x4a8ff0, 0xe9b52a];
+const ZONE_HEX = [0, 0x49c25a, 0x4a8ff0, 0xe9b52a, 0xb9a24e];
 
 export class ToolController {
   tool = '';

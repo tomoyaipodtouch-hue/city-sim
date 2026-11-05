@@ -26,6 +26,7 @@ const ZONE_RGB: [number, number, number][] = [
   [70, 200, 80],
   [60, 120, 235],
   [235, 190, 40],
+  [185, 162, 78],
 ];
 
 function ramp(t: number, stops: [number, number, number][]): [number, number, number] {

@@ -67,8 +67,10 @@ export enum ZoneType {
   R = 1,
   C = 2,
   I = 3,
+  F = 4, // 農地（8×8マスごとに農家が1軒、残りは畑）
 }
-export const ZONE_NAMES = ['なし', '住宅', '商業', '工業'];
+export const ZONE_NAMES = ['なし', '住宅', '商業', '工業', '農地'];
+export const FARM_TILE = 8; // 農家1軒あたりの区画（マス）
 export const DENSITY_NAMES = ['低密度', '中密度', '高密度'];
 // 1マスあたりのゾーン指定の費用 [ゾーン][密度]
 export const ZONE_COST = [
@@ -76,6 +78,7 @@ export const ZONE_COST = [
   [4, 8, 15],
   [5, 10, 18],
   [6, 12, 20],
+  [2, 2, 2],
 ];
 
 // ---- 成長する建物の種類（SC4 と同じ区分） ----
@@ -113,7 +116,7 @@ export const GROW: Record<GrowKind, GrowDef> = {
   CS3: { kind: 'CS3', zone: ZoneType.C, name: '商業（高所得向け）', capPerCell: 6, floorCap: 3, wealth: 1.6, dens: [0, 1, 2], sizes: [[[1, 1], [2, 1], [1, 2], [2, 2]], S_MID, S_HIGH], floors: [[1, 2], [2, 6], [5, 20]], pollution: 0.03, powerPer: 0.08, waterPer: 0.06 },
   CO2: { kind: 'CO2', zone: ZoneType.C, name: 'オフィス（中所得）', capPerCell: 0, floorCap: 8, wealth: 1.2, dens: [1, 2], sizes: [[], S_MID, S_HIGH], floors: [[1, 1], [4, 10], [10, 45]], pollution: 0.02, powerPer: 0.08, waterPer: 0.04 },
   CO3: { kind: 'CO3', zone: ZoneType.C, name: 'オフィス（高所得）', capPerCell: 0, floorCap: 8, wealth: 1.8, dens: [1, 2], sizes: [[], S_MID, S_HIGH], floors: [[1, 1], [5, 12], [15, 110]], pollution: 0.02, powerPer: 0.09, waterPer: 0.04 },
-  IA: { kind: 'IA', zone: ZoneType.I, name: '農業', capPerCell: 1.5, floorCap: 0, wealth: 0.5, dens: [0], sizes: [[[3, 3], [2, 3], [3, 2], [4, 4], [2, 2]]], floors: [[1, 1]], pollution: 0.05, powerPer: 0.05, waterPer: 0.3 },
+  IA: { kind: 'IA', zone: ZoneType.F, name: '農業', capPerCell: 1.6, floorCap: 0, wealth: 0.5, dens: [0], sizes: [[[2, 2]]], floors: [[1, 1]], pollution: 0.05, powerPer: 0.05, waterPer: 0.3 },
   ID: { kind: 'ID', zone: ZoneType.I, name: '汚染型工業', capPerCell: 18, floorCap: 0, wealth: 0.8, dens: [0, 1, 2], sizes: [[[2, 2], [3, 2], [2, 3], [3, 3], [1, 2]], S_IND_MID, S_IND_HIGH], floors: [[1, 1], [1, 1], [1, 1]], pollution: 1.0, powerPer: 0.12, waterPer: 0.1 },
   IM: { kind: 'IM', zone: ZoneType.I, name: '製造業', capPerCell: 14, floorCap: 0, wealth: 1.1, dens: [0, 1, 2], sizes: [[[2, 2], [3, 2], [2, 3], [3, 3]], S_IND_MID, S_IND_HIGH], floors: [[1, 1], [1, 1], [1, 1]], pollution: 0.45, powerPer: 0.1, waterPer: 0.1 },
   IH: { kind: 'IH', zone: ZoneType.I, name: 'ハイテク産業', capPerCell: 10, floorCap: 0, wealth: 1.7, dens: [1, 2], sizes: [[], [[2, 2], [2, 1], [1, 2], ...S_IND_MID], [[2, 2], [3, 2], [2, 3], ...S_IND_HIGH]], floors: [[1, 1], [1, 1], [1, 1]], pollution: 0.05, powerPer: 0.14, waterPer: 0.06 },
@@ -125,7 +128,8 @@ export const IND_DENSITY_MUL = [1, 1.7, 2.6];
 export const ZONE_KINDS: Record<number, GrowKind[]> = {
   [ZoneType.R]: ['R1', 'R2', 'R3'],
   [ZoneType.C]: ['CS1', 'CS2', 'CS3', 'CO2', 'CO3'],
-  [ZoneType.I]: ['IA', 'ID', 'IM', 'IH'],
+  [ZoneType.I]: ['ID', 'IM', 'IH'],
+  [ZoneType.F]: ['IA'],
 };
 
 export const TAX_LABELS: Record<GrowKind, string> = {

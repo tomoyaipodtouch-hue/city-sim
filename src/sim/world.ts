@@ -4,7 +4,7 @@ import { Rng } from './rng';
 import { DAYS_PER_MONTH, DX, DY } from './constants';
 import {
   CIVIC, CivicId, plantPower, DEFAULT_TAX, DEPT_NAMES, Dept, DIFFICULTY, isHighway, SERVICE_DEPT, LineKind, LINES, FARE, BUS_STOP_UPKEEP, ESTOP_UPKEEP, GROW, GROW_KINDS, GrowKind, IND_DENSITY_MUL, maxFloorsFor, POWER_LINE_UPKEEP, ROADS, RoadType,
-  ZONE_KINDS, ZoneType,
+  ZONE_KINDS, ZoneType, FARM_TILE,
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
 import {
@@ -200,8 +200,8 @@ export class World {
   buildingVersion = 1;
   mapsVersion = 1;
 
-  private candidates: Record<number, number[]> = { 1: [], 2: [], 3: [] };
-  private upgrades: Record<number, number[]> = { 1: [], 2: [], 3: [] };
+  private candidates: Record<number, number[]> = { 1: [], 2: [], 3: [], 4: [] };
+  private upgrades: Record<number, number[]> = { 1: [], 2: [], 3: [], 4: [] };
   private candidatesDirty = true;
   private resDensity = new Float32Array(0);
   private commuteAtCell = new Float32Array(0);
@@ -762,9 +762,9 @@ export class World {
   // ---------------- 建物の成長 ----------------
   private rebuildCandidates() {
     const g = this.g, n = g.n;
-    this.candidates = { 1: [], 2: [], 3: [] };
+    this.candidates = { 1: [], 2: [], 3: [], 4: [] };
     // 建て替えの候補：ゾーンの密度が建物より高い、または古くなった中・高密度の建物
-    this.upgrades = { 1: [], 2: [], 3: [] };
+    this.upgrades = { 1: [], 2: [], 3: [], 4: [] };
     for (const b of this.buildings.values()) {
       if (b.civic || b.state !== BState.Normal) continue;
       const z = GROW[b.type as GrowKind].zone;
@@ -833,7 +833,7 @@ export class World {
     if (this.candidatesDirty) this.rebuildCandidates();
     const g = this.g;
     const pop = this.cachedPop;
-    for (const z of [ZoneType.R, ZoneType.C, ZoneType.I]) {
+    for (const z of [ZoneType.R, ZoneType.C, ZoneType.I, ZoneType.F]) {
       const kindsAll = ZONE_KINDS[z];
       const maxDem = Math.max(...kindsAll.map((k) => this.demand[k]));
       if (maxDem <= 0.02) continue;
@@ -856,7 +856,7 @@ export class World {
           if (g.bldg[i]) continue;
         }
         if (g.zone[i] !== z) continue;
-        if (!this.maps.power[i]) continue; // 電力がないと建たない
+        if (!this.maps.power[i] && z !== ZoneType.F) continue; // 電力がないと建たない（農業はなくてもよい）
         const den = g.zden[i];
         const kinds = kindsAll.filter((k) => GROW[k].dens.includes(den));
         // 種類を選ぶ
@@ -991,6 +991,22 @@ export class World {
     return p;
   }
 
+  // 農地の区画（8×8）の中の、農地ゾーンのマス
+  farmCells(x: number, y: number): number[] {
+    const g = this.g, n = g.n, out: number[] = [];
+    const tx = Math.floor(x / FARM_TILE) * FARM_TILE, ty = Math.floor(y / FARM_TILE) * FARM_TILE;
+    for (let yy = ty; yy < Math.min(n, ty + FARM_TILE); yy++)
+      for (let xx = tx; xx < Math.min(n, tx + FARM_TILE); xx++) if (g.zone[yy * n + xx] === ZoneType.F) out.push(yy * n + xx);
+    return out;
+  }
+  private farmInTile(x: number, y: number): boolean {
+    for (const c of this.farmCells(x, y)) {
+      const id = this.g.bldg[c];
+      if (id && this.buildings.get(id)?.type === 'IA') return true;
+    }
+    return false;
+  }
+
   // 敷地を決めて建物を建てる。replace は建て替える建物のID。
   private trySpawn(kind: GrowKind, i: number, pop: number, replace = 0): boolean {
     const g = this.g, n = g.n;
@@ -1002,10 +1018,12 @@ export class World {
     if (!watered) den = 0;
     if (!def.dens.includes(den)) return false;
     let sizes = def.sizes[den] || [];
-    if (!watered) sizes = sizes.filter(([w, h]) => w * h <= 2);
+    if (!watered && def.zone !== ZoneType.F) sizes = sizes.filter(([w, h]) => w * h <= 2); // 農家は水道がなくてもよい
     if (!sizes.length) return false;
     const [sw, sh] = sizes[this.rng.int(sizes.length)];
     const old = replace ? this.buildings.get(replace) : undefined;
+    // 農家は 8×8 マスの区画ごとに1軒だけ
+    if (def.zone === ZoneType.F && !old && this.farmInTile(x0, y0)) return false;
     // この位置を含む敷地を探す
     const tries: [number, number][] = [];
     for (let oy = 0; oy < sh; oy++) for (let ox = 0; ox < sw; ox++) tries.push([x0 - ox, y0 - oy]);
@@ -1027,7 +1045,10 @@ export class World {
       const area = sw * sh;
       let cap: number, floors = 0;
       const jitter = 0.85 + this.rng.next() * 0.3;
-      if (den === 0) {
+      if (def.zone === ZoneType.F) {
+        // 農家の働く人は、区画の中の農地のマス数で決まる（畑はすべて農家のもの）
+        cap = def.capPerCell * Math.max(4, this.farmCells(x, y).length) * jitter;
+      } else if (den === 0) {
         cap = def.capPerCell * area * jitter * (watered ? 1 : 0.7);
       } else if (def.zone === ZoneType.I) {
         cap = def.capPerCell * area * IND_DENSITY_MUL[den] * jitter;
@@ -1346,7 +1367,7 @@ export class World {
       } else {
         addDest(jobsAt, acc, { id: b.id, free: b.cap });
         if (b.type === 'CS1' || b.type === 'CS2' || b.type === 'CS3') addDest(shopsAt, acc, { id: b.id, free: b.cap * 6 });
-        if (def.zone === ZoneType.I) addOrigin(trucks, cell, b.id, Math.max(1, Math.round(b.occ * (b.type === 'IA' ? 0.05 : 0.12))));
+        if (def.zone === ZoneType.I || def.zone === ZoneType.F) addOrigin(trucks, cell, b.id, Math.max(1, Math.round(b.occ * (b.type === 'IA' ? 0.05 : 0.12))));
       }
     }
     const pop = this.population();
@@ -1497,7 +1518,7 @@ export class World {
         if (b.type === 'CS1' || b.type === 'CS2' || b.type === 'CS3') {
           b.customers = Math.min(1, (rs.filled.get(b.id) || 0) / Math.max(1, b.cap * 6) + (this.neighborConnected ? 0.15 : 0));
         }
-        if (def.zone === ZoneType.I) {
+        if (def.zone === ZoneType.I || def.zone === ZoneType.F) {
           const shipped = rf.served.get(b.id);
           b.freight = shipped === undefined ? 1 : Math.min(1, shipped / Math.max(1, Math.round(b.occ * 0.12)));
           b.freightTime = rf.time.get(b.id) || 0;
@@ -1618,8 +1639,9 @@ export class World {
     // 画面の R・C・I のグラフ：種類ごとの需要を、その種類の街での大きさで重みをつけて平均する。
     // （以前はいちばん大きい種類を出していたので、建たない種類（工業地域が全部高密度のときの農業など）が
     //   いつも上限になり、グラフが動かなかった）
+    // 農業（農地ゾーン）の需要も、I のグラフにまとめる（農地ゾーンがあるときだけ）
     let lowI = false;
-    for (let i = 0; i < this.g.zden.length; i++) if (this.g.zone[i] === ZoneType.I && this.g.zden[i] === 0) { lowI = true; break; }
+    for (let i = 0; i < this.g.zden.length; i++) if (this.g.zone[i] === ZoneType.F) { lowI = true; break; }
     const wmean = (ks: GrowKind[], ws: number[]) => {
       let a = 0, w = 0;
       ks.forEach((k, j) => { a += this.demand[k] * ws[j]; w += ws[j]; });
@@ -1644,7 +1666,7 @@ export class World {
       }
       if (b.state !== BState.Normal) continue;
       let bad = false;
-      if (!b.powered) bad = true;
+      if (!b.powered && def.zone !== ZoneType.F) bad = true;
       if (def.zone === ZoneType.R) {
         const dem = this.demand[b.type as GrowKind];
         if (b.employed < 0.5 && dem < 0) bad = true;

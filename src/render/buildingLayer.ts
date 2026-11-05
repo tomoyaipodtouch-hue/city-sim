@@ -3,9 +3,9 @@ import * as THREE from 'three';
 import { Grid } from '../sim/grid';
 import type { Building } from '../sim/world';
 import { MeshBuilder } from './builder';
-import { generateBuilding, setupLot, TreeSpot } from './buildingGen';
+import { generateBuilding, setupLot, TreeSpot, farmFields } from './buildingGen';
 import { createBuildingMaterial } from './materials';
-import { CIVIC, CivicId } from '../sim/defs';
+import { CIVIC, CivicId, FARM_TILE, ZoneType } from '../sim/defs';
 
 const CHUNK = 16;
 
@@ -47,6 +47,7 @@ export class BuildingLayer {
       let key = '';
       for (const b of bs) {
         key += `${b.id}.${b.state}.${b.face};`;
+        if (b.type === 'IA') key += `f${farmEmpty(g, b).length};`;
         if (cparkIds.has(b.id)) {
           let m = 0;
           for (let x = b.x; x < b.x + b.w; x++) m = m * 4 + (isCpark(x, b.y - 1) ? 1 : 0) + (isCpark(x, b.y + b.h) ? 2 : 0);
@@ -83,6 +84,8 @@ export class BuildingLayer {
         const f = setupLot(mb, b, groundAt, minAt);
         const v0 = mb.pos.length;
         generateBuilding(mb, b, f, trees, isCpark);
+        // 農家：同じ区画（8×8）の空いた農地を、ぜんぶ畑にする
+        if (b.type === 'IA' && g.zone[g.idx(b.x, b.y)] === ZoneType.F) farmFields(mb, g, b, farmEmpty(g, b), trees);
         // 高さ 60m を超える建物のいちばん高いところに、航空障害灯を付ける
         let top = -Infinity, tx = 0, tz = 0;
         for (let k = v0; k < mb.pos.length; k += 3) if (mb.pos[k + 1] > top) { top = mb.pos[k + 1]; tx = mb.pos[k]; tz = mb.pos[k + 2]; }
@@ -108,4 +111,16 @@ export class BuildingLayer {
     for (const c of this.chunks.values()) out.push(...c.trees);
     return out;
   }
+}
+
+// 農家の区画（8×8）の中で、建物も道路もない農地のマス
+function farmEmpty(g: Grid, b: Building): number[] {
+  const n = g.n, out: number[] = [];
+  const tx = Math.floor(b.x / FARM_TILE) * FARM_TILE, ty = Math.floor(b.y / FARM_TILE) * FARM_TILE;
+  for (let y = ty; y < Math.min(n, ty + FARM_TILE); y++)
+    for (let x = tx; x < Math.min(n, tx + FARM_TILE); x++) {
+      const i = y * n + x;
+      if (g.zone[i] === ZoneType.F && !g.bldg[i] && !g.road[i] && !g.rail[i] && !g.pline[i]) out.push(i);
+    }
+  return out;
 }
