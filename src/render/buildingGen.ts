@@ -741,12 +741,7 @@ function nuclearPlant(mb: MeshBuilder, f: LotFrame) {
   }
   // 原子炉の建屋（円筒と丸い屋根）
   mb.cylinder(18, 18, 0, 20, 10, 24, PALETTE.white, undefined);
-  const dome = [[20, 10, 9.2], [24, 9.2, 7.2], [27, 7.2, 4.4], [28.6, 4.4, 0.01]];
-  let y0 = 20;
-  for (const [y1, r0, r1] of dome) {
-    mb.cylinder(18, 18, y0, y1, r0, 24, PALETTE.white, r1 < 0.1 ? PALETTE.white : undefined, r1);
-    y0 = y1;
-  }
+  mb.dome(18, 18, 20, 10, 8.6, PALETTE.white, 32, 10);
   // タービン建屋と事務所
   mb.box(-30, 0, 6, 4, 14, 28, PALETTE.indWall[1], PAT.industrial, PALETTE.steel);
   mb.box(-30, 0, 30, -12, 8, 37, PALETTE.white, PAT.office, PALETTE.roof[3]);
@@ -789,11 +784,7 @@ function bigNuclear(mb: MeshBuilder, f: LotFrame, tf: TF, sea: boolean) {
     for (const sx of [-1, 1]) {
       const rx = sx * 46, rz = 18;
       cyl(rx, rz, 0, 38, 16, white);
-      let y0 = 38, r0 = 16;
-      for (const [y1, r1] of [[44, 14.6], [49, 11.6], [52.5, 7.5], [54.5, 0.01]] as const) {
-        cyl(rx, rz, y0, y1, r0, white, r1 < 0.1 ? white : undefined, r1);
-        y0 = y1; r0 = r1;
-      }
+      mb.dome(rx * k, rz * k, 38 * k, 16 * k, 16.5 * k, white, 40, 12);
       box(rx + sx * 16, 0, rz - 8, rx + sx * 24, 26, rz + 8, grey, PAT.industrial, PALETTE.steel); // 補助建屋
     }
     box(-25, 0, 4, 25, 26, 32, lightBlue, PAT.industrial, PALETTE.steel); // タービン建屋
@@ -803,9 +794,10 @@ function bigNuclear(mb: MeshBuilder, f: LotFrame, tf: TF, sea: boolean) {
     const rad = (t: number) => (t <= 0.75 ? R * (0.62 + 0.38 * ((0.75 - t) / 0.75) ** 2) : R * (0.62 + 0.1 * ((t - 0.75) / 0.25)));
     for (const [x, z] of COOLING_TOWERS.pos) {
       const tw = C(0xe9e6de), band = C(0xd2cdc0);
-      for (let s2 = 0; s2 < 14; s2++) {
-        const t0 = s2 / 14, t1 = (s2 + 1) / 14;
-        cyl(x, z, t0 * H, t1 * H, rad(t0), s2 === 9 ? band : tw, undefined, rad(t1));
+      const RINGS = 28;
+      for (let s2 = 0; s2 < RINGS; s2++) {
+        const t0 = s2 / RINGS, t1 = (s2 + 1) / RINGS;
+        cyl(x, z, t0 * H, t1 * H, rad(t0), s2 === 18 ? band : tw, undefined, rad(t1), 48);
       }
       cyl(x, z, H, H + 0.7, rad(1), band, C(0x3e4044), rad(1) - 1.4);
       cyl(x, z, -0.5, 3.5, R + 0.8, C(0xb9b4a8), undefined, R);
@@ -2096,11 +2088,29 @@ function landfill(mb: MeshBuilder, f: LotFrame, rng: Rng) {
 
 // 弓なりの屋根（x0..x1 の方向に弧を描く。幅を細かく切った箱を並べる）
 function archRoof(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, rise: number, c: THREE.Color, alongX = true) {
-  const N = 12;
+  // 弧に沿ってなめらかな曲面を張り、両端は弧の形の壁でふさぐ
+  const N = 20;
+  const span = alongX ? x1 - x0 : z1 - z0;
+  const pt = (u: number) => y + rise * Math.sin(Math.PI * u);
+  const nrm = (u: number): [number, number, number] => {
+    const slope = (rise * Math.PI * Math.cos(Math.PI * u)) / span;
+    const l = Math.hypot(slope, 1);
+    return alongX ? [-slope / l, 1 / l, 0] : [0, 1 / l, -slope / l];
+  };
   for (let k = 0; k < N; k++) {
-    const u0 = k / N, u1 = (k + 1) / N, h = rise * Math.sin(Math.PI * (u0 + u1) / 2);
-    if (alongX) mb.box(x0 + (x1 - x0) * u0, y, z0, x0 + (x1 - x0) * u1, y + h, z1, c);
-    else mb.box(x0, y, z0 + (z1 - z0) * u0, x1, y + h, z0 + (z1 - z0) * u1, c);
+    const u0 = k / N, u1 = (k + 1) / N;
+    const a0 = (alongX ? x0 : z0) + span * u0, a1 = (alongX ? x0 : z0) + span * u1;
+    const y0 = pt(u0), y1 = pt(u1);
+    if (alongX) mb.quadN([a0, y0, z1], [a1, y1, z1], [a1, y1, z0], [a0, y0, z0], nrm(u0), nrm(u1), nrm(u1), nrm(u0), c);
+    else mb.quadN([x0, y0, a0], [x1, y0, a0], [x1, y1, a1], [x0, y1, a1], nrm(u0), nrm(u0), nrm(u1), nrm(u1), c);
+    // 端の壁（弧の下）
+    if (alongX) {
+      mb.quad([a0, y, z1], [a1, y, z1], [a1, y1, z1], [a0, y0, z1], c);
+      mb.quad([a1, y, z0], [a0, y, z0], [a0, y0, z0], [a1, y1, z0], c);
+    } else {
+      mb.quad([x0, y, a0], [x0, y, a1], [x0, y1, a1], [x0, y0, a0], c);
+      mb.quad([x1, y, a1], [x1, y, a0], [x1, y0, a0], [x1, y1, a1], c);
+    }
   }
 }
 

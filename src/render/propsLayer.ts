@@ -84,7 +84,7 @@ export class PropsLayer {
     ];
     this.planes = new THREE.InstancedMesh(geo((mb) => plane(mb, 0, 0, 1)), mat, 20);
     this.shipMesh = new THREE.InstancedMesh(geo((mb) => containerShip(mb, SHIP_LEN, 7)), mat, 40);
-    this.steam = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshLambertMaterial({ color: 0xf4f4f2, transparent: true, opacity: 0.55, depthWrite: false }), 240);
+    this.steam = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 3), new THREE.MeshLambertMaterial({ color: 0xf4f4f2, transparent: true, opacity: 0.55, depthWrite: false }), 240);
     this.rampTrucks = new THREE.InstancedMesh(garbageTruck(), new THREE.MeshLambertMaterial({ vertexColors: true }), 40);
     this.rampTrucks.count = 0;
     this.rampTrucks.castShadow = true;

@@ -97,6 +97,39 @@ export class MeshBuilder {
     this.idx.push(i0, i1, i2, i0, i2, i3);
   }
 
+  // 4頂点の面（反時計回り）。頂点ごとの法線（曲面をなめらかに見せる）
+  quadN(
+    a: [number, number, number], b: [number, number, number], c: [number, number, number], d: [number, number, number],
+    na: [number, number, number], nb: [number, number, number], nc: [number, number, number], nd: [number, number, number],
+    color: THREE.Color, pat = 0, uw = 0, vh = 0, u0 = 0, v0 = 0,
+  ) {
+    this.curMat = this.autoMat((na[1] + nb[1] + nc[1] + nd[1]) / 4, color, pat);
+    const i0 = this.vtx(...a, ...na, color, u0, v0, pat);
+    const i1 = this.vtx(...b, ...nb, color, u0 + uw, v0, pat);
+    const i2 = this.vtx(...c, ...nc, color, u0 + uw, v0 + vh, pat);
+    const i3 = this.vtx(...d, ...nd, color, u0, v0 + vh, pat);
+    this.idx.push(i0, i1, i2, i0, i2, i3);
+  }
+
+  // 半球のドーム（中心 cx, cz、根元の高さ y、半径 r、高さ h）。なめらかな法線
+  dome(cx: number, cz: number, y: number, r: number, h: number, color: THREE.Color, seg = 32, rings = 10) {
+    for (let k = 0; k < rings; k++) {
+      const t0 = (k / rings) * Math.PI / 2, t1 = ((k + 1) / rings) * Math.PI / 2;
+      const r0 = Math.cos(t0) * r, r1 = Math.cos(t1) * r, y0 = y + Math.sin(t0) * h, y1 = y + Math.sin(t1) * h;
+      for (let sg = 0; sg < seg; sg++) {
+        const a0 = (sg / seg) * Math.PI * 2, a1 = ((sg + 1) / seg) * Math.PI * 2;
+        const P = (a: number, rr: number, yy: number): [number, number, number] => [cx + Math.cos(a) * rr, yy, cz + Math.sin(a) * rr];
+        // 楕円体の法線
+        const N = (a: number, t: number): [number, number, number] => {
+          const nx = (Math.cos(t) / r) * Math.cos(a), ny = Math.sin(t) / h, nz = (Math.cos(t) / r) * Math.sin(a);
+          const l = Math.hypot(nx, ny, nz) || 1;
+          return [nx / l, ny / l, nz / l];
+        };
+        this.quadN(P(a1, r0, y0), P(a0, r0, y0), P(a0, r1, y1), P(a1, r1, y1), N(a1, t0), N(a0, t0), N(a0, t1), N(a1, t1), color);
+      }
+    }
+  }
+
   tri(a: [number, number, number], b: [number, number, number], c: [number, number, number], color: THREE.Color) {
     const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     const e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
@@ -175,7 +208,10 @@ export class MeshBuilder {
       const p1: [number, number, number] = [cx + Math.cos(a1) * r, y0, cz + Math.sin(a1) * r];
       const p2: [number, number, number] = [cx + Math.cos(a1) * r1, y1, cz + Math.sin(a1) * r1];
       const p3: [number, number, number] = [cx + Math.cos(a0) * r1, y1, cz + Math.sin(a0) * r1];
-      this.quad(p1, p0, p3, p2, color);
+      // なめらかな法線（側面の傾きも入れる）
+      const h = y1 - y0, dr = r - r1;
+      const N = (a: number): [number, number, number] => { const l = Math.hypot(h, dr) || 1; return [(Math.cos(a) * h) / l, dr / l, (Math.sin(a) * h) / l]; };
+      this.quadN(p1, p0, p3, p2, N(a1), N(a0), N(a0), N(a1), color);
       if (top) this.tri([cx, y1, cz], p2, p3, top);
     }
   }
@@ -205,7 +241,11 @@ export class MeshBuilder {
       const j = (i + 1) % n;
       const len = Math.hypot(b[j][0] - b[i][0], b[j][1] - b[i][1]);
       const yi = ty ? ty[i] : y1, yj = ty ? ty[j] : y1;
-      this.quad([b[i][0], y0, b[i][1]], [b[j][0], y0, b[j][1]], [t[j][0], yj, t[j][1]], [t[i][0], yi, t[i][1]], wall, pat, len, Math.max(yi, yj) - y0, u, 0);
+      if (n >= 12) {
+        // 角の多い柱（丸い塔）は、中心から外向きの法線でなめらかに見せる
+        const nI = (k: number): [number, number, number] => { const dx = b[k][0] - cx, dz = b[k][1] - cz, l = Math.hypot(dx, dz) || 1; return [dx / l, 0, dz / l]; };
+        this.quadN([b[i][0], y0, b[i][1]], [b[j][0], y0, b[j][1]], [t[j][0], yj, t[j][1]], [t[i][0], yi, t[i][1]], nI(i), nI(j), nI(j), nI(i), wall, pat, len, Math.max(yi, yj) - y0, u, 0);
+      } else this.quad([b[i][0], y0, b[i][1]], [b[j][0], y0, b[j][1]], [t[j][0], yj, t[j][1]], [t[i][0], yi, t[i][1]], wall, pat, len, Math.max(yi, yj) - y0, u, 0);
       u += len;
     }
     if (roof === null) return;
