@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Grid } from '../sim/grid';
 import { CELL, DX, DY, opp } from '../sim/constants';
-import { CIVIC, CivicId, isHighway, LINES, LineKind, ROADS, RoadType } from '../sim/defs';
+import { CIVIC, CivicId, isHighway, LINES, LineKind, ROADS, RoadType, ZoneType } from '../sim/defs';
 import type { Building } from '../sim/world';
 import { RailLayer, TRACK_GAP } from './railLayer';
 import { isUrbanHighway, urbanTurnOk } from '../sim/traffic';
@@ -365,8 +365,24 @@ export class CarLayer {
       const handled = sum > 0 ? Math.max(0, 1 - left / sum) : 0;
       build(this.packers, gv, 0.0002 * handled);
     }
-    // 歩く人は、交通量の多い一般の道路の歩道に多い（寄って見たとき、街に人がいるとわかるくらい）
-    build(this.people, traffic, 0.03);
+    // 歩く人は、交通量の多い一般の道路の歩道に多い（寄って見たとき、街に人がいるとわかるくらい）。
+    // 人数には上限があるので、店の並ぶ通りや密度の高い住宅地のそばに集める（街なかで人が見えるように）
+    {
+      const n = g.n, pv = new Float32Array(traffic.length);
+      for (let i = 0; i < N; i++) {
+        if (traffic[i] <= 0 || !walkable(i)) continue;
+        const x = i % n, y = (i / n) | 0;
+        let k = 1;
+        for (let d = 0; d < 8; d += 2) {
+          if (!g.inb(x + DX[d], y + DY[d])) continue;
+          const j = (y + DY[d]) * n + x + DX[d];
+          if (g.zone[j] === ZoneType.C) k += 1.5;
+          else if (g.zone[j] === ZoneType.R && g.zden[j] > 0) k += 0.6;
+        }
+        pv[i] = traffic[i] * k;
+      }
+      build(this.people, pv, 0.012);
+    }
     if (riders && riders.length === 5 * N) {
       // バスは40人に1台、電車は1両に乗る人数を多めに見て台数を決める
       // バスは前の 4 割の台数にし、バス停の数の 1.5 倍までにする
