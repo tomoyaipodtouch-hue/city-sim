@@ -18,6 +18,8 @@ export function dirOf(dx: number, dy: number): number {
 // ゲーム内時間
 export const DAYS_PER_MONTH = 30;
 // 速度ごとの「1か月の実時間（秒）」。0 は停止。
-export const SPEED_MONTH_SECONDS = [0, 60, 30, 10] as const;
+// 速度ごとの1か月の長さ（実時間の秒）：一時停止、1倍、2倍、4倍。車や列車の動き・昼夜も同じ倍率で速くなる
+export const SPEED_MONTH_SECONDS = [0, 60, 30, 15] as const;
+export const SPEED_SCALE = [0, 1, 2, 4] as const;
 
 export const MAX_ROAD_GRADE = 0.12; // 道路の最大勾配（12%）

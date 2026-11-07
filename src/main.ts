@@ -7,6 +7,7 @@ import { ToolController } from './ui/tools';
 import { Hud, Settings } from './ui/hud';
 import { Input } from './ui/input';
 import { setOrientMode } from './ui/orient';
+import { SPEED_SCALE } from './sim/constants';
 import { exportFile, importFile, listSaves, readSave, writeSave } from './save';
 import type { SaveData } from './sim/world';
 
@@ -115,7 +116,7 @@ const hud: Hud = new Hud(game, renderer, tools, {
 });
 
 Object.assign(hud.settings, loadSettings());
-renderer.timeRunning = () => inGame && game.speed > 0;
+renderer.timeScale = () => (inGame ? SPEED_SCALE[game.speed] ?? 1 : 0);
 hud.applySettings();
 
 tools.onResult = (_ok, msg) => hud.showToast(msg, true);

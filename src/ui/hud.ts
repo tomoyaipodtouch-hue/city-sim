@@ -205,10 +205,11 @@ export class Hud {
     const pop = st('人口', 'pop', '<span class="d" data-v="rating"></span>');
     const date = st('日付', 'date');
     const speed = el('div', 'speed');
-    ['pause', 'play1', 'play2', 'play3'].forEach((k, i) => {
-      const b = el('button', '', svg(k, true));
+    // 一時停止、1倍、2倍、4倍（車や列車の動き・昼夜も同じ倍率で速くなる）
+    ['pause', '1×', '2×', '4×'].forEach((k, i) => {
+      const b = el('button', i ? 'mul' : '', i ? k : svg(k, true));
       b.dataset.s = String(i);
-      b.title = ['停止', '遅い', '普通', '速い'][i];
+      b.title = ['一時停止', '1倍速', '2倍速', '4倍速'][i];
       b.onclick = () => {
         sfx.click();
         this.game.setSpeed(i);

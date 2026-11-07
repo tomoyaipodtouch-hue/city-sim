@@ -51,7 +51,8 @@ export class CityRenderer {
   // 昼と夜：timeOfDay は 0..1（0.5 が正午）。auto のときは時間が進んでいる間だけ回る
   dayMode: 'auto' | 'day' | 'night' = 'auto';
   timeOfDay = 0.36;
-  timeRunning: () => boolean = () => false;
+  // 時間の進む倍率（0 = 一時停止、1・2・4 = 倍速）。車・列車・船・波・雲・昼夜に掛ける
+  timeScale: () => number = () => 0;
   private night = 0;
   get nightAmount() {
     return this.night;
@@ -309,8 +310,12 @@ export class CityRenderer {
     this.rig.update(dt, this.grid);
     this.cars.viewDist = this.rig.dist;
     // 一時停止中は、車・列車・船・飛行機・雲・波も止める
-    const mdt = this.timeRunning() ? dt : 0;
-    if (carsMoving) this.cars.update(mdt);
+    const mdt = dt * this.timeScale();
+    if (carsMoving) {
+      // 倍速で1コマの進みが大きいときは、細かく刻んで動かす（列車の間隔や停車がずれないように）
+      const n = Math.min(4, Math.ceil(mdt / 0.1 - 1e-6) || 1);
+      for (let k = 0; k < n; k++) this.cars.update(mdt / n);
+    }
     this.cars.group.visible = carsMoving;
     this.props.update(mdt);
     this.updateDayNight(dt);
@@ -370,7 +375,7 @@ export class CityRenderer {
   private lastNightKey = -1;
   private updateDayNight(dt: number) {
     if (this.dayMode === 'auto') {
-      if (this.timeRunning()) this.timeOfDay = (this.timeOfDay + dt / CityRenderer.DAY_SECONDS) % 1;
+      this.timeOfDay = (this.timeOfDay + (dt * this.timeScale()) / CityRenderer.DAY_SECONDS) % 1;
     } else this.timeOfDay = this.dayMode === 'day' ? 0.4 : 0.95;
     const tod = this.timeOfDay;
     // 太陽の高さ（6時に昇り、18時に沈む）
