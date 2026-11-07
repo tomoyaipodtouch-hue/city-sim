@@ -6,7 +6,7 @@
 //   3本以上：交差点（角が丸い路面、停止線、横断歩道）
 // 路面、白線・黄線、歩道や壁などの立体物は、それぞれ別のメッシュにまとめる。
 import * as THREE from 'three';
-import { withAO } from './ao';
+import { createMarkMaterial, createRoadSolidMaterial, createRoadSurfaceMaterial, SOLID, SURF, surfCode } from './roadMaterials';
 import { Grid } from '../sim/grid';
 import { CELL, DX, DY, isDiag } from '../sim/constants';
 import { ROADS, RoadType, isHighway } from '../sim/defs';
@@ -26,10 +26,11 @@ const COL = {
   island: new THREE.Color(0x5f8f44),
   glass: new THREE.Color(0x8fb4c9),
   busSign: new THREE.Color(0x2f86d0),
-  asphalt: new THREE.Color(0x55585c),
-  asphaltHw: new THREE.Color(0x4a4d51),
-  asphaltStreet: new THREE.Color(0x5e6064),
+  asphalt: new THREE.Color(0x515457),
+  asphaltStreet: new THREE.Color(0x5a5c5f),
+  slab: new THREE.Color(0x6b6a66), // コンクリートの路面（高速道路）
 };
+const AUX0: [number, number, number, number] = [0, 0, 0, 0];
 
 // 道路の種類ごとの見た目
 function sidewalkOf(t: number) {
@@ -39,23 +40,17 @@ function hasBarrier(t: number) {
   return isHighway(t) || t === RoadType.Ramp;
 }
 
-// 路面のざらつき（世界座標で繰り返す）
-function asphaltTexture(): THREE.CanvasTexture {
-  const S = 128;
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = S;
-  const ctx = cv.getContext('2d')!;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, S, S);
-  for (let k = 0; k < 1600; k++) {
-    const v = 200 + Math.floor(Math.random() * 55);
-    ctx.fillStyle = `rgb(${v},${v},${v})`;
-    ctx.fillRect(Math.random() * S, Math.random() * S, 1 + Math.random() * 2, 1 + Math.random() * 2);
-  }
-  const t = new THREE.CanvasTexture(cv);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
+// 車線の数（路面の車輪のあとを描くのに使う）
+function lanesOf(t: number) {
+  if (t === RoadType.Ramp) return 1;
+  if (t === RoadType.Highway || t === RoadType.GroundHighway) return 3;
+  return 2;
+}
+// 整数2つから乱数（道ごとの色の違いなど）
+function hashInt(a: number, b: number) {
+  let h = Math.imul(a | 0, 374761393) ^ Math.imul(b | 0, 668265263);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return (h ^ (h >>> 16)) >>> 0;
 }
 
 // 頂点を貯めてメッシュにするための入れ物
@@ -67,11 +62,20 @@ export class Buf {
   I: number[] = [];
   owner = -1; // いま作っている道路のノード（路面の三角形ごとに記録する）
   T: number[] = [];
+  // 路面・歩道の模様のための値（withAux のとき、v() で頂点ごとに aux を記録する）
+  withAux = false;
+  A: number[] = [];
+  aux: [number, number, number, number] = AUX0;
+  kindOf: ((c: THREE.Color) => number) | null = null; // 色から模様の種類を決める（aux の 4 番目）
   v(x: number, y: number, z: number, c: THREE.Color, nx = 0, ny = 1, nz = 0) {
     this.P.push(x, y, z);
     this.N.push(nx, ny, nz);
     this.C.push(c.r, c.g, c.b);
     this.U.push(x / 7, z / 7);
+    if (this.withAux) {
+      const a = this.aux;
+      this.A.push(a[0], a[1], a[2], this.kindOf ? this.kindOf(c) : a[3]);
+    }
     return this.P.length / 3 - 1;
   }
   // 上向きの面になるように三角形を追加
@@ -106,6 +110,7 @@ export class Buf {
     g.setAttribute('normal', new THREE.Float32BufferAttribute(this.N, 3));
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.C, 3));
     if (uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(this.U, 2));
+    if (this.withAux) g.setAttribute('aRd', new THREE.Float32BufferAttribute(this.A, 4));
     g.setIndex(this.I);
     return g;
   }
@@ -135,6 +140,7 @@ interface Arm {
   t: number;
   tn: number; // 隣の道路の種類
   ng: boolean; // 隣も地上の道路か（橋や高架につながる腕は、地面に合わせない）
+  nn: number; // 隣のノード（なければ -1）
 }
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -149,12 +155,11 @@ export class RoadLayer {
   jctl: Uint8Array = new Uint8Array(0); // 交差点の制御方式（シミュレーションで決まったもの）
 
   constructor() {
-    const smat = withAO(new THREE.MeshLambertMaterial({ vertexColors: true, map: asphaltTexture(), polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }), 0.32);
-    this.surface = new THREE.Mesh(new THREE.BufferGeometry(), smat);
+    this.surface = new THREE.Mesh(new THREE.BufferGeometry(), createRoadSurfaceMaterial());
     this.surface.receiveShadow = true;
-    this.marks = new THREE.Mesh(new THREE.BufferGeometry(), withAO(new THREE.MeshLambertMaterial({ vertexColors: true, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8 }), 0.32));
+    this.marks = new THREE.Mesh(new THREE.BufferGeometry(), createMarkMaterial());
     this.marks.receiveShadow = true;
-    this.solid = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true }));
+    this.solid = new THREE.Mesh(new THREE.BufferGeometry(), createRoadSolidMaterial());
     this.solid.castShadow = true;
     this.solid.receiveShadow = true;
     this.poles = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ color: 0x6b5b4a }));
@@ -170,12 +175,23 @@ export class RoadLayer {
   rebuild(g: Grid) {
     const n = g.n, NC = n * n;
     const S = new Buf(), M = new Buf(), O = new Buf();
+    S.withAux = O.withAux = true;
+    // 歩道・縁石・コンクリートは色で見分けて、模様の種類を記録する
+    O.kindOf = (c) => (c === COL.walk ? SOLID.walk : c === COL.curb ? SOLID.curb : c === COL.barrier || c.equals(COL.concrete) ? SOLID.concrete : SOLID.plain);
+    // いまのマスの円の路面の模様の種類と、坂の傾き（地面に合わせない円を、腕の坂に合わせて傾ける）
+    let discCode = 0, gradX = 0, gradZ = 0;
+    // 高速道路とランプはコンクリートの路面にする
+    const isConc = (t: number) => isHighway(t) || t === RoadType.Ramp;
+    const surfCol = (t: number, conc: boolean) => (conc ? COL.slab : t === RoadType.Street ? COL.asphaltStreet : COL.asphalt);
     // 地上の道路は、路面・歩道・線の高さを地面（造成した地形）に合わせる。
     // マスの中心の高さだけで描くと、坂道や、坂道どうしの交差点で地面が路面より上に出てしまうため
     let onGround = false, liftCur = 0;
     // 歩道と線は、いったんためておき、最後に「ほかの道路の路面の上に重なるもの」を取り除いてから描く
     const walkQ: { p: number[]; w: number[][] }[] = [];
-    const lineQ: { p: number[]; c: THREE.Color; o: number }[] = [];
+    const lineQ: { p: number[]; c: THREE.Color; o: number; o2: number; zb: boolean }[] = [];
+    let lineAlso = -1, lineZb = false; // 線を消すかを調べるとき、自分のほかに「同じ道路」とみなすノード（横断歩道は隣のマスにかかる）
+    // 横断歩道の範囲（中心 c から向き u に s1..s2、横は ±hw）。車線の線は、この中では引かない
+    const zebra: { cx: number; cz: number; ux: number; uz: number; s1: number; s2: number; hw: number }[] = [];
     const H = (x: number, z: number, fb: number) => (onGround ? g.groundAt(x, z) + ROAD_LIFT + liftCur : fb);
 
     // ---- 部品 ----
@@ -194,10 +210,12 @@ export class RoadLayer {
       }
       return out;
     };
-    const ribbon = (pts0: RP[], t: number, sides: [boolean, boolean] = [true, true], fixedN?: [number, number]) => {
+    // drop：ほかの帯の下に置く分（m）。分かれ道の帯が本線と重なるところで、本線の模様を見せる
+    const ribbon = (pts0: RP[], t: number, sides: [boolean, boolean] = [true, true], fixedN?: [number, number], drop = 0) => {
       if (pts0.length < 2) return;
       const pts = onGround && !fixedN ? densify(pts0, 3.5) : pts0;
-      const asph = t === RoadType.Street ? COL.asphaltStreet : isHighway(t) ? COL.asphaltHw : COL.asphalt;
+      const conc = isConc(t);
+      const asph = surfCol(t, conc);
       const L: number[] = [], R: number[] = [];
       const nrm = pts.map((p, k) => {
         if (fixedN) return fixedN;
@@ -206,12 +224,30 @@ export class RoadLayer {
         const l = Math.hypot(dx, dz) || 1;
         return [-dz / l, dx / l];
       });
+      // 路面の模様の座標（横の位置、道に沿った位置）。隣のマスの帯と模様がつながるよう、向きをそろえる
+      const first = pts[0], last = pts[pts.length - 1];
+      const flip = last.x - first.x < -1e-3 || (Math.abs(last.x - first.x) <= 1e-3 && last.z < first.z);
+      const sgn = flip ? -1 : 1;
+      const tanAt = (k: number) => [nrm[k][1] * sgn, -nrm[k][0] * sgn];
+      const acc = [0];
+      for (let k = 1; k < pts.length; k++) acc.push(acc[k - 1] + Math.hypot(pts[k].x - pts[k - 1].x, pts[k].z - pts[k - 1].z));
+      const tot = acc[acc.length - 1];
+      const k0 = flip ? pts.length - 1 : 0;
+      const t0 = tanAt(k0);
+      const a0 = pts[k0].x * t0[0] + pts[k0].z * t0[1];
+      const along = acc.map((s0) => a0 + (flip ? tot - s0 : s0));
+      // 同じまっすぐな道は同じ乱数（道ごとの色の違い）
+      const seed = hashInt(Math.round((pts[k0].z * t0[0] - pts[k0].x * t0[1]) / 4), Math.round(Math.atan2(t0[1], t0[0]) * 4));
+      const code = surfCode(lanesOf(t), conc ? SURF.concrete : SURF.asphalt, sidewalkOf(t) > 0 && !hasBarrier(t), seed);
       pts.forEach((p, k) => {
         const [px, pz] = nrm[k];
         const lx = p.x - px * p.hw, lz = p.z - pz * p.hw, rx = p.x + px * p.hw, rz = p.z + pz * p.hw;
-        L.push(S.v(lx, H(lx, lz, p.h), lz, asph));
-        R.push(S.v(rx, H(rx, rz, p.h), rz, asph));
+        S.aux = [-p.hw * sgn, along[k], p.hw, code];
+        L.push(S.v(lx, H(lx, lz, p.h) - drop, lz, asph));
+        S.aux = [p.hw * sgn, along[k], p.hw, code];
+        R.push(S.v(rx, H(rx, rz, p.h) - drop, rz, asph));
       });
+      S.aux = AUX0;
       for (let k = 0; k + 1 < pts.length; k++) {
         S.tri(L[k], R[k], R[k + 1]);
         S.tri(L[k], R[k + 1], L[k + 1]);
@@ -273,7 +309,7 @@ export class RoadLayer {
             const vx = q.x + px * o, vz = q.z + pz * o;
             return [vx, H(vx, vz, q.h) + 0.02, vz];
           };
-          lineQ.push({ p: [...mv(pa, pa.o - width / 2), ...mv(pa, pa.o + width / 2), ...mv(pb, pb.o + width / 2), ...mv(pb, pb.o - width / 2)], c, o: S.owner });
+          lineQ.push({ p: [...mv(pa, pa.o - width / 2), ...mv(pa, pa.o + width / 2), ...mv(pb, pb.o + width / 2), ...mv(pb, pb.o - width / 2)], c, o: S.owner, o2: lineAlso, zb: lineZb });
         }
         acc += l;
       }
@@ -324,16 +360,21 @@ export class RoadLayer {
       }
     };
     // 円（転回場、ラウンドアバウト、つなぎ目）
-    const disc = (cx: number, cz: number, h: number, r: number, c: THREE.Color, buf: Buf = S, seg = 20) => {
-      const dh = h - H(cx, cz, h); // 島など、路面より高いものはその分だけ持ち上げる
-      const ci = buf.v(cx, h, cz, c);
+    // 路面の円は、すき間を埋めるためのものなので、帯より少しだけ下に置く（重なったところは帯の模様を見せる）
+    const disc = (cx: number, cz: number, h: number, r: number, c: THREE.Color, buf: Buf = S, seg = 20, drop = buf === S ? (onGround ? 0.03 : 0.4) : 0) => {
+      const dh = h - H(cx, cz, h) - drop; // 島など、路面より高いものはその分だけ持ち上げる
+      if (buf === S) S.aux = [0, 0, r, discCode]; // ふちからの距離（中心で r）
+      const ci = buf.v(cx, h - drop, cz, c);
+      if (buf === S) S.aux = [0, 0, 0, discCode];
       const ring: number[] = [];
+      const tilt = buf === S && !onGround;
       for (let s = 0; s < seg; s++) {
         const a = (s / seg) * Math.PI * 2;
         const rx = cx + Math.cos(a) * r, rz = cz + Math.sin(a) * r;
-        ring.push(buf.v(rx, H(rx, rz, h) + dh, rz, c));
+        ring.push(buf.v(rx, H(rx, rz, h) + dh + (tilt ? gradX * (rx - cx) + gradZ * (rz - cz) : 0), rz, c));
       }
       for (let s = 0; s < seg; s++) buf.tri(ci, ring[s], ring[(s + 1) % seg]);
+      if (buf === S) S.aux = AUX0;
     };
     // 円弧の歩道
     const ringWalk = (cx: number, cz: number, h: number, r0: number, r1: number, a0: number, a1: number) => {
@@ -422,6 +463,7 @@ export class RoadLayer {
       const raised = level === 0 && g.lift[i] > 0.3;
       const nodeGround = !elevated && !raised;
       onGround = nodeGround;
+      discCode = surfCode(0, isConc(t) ? SURF.concrete : SURF.asphalt, sw > 0 && !hasBarrier(t), hashInt(node, 77));
       liftCur = level === 0 ? g.lift[i] : 0;
       const arms: Arm[] = [];
       // 2車線（大通り）と1車線の道路のつなぎ目
@@ -462,10 +504,11 @@ export class RoadLayer {
         if (!(m & (1 << d)) || skip.has(d)) continue;
         const nx = x + DX[d], ny = y + DY[d];
         const len = Math.hypot(DX[d], DY[d]);
-        let tn = t, eh = ch, ng = true;
+        let tn = t, eh = ch, ng = true, nn = -1;
         if (g.inb(nx, ny)) {
           const j = ny * n + nx;
           const nl = g.arriveLevel(level, j, d);
+          nn = nl * NC + j;
           tn = (nl ? g.up[j] : g.road[j]) || t;
           eh = (ch + g.nodeH(nl * NC + j) + ROAD_LIFT) / 2;
           ng = nl === 0 && g.deck[j] === 0 && g.lift[j] <= 0.3;
@@ -477,8 +520,20 @@ export class RoadLayer {
         const keepW = (wideLocal(t) && !wideLocal(tn)) || (taper && taper.d === d);
         arms.push({
           d, ux: DX[d] / len, uz: DY[d] / len, L: (CELL * len) / 2, ang: Math.atan2(DY[d], DX[d]),
-          w: wa, wm: keepW ? wa : (wa + wn) / 2, sw, swm: (sw + sidewalkOf(tn)) / 2, eh, t, tn, ng,
+          w: wa, wm: keepW ? wa : (wa + wn) / 2, sw, swm: (sw + sidewalkOf(tn)) / 2, eh, t, tn, ng, nn,
         });
+      }
+      // 腕の端の高さから、マスの坂の傾きを求める（最小二乗）。高速道路では、ランプへの腕は使わない
+      {
+        let sxx = 1e-3, sxz = 0, szz = 1e-3, sxh = 0, szh = 0;
+        const main = t !== RoadType.Ramp && arms.some((a) => a.tn !== RoadType.Ramp) ? arms.filter((a) => a.tn !== RoadType.Ramp) : arms;
+        for (const a of main) {
+          const dx = a.ux * a.L, dz = a.uz * a.L, dh = a.eh - ch;
+          sxx += dx * dx; sxz += dx * dz; szz += dz * dz; sxh += dx * dh; szh += dz * dh;
+        }
+        const det = sxx * szz - sxz * sxz;
+        gradX = (sxh * szz - szh * sxz) / det;
+        gradZ = (szh * sxx - sxh * sxz) / det;
       }
       const armPts = (a: Arm, s0: number): RP[] => {
         const k = s0 / a.L;
@@ -491,7 +546,7 @@ export class RoadLayer {
       // 橋や高架につながるマスは、地面に合わせずに中心の高さで描く
       onGround = nodeGround && (arms.length >= 3 || arms.every((a) => a.ng));
       const ctl = level === 0 && this.jctl.length === NC ? this.jctl[i] : 0;
-      const asph = t === RoadType.Street ? COL.asphaltStreet : isHighway(t) ? COL.asphaltHw : COL.asphalt;
+      const asph = surfCol(t, isConc(t));
 
       // バス停：歩道に待合所、車道の端に停車スペースの印
       if (level === 0 && g.bstop[i] && arms.length) {
@@ -721,9 +776,11 @@ export class RoadLayer {
         }
         // ランプへ分かれる部分：壁のない路面。ランプの外側の縁に白線を続ける（本線側は本線の車線にかかるので引かない）
         const mu = pair ? [pair[0].ux, pair[0].uz] : main.length ? [main[0].ux, main[0].uz] : null;
+        // 本線がまっすぐなときは、分かれ道の帯を本線のふちから始める（本線と重ならないように）
+        const mainHalf = pair ? Math.min(...pair.map((q) => q.w)) / 2 - 0.3 : 0;
         for (const a of ramps) {
-          const pts = armPts(a, 0).reverse();
-          ribbon(pts, t, [false, false]);
+          const pts = armPts(a, Math.min(a.L * 0.8, mainHalf)).reverse();
+          ribbon(pts, t, [false, false], undefined, onGround ? 0.03 : 0.12);
           if (!mu) continue;
           const p0 = pts[0], p1 = pts[pts.length - 1];
           const dx = p1.x - p0.x, dz = p1.z - p0.z, l = Math.hypot(dx, dz) || 1;
@@ -815,11 +872,19 @@ export class RoadLayer {
         continue;
       }
       // 角の丸い路面：腕の端の角どうしを曲線でつなぐ
+      // 模様のため、頂点に「ふちからの距離」を入れる（中心は車道の半分の幅、縁石の曲線は 0、腕の入口の真ん中は腕の半分の幅）
+      S.aux = [0, 0, Math.min(...arms.map((q) => q.w / 2)), discCode];
       const ci = S.v(cx, H(cx, cz, ch), cz, asph);
       const outline: number[] = [];
       for (let k2 = 0; k2 < arms.length; k2++) {
         const a = arms[k2], b = arms[(k2 + 1) % arms.length];
         const sa = starts[k2], sb = starts[(k2 + 1) % arms.length];
+        {
+          const mx = cx + a.ux * sa, mz = cz + a.uz * sa;
+          S.aux = [0, 0, a.w / 2, discCode];
+          outline.push(S.v(mx, H(mx, mz, ch), mz, asph));
+          S.aux = [0, 0, 0, discCode];
+        }
         const pa = [-a.uz, a.ux], pb = [-b.uz, b.ux];
         // 45° の鋭い角：角を丸めず、歩道も付けない（ほかの道路の上にはみ出すため）
         const gap = (b.ang - a.ang + Math.PI * 4) % (Math.PI * 2);
@@ -861,6 +926,7 @@ export class RoadLayer {
           });
         }
       }
+      S.aux = AUX0;
       for (let s = 0; s < outline.length; s++) S.tri(ci, outline[s], outline[(s + 1) % outline.length]);
       if (elevated) deckUnder([{ x: cx, z: cz, h: ch, hw: maxHalf, sw: 0, t }, { x: cx + 0.01, z: cz, h: ch, hw: maxHalf, sw: 0, t }], level ? ground : null);
 
@@ -868,12 +934,15 @@ export class RoadLayer {
       arms.forEach((a, k2) => {
         const s0 = starts[k2];
         const px = -a.uz, pz = a.ux;
+        lineAlso = a.nn;
+        lineZb = true; // 停止線と横断歩道（切り取らない）
         if (ctl === 2 || ctl === 3) {
           // 交差点に入ってくる車線は、腕の向きから見て右側（-p 側）
           const sd = s0 + (ctl === 3 ? 4.2 : 0.6);
           line([{ x: cx + a.ux * sd - px * (a.w / 2 - 0.3), z: cz + a.uz * sd - pz * (a.w / 2 - 0.3), h: ch, hw: 0, sw: 0, t }, { x: cx + a.ux * sd, z: cz + a.uz * sd, h: ch, hw: 0, sw: 0, t }], () => 0, COL.white, 0.45);
         }
         if (ctl === 3 && a.t !== RoadType.Street && !arms.some((q) => q.tn === RoadType.Ramp)) {
+          zebra.push({ cx, cz, ux: a.ux, uz: a.uz, s1: s0 - 1.0, s2: s0 + 3.95, hw: a.w / 2 + 0.5 });
           // 横断歩道（しま模様）
           for (let o = -a.w / 2 + 0.6; o < a.w / 2 - 0.3; o += 1.0) {
             const s1 = s0 + 0.6, s2 = s0 + 3.4;
@@ -881,6 +950,8 @@ export class RoadLayer {
           }
         }
       });
+      lineAlso = -1;
+      lineZb = false;
       // 優先道路のセンターラインは交差点の中も続ける（信号のない交差点）
       if (ctl !== 3) {
         const rank = (a: Arm) => ROADS[a.t].rank * 10 + a.w;
@@ -931,7 +1002,8 @@ export class RoadLayer {
         onGround = true;
         liftCur = 0;
         const asph = t === RoadType.Street || t2 === RoadType.Street ? COL.asphaltStreet : COL.asphalt;
-        disc(cx, cz, g.groundAt(cx, cz) + ROAD_LIFT + 0.04, w * 0.78, asph, S, 24);
+        discCode = surfCode(0, SURF.asphalt, false, hashInt(i, 91));
+        disc(cx, cz, g.groundAt(cx, cz) + ROAD_LIFT + 0.04, w * 0.78, asph, S, 24, 0);
       }
     }
     onGround = false;
@@ -954,11 +1026,11 @@ export class RoadLayer {
         }
     }
     // 点 (x, z) が、owner 以外の道路の路面の内側（ふちから少し内側）にあるか
-    const onOtherRoad = (x: number, z: number, owner: number) => {
+    const onOtherRoad = (x: number, z: number, owner: number, also = -1) => {
       const list = buckets.get(Math.floor(z / CELL) * 4096 + Math.floor(x / CELL));
       if (!list) return false;
       for (const t3 of list) {
-        if (S.T[t3] === owner) continue;
+        if (S.T[t3] === owner || S.T[t3] === also) continue;
         const a = SI[t3 * 3], b = SI[t3 * 3 + 1], c = SI[t3 * 3 + 2];
         const ax = SP[a * 3], az = SP[a * 3 + 2], bx = SP[b * 3], bz = SP[b * 3 + 2], cx = SP[c * 3], cz = SP[c * 3 + 2];
         const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
@@ -980,25 +1052,77 @@ export class RoadLayer {
     for (const q of walkQ) {
       const p = q.p;
       if (overlaps(p, -2)) continue;
-      const ids = [0, 1, 2, 3].map((k) => O.v(p[k * 3], p[k * 3 + 1], p[k * 3 + 2], COL.walk));
+      // タイルの模様の座標：縁石からの距離と、歩道に沿った位置（隣とつながるよう、向きをそろえる）
+      let tx = p[9] - p[0], tz = p[11] - p[2];
+      const tl = Math.hypot(tx, tz) || 1;
+      tx /= tl;
+      tz /= tl;
+      if (tx < -1e-3 || (Math.abs(tx) <= 1e-3 && tz < 0)) { tx = -tx; tz = -tz; }
+      const ids = [0, 1, 2, 3].map((k) => {
+        const x = p[k * 3], z = p[k * 3 + 2];
+        const ik = k === 1 ? 0 : k === 2 ? 3 : k; // 外側の点に対応する、縁石側の点
+        O.aux = [Math.hypot(x - p[ik * 3], z - p[ik * 3 + 2]), x * tx + z * tz, 0, 0];
+        return O.v(x, p[k * 3 + 1], z, COL.walk);
+      });
+      O.aux = AUX0;
       O.tri(ids[0], ids[1], ids[2]);
       O.tri(ids[0], ids[2], ids[3]);
       for (const w of q.w) O.wall(w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], COL.curb);
+    }
+    // 横断歩道の範囲を、マスごとの入れ物に分けておく
+    const zebraAt = new Map<number, typeof zebra>();
+    for (const z of zebra) {
+      const px = -z.uz, pz = z.ux;
+      const xs: number[] = [], zz: number[] = [];
+      for (const s0 of [z.s1, z.s2]) for (const o of [-z.hw, z.hw]) { xs.push(z.cx + z.ux * s0 + px * o); zz.push(z.cz + z.uz * s0 + pz * o); }
+      for (let by = Math.floor(Math.min(...zz) / CELL); by <= Math.floor(Math.max(...zz) / CELL); by++)
+        for (let bx = Math.floor(Math.min(...xs) / CELL); bx <= Math.floor(Math.max(...xs) / CELL); bx++) {
+          const key = by * 4096 + bx;
+          (zebraAt.get(key) ?? zebraAt.set(key, []).get(key)!).push(z);
+        }
     }
     for (const q of lineQ) {
       const p = q.p;
       // 線は細いので、両端と中心のどれかがほかの道路の上なら消す
       const mx = (p[0] + p[3] + p[6] + p[9]) / 4, mz = (p[2] + p[5] + p[8] + p[11]) / 4;
       const ax = (p[0] + p[3]) / 2, az = (p[2] + p[5]) / 2, bx = (p[6] + p[9]) / 2, bz = (p[8] + p[11]) / 2;
-      if (onOtherRoad(mx, mz, q.o) || onOtherRoad(ax * 0.9 + mx * 0.1, az * 0.9 + mz * 0.1, q.o) || onOtherRoad(bx * 0.9 + mx * 0.1, bz * 0.9 + mz * 0.1, q.o)) continue;
-      const ids = [0, 1, 2, 3].map((k) => M.v(p[k * 3], p[k * 3 + 1], p[k * 3 + 2], q.c));
-      M.tri(ids[0], ids[1], ids[2]);
-      M.tri(ids[0], ids[2], ids[3]);
+      if (onOtherRoad(mx, mz, q.o, q.o2) || onOtherRoad(ax * 0.9 + mx * 0.1, az * 0.9 + mz * 0.1, q.o, q.o2) || onOtherRoad(bx * 0.9 + mx * 0.1, bz * 0.9 + mz * 0.1, q.o, q.o2)) continue;
+      // 車線の線が横断歩道にかかるところは切り取る（線を 0..1 の区間に分けて残す）
+      let keep: [number, number][] = [[0, 1]];
+      // 両端のマスの入れ物を調べる（同じ範囲で2回切っても結果は同じ）
+      const za = q.zb ? undefined : zebraAt.get(Math.floor(az / CELL) * 4096 + Math.floor(ax / CELL));
+      const zb = q.zb ? undefined : zebraAt.get(Math.floor(bz / CELL) * 4096 + Math.floor(bx / CELL));
+      for (const zl of za === zb ? [za] : [za, zb]) {
+        if (!zl) continue;
+        for (const z of zl) {
+          const px = -z.uz, pz = z.ux;
+          const sa = (ax - z.cx) * z.ux + (az - z.cz) * z.uz, sb = (bx - z.cx) * z.ux + (bz - z.cz) * z.uz;
+          const la = (ax - z.cx) * px + (az - z.cz) * pz, lb = (bx - z.cx) * px + (bz - z.cz) * pz;
+          if (Math.abs(la) > z.hw || Math.abs(lb) > z.hw || Math.abs(sb - sa) < 1e-4) continue;
+          let t1 = (z.s1 - sa) / (sb - sa), t2 = (z.s2 - sa) / (sb - sa);
+          if (t1 > t2) [t1, t2] = [t2, t1];
+          const next: [number, number][] = [];
+          for (const [u0, u1] of keep) {
+            if (t2 <= u0 || t1 >= u1) { next.push([u0, u1]); continue; }
+            if (t1 > u0) next.push([u0, t1]);
+            if (t2 < u1) next.push([t2, u1]);
+          }
+          keep = next;
+        }
+      }
+      for (const [u0, u1] of keep) {
+        if (u1 - u0 < 0.02) continue;
+        const at = (c0: number, c1: number, u: number) => [0, 1, 2].map((k) => p[c0 * 3 + k] + (p[c1 * 3 + k] - p[c0 * 3 + k]) * u);
+        const corners = [at(0, 3, u0), at(1, 2, u0), at(1, 2, u1), at(0, 3, u1)];
+        const ids = corners.map((v) => M.v(v[0], v[1], v[2], q.c));
+        M.tri(ids[0], ids[1], ids[2]);
+        M.tri(ids[0], ids[2], ids[3]);
+      }
     }
     addBridgeStructures(g, O, ROAD_LIFT);
-    for (const [mesh, buf, uv] of [[this.surface, S, true], [this.marks, M, false], [this.solid, O, false]] as const) {
+    for (const [mesh, buf] of [[this.surface, S], [this.marks, M], [this.solid, O]] as const) {
       mesh.geometry.dispose();
-      mesh.geometry = buf.geometry(uv);
+      mesh.geometry = buf.geometry();
     }
     this.rebuildLines(g);
   }
