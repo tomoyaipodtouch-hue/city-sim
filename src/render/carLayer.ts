@@ -470,6 +470,18 @@ export class CarLayer {
     }
     return null;
   }
+  // 先の列車 o が、終点の別のホームへ入っていて、後ろの列車 c の線路をもうふさいでいないか
+  // （分岐器を最後尾まで渡り終えていれば、走っていても止まっていても、c はそのまま空いているホームへ入れる）
+  private otherPlatform(f: Fleet, o: Car, c: Car) {
+    const tb = o.tbFor;
+    if (!tb || tb !== c.tbFor || o.tbSide === undefined || c.tbSide === undefined || o.tbSide === c.tbSide) return false;
+    if (o.revPending || (o.stop ?? 0) > 0) return true;
+    const n = this.grid!.n, ox = ((o.from % n) + 0.5) * CELL, oz = (((o.from / n) | 0) + 0.5) * CELL;
+    const step = Math.hypot(DX[o.d], DY[o.d]) * CELL;
+    const head = (tb.ex - ox) * tb.ux + (tb.ez - oz) * tb.uz - (o.t - 0.5) * step;
+    const tail = head + (f.carsPer - 1) * f.spacing + f.halfLen * 2;
+    return tail < (tb.d0 + tb.d1) / 2;
+  }
   // 行き止まりで向きを変える：最後尾の位置が新しい先頭になり、来た道を戻る（右側通行なので、渡った先の線路をそのまま走る）
   private reverseTrain(f: Fleet, c: Car) {
     const rev = (q: Cell): Cell => {
@@ -657,7 +669,7 @@ export class CarLayer {
             // 前の列車との間隔：先の 2 マスに別の列車がいたら、マスの手前で待つ（長く詰まったら進む）
             const n = this.grid!.n;
             const ahead2 = (() => { const x = (c.to % n) + DX[c.d], y = ((c.to / n) | 0) + DY[c.d]; return this.grid!.inb(x, y) ? y * n + x : -1; })();
-            const block = [c.to, ahead2].some((cell) => { if (cell < 0) return false; const o = occ!.get(CarLayer.occKey(cell, c.d)); return o && o !== c && !((o.revPending || (o.stop ?? 0) > 0) && o.tbFor && o.tbFor === c.tbFor && o.tbSide !== c.tbSide); });
+            const block = [c.to, ahead2].some((cell) => { if (cell < 0) return false; const o = occ!.get(CarLayer.occKey(cell, c.d)); return o && o !== c && !this.otherPlatform(f, o, c); });
             if (block && (c.wait ?? 0) < 25) {
               if (c.t + adv > 0.8) {
                 adv = Math.max(0, 0.8 - c.t);
