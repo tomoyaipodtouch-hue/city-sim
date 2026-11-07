@@ -1485,8 +1485,8 @@ function highrise(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number
     const r2 = rng.next();
     if (r2 < 0.3) {
       const pick = rng.next();
-      if (!office) return pick < 0.5 ? bulletTower(mb, f, rng, tf, floors, false) : dropTower(mb, f, rng, tf, floors, false);
-      return pick < 0.34 ? bulletTower(mb, f, rng, tf, floors, true) : pick < 0.67 ? dropTower(mb, f, rng, tf, floors, true) : diagridTower(mb, f, rng, tf, floors);
+      if (!office) return dropTower(mb, f, rng, tf, floors, false);
+      return pick < 0.5 ? dropTower(mb, f, rng, tf, floors, true) : diagridTower(mb, f, rng, tf, floors);
     }
   }
   if (!office) {
@@ -1509,32 +1509,6 @@ function highrise(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number
 }
 
 // ---- 近未来的な高層ビル ----
-// 楕円で上へなめらかに細くなり、頭が丸い塔（弾丸のような形）
-function bulletTower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, office: boolean) {
-  const glass = office ? rng.pick(GLASS) : rng.pick(TOWER_WALL);
-  const p = podiumBase(mb, f, rng, tf, MW, floors);
-  const fh = office ? 3.8 : 3.1, H = floors * fh;
-  const Rx = Math.min(22, p.size * 0.42), Rz = Rx * (0.62 + rng.next() * 0.2);
-  const ell = (k: number): P2[] => { const o: P2[] = []; for (let i = 0; i < 40; i++) { const a = (i / 40) * Math.PI * 2; o.push([p.cx + Math.cos(a) * Rx * k, p.cz + Math.sin(a) * Rz * k]); } return o; };
-  // 胴：上へいくほど細く（下 1.0 → 上 0.78）、頭：丸く閉じる
-  const pat = office ? officePat === PAT.office ? PAT.curtain : officePat : resPat;
-  const segs = 10;
-  for (let k = 0; k < segs; k++) {
-    const t0 = k / segs, t1 = (k + 1) / segs;
-    const s0 = 1 - 0.22 * t0 * t0, s1 = 1 - 0.22 * t1 * t1;
-    mb.prism(ell(s0), p.y + H * 0.85 * t0, p.y + H * 0.85 * t1, glass, pat, null, ell(s1));
-  }
-  const capY = p.y + H * 0.85, cap = H * 0.15 + Rz * 0.4;
-  const rings = 8;
-  for (let k = 0; k < rings; k++) {
-    const a0 = (k / rings) * Math.PI / 2, a1 = ((k + 1) / rings) * Math.PI / 2;
-    const s0 = 0.78 * Math.cos(a0), s1 = Math.max(0.02, 0.78 * Math.cos(a1));
-    mb.prism(ell(s0), capY + Math.sin(a0) * cap, capY + Math.sin(a1) * cap, glass, k < 3 ? pat : PAT.fullglass, k === rings - 1 ? MW2 : null, ell(s1));
-  }
-  // 頂部の光るリング
-  mb.prism(ell(0.79), capY - 0.4, capY + 0.4, C(0xdfe6ee), PAT.glow, null, ell(0.79));
-}
-
 // しずく形の塔：片側がとがった平面で、上へいくほど少しずつねじれる
 function dropTower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, office: boolean) {
   const glass = office ? rng.pick(GLASS) : rng.pick(TOWER_WALL);
@@ -2148,7 +2122,7 @@ function archRoof(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: numbe
     const a0 = (alongX ? x0 : z0) + span * u0, a1 = (alongX ? x0 : z0) + span * u1;
     const y0 = pt(u0), y1 = pt(u1);
     if (alongX) mb.quadN([a0, y0, z1], [a1, y1, z1], [a1, y1, z0], [a0, y0, z0], nrm(u0), nrm(u1), nrm(u1), nrm(u0), c);
-    else mb.quadN([x0, y0, a0], [x1, y0, a0], [x1, y1, a1], [x0, y1, a1], nrm(u0), nrm(u0), nrm(u1), nrm(u1), c);
+    else mb.quadN([x0, y0, a0], [x0, y1, a1], [x1, y1, a1], [x1, y0, a0], nrm(u0), nrm(u1), nrm(u1), nrm(u0), c);
     // 端の壁（弧の下）
     if (alongX) {
       mb.quad([a0, y, z1], [a1, y, z1], [a1, y1, z1], [a0, y0, z1], c);
