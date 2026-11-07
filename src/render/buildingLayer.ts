@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { Grid } from '../sim/grid';
 import type { Building } from '../sim/world';
 import { MeshBuilder } from './builder';
-import { generateBuilding, setupLot, TreeSpot, farmFields } from './buildingGen';
+import { generateBuilding, setupLot, TreeSpot, farmFields, FxSpot } from './buildingGen';
 import { createBuildingMaterial } from './materials';
 import { PondBuilder, createPondMaterial, createGlowMaterial } from './parkPond';
 import { CIVIC, CivicId, FARM_TILE, ZoneType } from '../sim/defs';
@@ -17,6 +17,7 @@ interface Chunk {
   glow: THREE.Mesh | null; // 夜の街灯の光だまり
   trees: TreeSpot[];
   beacons: number[]; // 航空障害灯の位置（x, y, z の並び）
+  fx: FxSpot[]; // 煙、炎、トラックの道すじ
 }
 
 export class BuildingLayer {
@@ -96,10 +97,11 @@ export class BuildingLayer {
       const trees: TreeSpot[] = [];
       const beacons: number[] = [];
       const pb = new PondBuilder();
+      const fx: FxSpot[] = [];
       for (const b of bs) {
         const f = setupLot(mb, b, groundAt, minAt);
         const v0 = mb.pos.length;
-        generateBuilding(mb, b, f, trees, isCpark, pb);
+        generateBuilding(mb, b, f, trees, isCpark, pb, fx);
         // 農家：同じ区画（8×8）の空いた農地を、ぜんぶ畑にする
         if (b.type === 'IA' && g.zone[g.idx(b.x, b.y)] === ZoneType.F) farmFields(mb, g, b, farmEmpty(g, b), trees);
         // 高さ 60m を超える建物のいちばん高いところに、航空障害灯を付ける
@@ -124,7 +126,7 @@ export class BuildingLayer {
         glow.renderOrder = 2;
         this.group.add(glow);
       }
-      this.chunks.set(c, { key, mesh, pond, glow, trees, beacons });
+      this.chunks.set(c, { key, mesh, pond, glow, trees, beacons, fx });
     }
     return treesChanged;
   }
@@ -132,6 +134,12 @@ export class BuildingLayer {
   allBeacons(): number[] {
     const out: number[] = [];
     for (const c of this.chunks.values()) out.push(...c.beacons);
+    return out;
+  }
+
+  allFx(): FxSpot[] {
+    const out: FxSpot[] = [];
+    for (const c of this.chunks.values()) out.push(...c.fx);
     return out;
   }
 

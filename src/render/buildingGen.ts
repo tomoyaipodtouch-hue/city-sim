@@ -9,6 +9,17 @@ import type { Grid } from '../sim/grid';
 import { BState } from '../sim/world';
 import { PondBuilder, cpLake, LAKE_T } from './parkPond';
 
+// 動くもの（煙、フレアの炎、トラックの道すじ）の位置。世界の座標
+export type FxSpot =
+  | { kind: 'smoke'; x: number; y: number; z: number; s: number; dark: boolean }
+  | { kind: 'flare'; x: number; y: number; z: number; s: number }
+  | { kind: 'truck'; pts: number[]; wait: number; color: number };
+let fxOut: FxSpot[] | null = null;
+const fxSmoke = (mb: MeshBuilder, x: number, y: number, z: number, s = 1, dark = false) => { if (fxOut) { const [wx, wy, wz] = mb.world(x, y, z); fxOut.push({ kind: 'smoke', x: wx, y: wy, z: wz, s, dark }); } };
+const fxFlare = (mb: MeshBuilder, x: number, y: number, z: number, s = 1) => { if (fxOut) { const [wx, wy, wz] = mb.world(x, y, z); fxOut.push({ kind: 'flare', x: wx, y: wy, z: wz, s }); } };
+// トラックの道すじ（敷地の座標の点の列 [x, y, z, ...]）。行って、wait 秒止まって、戻る
+const fxTruck = (mb: MeshBuilder, pts: [number, number, number][], wait = 6, color = 0xf2f2f2) => { if (fxOut) { const o: number[] = []; for (const [x, y, z] of pts) o.push(...mb.world(x, y, z)); fxOut.push({ kind: 'truck', pts: o, wait, color }); } };
+
 export interface TreeSpot {
   x: number;
   y: number;
@@ -76,7 +87,8 @@ let resPat: number = PAT.balcony;
 let louvers = false;
 const flatRoof = () => curRoof;
 
-export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, trees: TreeSpot[], isCpark: (x: number, y: number) => boolean = () => false, pond?: PondBuilder) {
+export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, trees: TreeSpot[], isCpark: (x: number, y: number) => boolean = () => false, pond?: PondBuilder, fx?: FxSpot[]) {
+  fxOut = fx ?? null;
   const rng = new Rng(b.seed);
   curRoof = FLAT_ROOFS[b.seed % FLAT_ROOFS.length];
   // 外壁のデザイン（建物ごとに選ぶ）：全面ガラス・横長の連続窓・ふつうの窓、縦ルーバーの有無、マンションのバルコニー
@@ -120,8 +132,8 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
       highrise(mb, f, rng, tf, Math.max(3, b.floors), true, b.type === 'CO3');
       break;
     case 'IA': farm(mb, f, rng, tf); break;
-    case 'ID': if (rng.next() < 0.45) chemicalPlant(mb, f, rng, b.den); else factory(mb, f, rng, true, b.den); break;
-    case 'IM': if (rng.next() < 0.5) warehouse(mb, f, rng, b.den); else factory(mb, f, rng, false, b.den); break;
+    case 'ID': dirtyIndustry(mb, f, rng, tf, b.den); break;
+    case 'IM': mfgIndustry(mb, f, rng, tf, b.den); break;
     case 'IH': hightech(mb, f, rng, tf, b.den); break;
     case 'coal': coalPlant(mb, f); break;
     case 'gas': gasPlant(mb, f); break;
@@ -570,38 +582,6 @@ function warehouse(mb: MeshBuilder, f: LotFrame, rng: Rng, den: number) {
   }
 }
 
-// 化学工場：タンク群、配管、蒸留塔、紅白の煙突
-function chemicalPlant(mb: MeshBuilder, f: LotFrame, rng: Rng, den: number) {
-  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.concrete);
-  const wall = rng.pick(PALETTE.indWall);
-  const s = 1 + den * 0.3;
-  // 制御棟
-  mb.box(-f.W / 2 + 2, 0, f.D / 2 - 12, -f.W / 2 + 14, 8, f.D / 2 - 3, wall, PAT.industrial, flatRoof());
-  roofRim(mb, -f.W / 2 + 2, f.D / 2 - 12, -f.W / 2 + 14, f.D / 2 - 3, 8, wall, 0.5);
-  // 球形のタンクに見える丸いタンクと、円筒のタンク
-  const tanks = Math.max(2, Math.floor((f.W - 18) / 9));
-  for (let k = 0; k < tanks; k++) {
-    const x = -f.W / 2 + 20 + k * 9, z = f.D / 2 - 8;
-    mb.cylinder(x, z, 0, 7 * s, 3.6, 16, PALETTE.white, PALETTE.white);
-    mb.cylinder(x, z, 7 * s, 7.8 * s, 3.6, 16, PALETTE.white, PALETTE.white, 2.2);
-    mb.cylinder(x, z, 0, 0.8, 4.2, 16, PALETTE.concrete, PALETTE.concrete);
-  }
-  // 蒸留塔（細く高い塔）と足場
-  for (let k = 0; k < 2 + rng.int(2); k++) {
-    const x = -f.W / 2 + 6 + k * 5, z = -f.D / 2 + 8;
-    const th = (18 + rng.next() * 10) * s;
-    mb.cylinder(x, z, 0, th, 1.3, 12, C(0xc9ccd0), PALETTE.steel);
-    for (let y = 4; y < th; y += 5) mb.cylinder(x, z, y, y + 0.25, 1.9, 12, PALETTE.steel, PALETTE.steel);
-  }
-  // 配管の橋
-  for (const z of [-f.D / 2 + 13, -f.D / 2 + 13.8]) mb.box(-f.W / 2 + 4, 5, z - 0.25, f.W / 2 - 4, 5.5, z + 0.25, PALETTE.steel);
-  for (let x = -f.W / 2 + 5; x < f.W / 2 - 4; x += 6) mb.box(x - 0.2, 0, -f.D / 2 + 12.8, x + 0.2, 5, -f.D / 2 + 14, PALETTE.steel);
-  // 紅白の煙突
-  const cx = f.W / 2 - 6, cz = -f.D / 2 + 6, ch = (30 + rng.next() * 12) * s;
-  const bands = 6;
-  for (let k = 0; k < bands; k++) mb.cylinder(cx, cz, (ch * k) / bands, (ch * (k + 1)) / bands, 1.6 - k * 0.1, 12, k % 2 ? PALETTE.white : C(0xc0392b), k === bands - 1 ? PALETTE.dark : undefined, 1.6 - (k + 1) * 0.1);
-}
-
 function farm(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
   // 畑の畝
   const crop = rng.pick(PALETTE.crop), crop2 = rng.pick(PALETTE.crop);
@@ -624,51 +604,6 @@ function farm(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
   house(mb, 9, hz - 6, 7, 6, 1, rng.pick(PALETTE.houseWall), rng.pick(PALETTE.roof), rng);
   tf(13, hz - 3, 1.2);
   tf(-13, hz - 2, 1.0);
-}
-
-function factory(mb: MeshBuilder, f: LotFrame, rng: Rng, dirty: boolean, den = 0) {
-  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.concrete);
-  const wall = rng.pick(PALETTE.indWall);
-  const w = f.W - 6, d = f.D - 12;
-  const x0 = -w / 2, x1 = w / 2, z0 = -f.D / 2 + 3, z1 = z0 + d;
-  const h = (8 + rng.next() * 5) * (1 + den * 0.35);
-  mb.box(x0, 0, z0, x1, h, z1, wall, dirty ? PAT.industrial : PAT.dock, PALETTE.steel);
-  if (dirty) {
-    // のこぎり屋根
-    const teeth = Math.max(2, Math.floor(w / 6));
-    const tw = w / teeth;
-    for (let k = 0; k < teeth; k++) {
-      const a = x0 + k * tw;
-      // 両端の三角の壁
-      mb.tri([a, h, z1], [a + tw, h, z1], [a + tw, h + 3, z1], wall);
-      mb.tri([a + tw, h, z0], [a, h, z0], [a + tw, h + 3, z0], wall);
-      mb.quad([a, h, z0], [a, h, z1], [a + tw, h + 3, z1], [a + tw, h + 3, z0], PALETTE.roof[3]);
-      mb.quad([a + tw, h, z1], [a + tw, h, z0], [a + tw, h + 3, z0], [a + tw, h + 3, z1], PALETTE.glass);
-    }
-    // 煙突
-    const n = 1 + rng.int(2);
-    for (let k = 0; k < n; k++) {
-      const cx = x0 + 3 + k * 5, cz = z0 + 3;
-      mb.cylinder(cx, cz, h, h + 14 + rng.next() * 8, 1.1, 8, PALETTE.brick, PALETTE.dark, 0.8);
-    }
-    // タンク
-    if (f.W >= 32) {
-      mb.cylinder(x1 - 4, z1 + 4.5, 0, 6, 3, 12, PALETTE.white, PALETTE.white);
-    }
-    // 資材の山
-    mb.hip(x0 + 1, z1 + 2, x0 + 7, z1 + 6, 0, 2, PALETTE.dirt, 0);
-  } else {
-    // 事務所棟と搬入口
-    mb.box(x0, 0, z1, x0 + Math.min(12, w / 2), 7, z1 + 5, PALETTE.white, PAT.office, flatRoof());
-    roofUnits(mb, x0, z0, x1, z1, h, rng, 3 + rng.int(3));
-    stalls(mb, rng, x0 + 14, x1 - 3, 3, z1 + 1, z1 + 5.5, 0.55);
-  }
-  // トラック
-  if (rng.next() < 0.7) {
-    const tx = x1 - 8;
-    mb.box(tx, 0, z1 + 1, tx + 2.5, 3.6, z1 + 9, PALETTE.white);
-    mb.box(tx, 0, z1 + 9, tx + 2.5, 3, z1 + 11, rng.pick(PALETTE.accent));
-  }
 }
 
 function construction(mb: MeshBuilder, f: LotFrame, rng: Rng) {
@@ -1784,7 +1719,6 @@ function chamferTower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: nu
 
 // どの形のビルにするかを選ぶ
 function highrise(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, office: boolean, luxury: boolean) {
-  { const fd = (globalThis as unknown as { __forceDesign?: string }).__forceDesign; const all: Record<string, typeof tower> = { lotusTower, notchTower, towerMansion, stackedBlocks } as unknown as Record<string, typeof tower>; if (fd && all[fd]) return all[fd](mb, f, rng, tf, floors, office, luxury); } // DEBUG-FORCE
   const r = rng.next();
   const big = Math.min(f.W, f.D) >= 30;
   // 近未来的な形（24 階以上の約 3 割）：楕円で上へ細くなる塔、しずく形の塔、ダイアグリッド（オフィスのみ）
@@ -2712,6 +2646,325 @@ function recycling(mb: MeshBuilder, f: LotFrame, rng: Rng) {
   mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.concrete);
   mb.box(-f.W / 2 + 3, 0, -f.D / 2 + 3, f.W / 2 - 12, 9, f.D / 2 - 5, GREEN, PAT.dock, PALETTE.steel);
   for (let k = 0; k < 4; k++) mb.box(f.W / 2 - 10, 0, -f.D / 2 + 3 + k * 6, f.W / 2 - 4, 2.4, -f.D / 2 + 7.5 + k * 6, rng.pick([BLUE, GREEN, PALETTE.accent[3]]));
+}
+
+// ---------------- 工業（汚染型・製造業） ----------------
+// 汚染型：大きい敷地は製鉄所か石油化学プラント、中くらいは石油化学か煙突の工場、小さい敷地は煙突の工場
+// 製造業：大きい敷地は自動車工場か多層の物流倉庫、ほかは現代の工場（のこぎり屋根の天窓）か倉庫
+function dirtyIndustry(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
+  const cells = Math.round((f.W * f.D) / (CELL * CELL)), r = rng.next();
+  if (cells >= 9) return r < 0.5 ? steelMill(mb, f, rng, den) : petrochem(mb, f, rng, den);
+  if (cells >= 6) return r < 0.45 ? petrochem(mb, f, rng, den) : stackFactory(mb, f, rng, tf, den);
+  return stackFactory(mb, f, rng, tf, den);
+}
+function mfgIndustry(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
+  const cells = Math.round((f.W * f.D) / (CELL * CELL)), r = rng.next();
+  if (cells >= 9) return r < 0.4 ? autoPlant(mb, f, rng, tf, den) : r < 0.75 ? logisticsHub(mb, f, rng, tf, den) : modernFactory(mb, f, rng, tf, den);
+  if (cells >= 6) return r < 0.7 ? modernFactory(mb, f, rng, tf, den) : warehouse(mb, f, rng, den);
+  return r < 0.65 ? modernFactory(mb, f, rng, tf, den) : warehouse(mb, f, rng, den);
+}
+
+const IND = {
+  rust: C(0x8a5a44), darkMetal: C(0x4a4f55), metal: [C(0xd5d9dc), C(0xc4cacf), C(0xb9c0c6), C(0xe4e6e8)], steel: C(0x7a8088), pipe: C(0x9aa1a8),
+  ore: C(0x8b4a32), coal: C(0x2b2b2e), lime: C(0xcfc8b8), white: C(0xeef0f2), tankGreen: C(0xd9dfd6), yellow: C(0xe0b31a), lamp: C(0xffe1a3),
+  red: C(0xc0392b),
+};
+
+// 夜の設備の明かり（小さな光る点を並べる）
+function plantLights(mb: MeshBuilder, x: number, z: number, y0: number, y1: number, r: number) {
+  for (let y = y0; y < y1; y += 5) for (const a of [0, 2.1, 4.2]) litSign(mb, x + Math.cos(a + y) * r - 0.15, y, z + Math.sin(a + y) * r - 0.15, x + Math.cos(a + y) * r + 0.15, y + 0.3, z + Math.sin(a + y) * r + 0.15, IND.lamp);
+}
+// 紅白の煙突（口から煙）
+function redWhiteStack(mb: MeshBuilder, x: number, z: number, y0: number, h: number, r: number, smoke = true, dark = false) {
+  const bands = 6;
+  for (let k = 0; k < bands; k++) mb.cylinder(x, z, y0 + (h * k) / bands, y0 + (h * (k + 1)) / bands, r * (1 - k * 0.05), 14, k % 2 ? IND.white : IND.red, k === bands - 1 ? PALETTE.dark : undefined, r * (1 - (k + 1) * 0.05));
+  litSign(mb, x - 0.25, y0 + h, z - r - 0.1, x + 0.25, y0 + h + 0.5, z - r + 0.3, C(0xff3b30));
+  if (smoke) fxSmoke(mb, x, y0 + h, z, Math.max(0.8, r * 0.7), dark);
+}
+// 傾いたベルトコンベア（a から b へ、屋根つきの箱と支柱）
+function conveyor(mb: MeshBuilder, ax: number, ay: number, az: number, bx: number, by: number, bz: number, w = 1.6) {
+  const dx = bx - ax, dz = bz - az, l = Math.hypot(dx, dz) || 1, px = (-dz / l) * w / 2, pz = (dx / l) * w / 2;
+  const P = (x: number, y: number, z: number): [number, number, number] => [x, y, z];
+  const top = 1.2;
+  mb.quad(P(ax - px, ay + top, az - pz), P(ax + px, ay + top, az + pz), P(bx + px, by + top, bz + pz), P(bx - px, by + top, bz - pz), IND.metal[1]);
+  mb.quad(P(ax + px, ay, az + pz), P(ax + px, ay + top, az + pz), P(bx + px, by + top, bz + pz), P(bx + px, by, bz + pz), IND.metal[2]);
+  mb.quad(P(bx - px, by, bz - pz), P(bx - px, by + top, bz - pz), P(ax - px, ay + top, az - pz), P(ax - px, ay, az - pz), IND.metal[2]);
+  mb.quad(P(ax - px, ay, az - pz), P(bx - px, by, bz - pz), P(bx + px, by, bz + pz), P(ax + px, ay, az + pz), IND.darkMetal);
+  const n = Math.max(1, Math.floor(l / 9));
+  for (let k = 1; k < n; k++) {
+    const t = k / n, x = ax + dx * t, z = az + dz * t, y = ay + (by - ay) * t;
+    mb.box(x - 0.3, 0, z - 0.3, x + 0.3, y, z + 0.3, IND.steel);
+  }
+}
+// 円錐の山（鉱石・石炭・石灰）
+function pile(mb: MeshBuilder, x: number, z: number, r: number, h: number, col: THREE.Color) {
+  mb.cylinder(x, z, 0, h, r, 14, col, col, 0.4);
+}
+// 球形タンク（脚つき）
+function sphereTank(mb: MeshBuilder, x: number, z: number, r: number) {
+  const y = r + 2;
+  mb.dome(x, z, y, r, r, IND.white, 18, 6);
+  // 下半分（裏返したドーム）：小さく作って下から見えるように
+  for (let k = 0; k < 6; k++) {
+    const a = (k / 6) * Math.PI * 2;
+    mb.box(x + Math.cos(a) * r * 0.85 - 0.2, 0, z + Math.sin(a) * r * 0.85 - 0.2, x + Math.cos(a) * r * 0.85 + 0.2, y, z + Math.sin(a) * r * 0.85 + 0.2, IND.steel);
+  }
+  mb.cylinder(x, z, y - r * 0.7, y, r * 0.72, 18, IND.white, IND.white, r);
+  mb.cylinder(x, z, 2, y - r * 0.7, r * 0.2, 12, IND.white, IND.white, r * 0.72);
+  // 頂上への階段（らせん状に見える細い帯）
+  mb.box(x + r - 0.1, 0, z - 0.4, x + r + 0.6, y + r * 0.6, z + 0.4, IND.yellow);
+}
+
+// 製鉄所：高炉（骨組みの塔と、横の熱風炉3基）、鉱石と石炭の山、山から高炉の上へのベルトコンベア、長い圧延工場、紅白の煙突
+function steelMill(mb: MeshBuilder, f: LotFrame, rng: Rng, den: number) {
+  const hw = f.W / 2, hd = f.D / 2;
+  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.08, C(0x8f8a80));
+  const s = 1 + den * 0.15;
+  // 圧延工場（手前の長い建屋、切妻の金属屋根）
+  const mz0 = hd - 18, mz1 = hd - 4;
+  mb.box(-hw + 3, 0, mz0, hw - 3, 14, mz1, IND.metal[2], PAT.industrial, IND.rust);
+  mb.gableX(-hw + 3, mz0, hw - 3, mz1, 14, 3, IND.rust, IND.metal[2], 0.5);
+  for (let x = -hw + 8; x < hw - 6; x += 10) mb.box(x - 1.2, 17, (mz0 + mz1) / 2 - 1, x + 1.2, 18.6, (mz0 + mz1) / 2 + 1, IND.metal[0]);
+  // 高炉
+  const bx = -hw * 0.25, bz = -hd * 0.25, bh = 34 * s;
+  mb.cylinder(bx, bz, 0, 10, 6, 18, IND.darkMetal, IND.darkMetal, 7);
+  mb.cylinder(bx, bz, 10, bh * 0.7, 7, 18, IND.rust, IND.rust, 4.5);
+  mb.cylinder(bx, bz, bh * 0.7, bh, 4.5, 14, IND.darkMetal, IND.darkMetal, 2.4);
+  // 骨組み（四隅の柱と横の梁）
+  for (const [ox, oz] of [[-8, -8], [8, -8], [-8, 8], [8, 8]]) mb.box(bx + ox - 0.35, 0, bz + oz - 0.35, bx + ox + 0.35, bh + 6, bz + oz + 0.35, IND.steel);
+  for (let y = 8; y < bh + 6; y += 8) {
+    mb.box(bx - 8.4, y, bz - 8.4, bx + 8.4, y + 0.4, bz - 7.6, IND.steel);
+    mb.box(bx - 8.4, y, bz + 7.6, bx + 8.4, y + 0.4, bz + 8.4, IND.steel);
+    mb.box(bx - 8.4, y, bz - 8.4, bx - 7.6, y + 0.4, bz + 8.4, IND.steel);
+    mb.box(bx + 7.6, y, bz - 8.4, bx + 8.4, y + 0.4, bz + 8.4, IND.steel);
+  }
+  // 炉頂のガス管（下へ）
+  mb.box(bx - 0.8, bh, bz - 0.8, bx + 0.8, bh + 6, bz + 0.8, IND.pipe);
+  mb.box(bx, bh + 5, bz - 0.8, bx + 14, bh + 6.6, bz + 0.8, IND.pipe);
+  fxSmoke(mb, bx, bh + 6, bz, 1.0, true);
+  plantLights(mb, bx, bz, 6, bh, 8.2);
+  // 熱風炉（ドームの円筒が3基）
+  for (let k = 0; k < 3; k++) {
+    const x = bx + 14, z = bz - 9 + k * 7.5;
+    mb.cylinder(x, z, 0, bh * 0.8, 3.2, 16, IND.metal[2], IND.metal[2]);
+    mb.dome(x, z, bh * 0.8, 3.2, 3.2, IND.metal[2], 16, 5);
+  }
+  // 鉱石・石炭・石灰の山と、高炉の上へのベルトコンベア
+  const px0 = hw - 14;
+  pile(mb, px0, -hd + 9, 7, 6, IND.ore);
+  pile(mb, px0 - 3, -hd + 22, 6, 5, IND.coal);
+  pile(mb, -hw + 10, -hd + 9, 5, 4, IND.lime);
+  conveyor(mb, px0 - 6, 0.5, -hd + 12, bx + 5, bh + 1, bz);
+  // 紅白の煙突
+  redWhiteStack(mb, hw - 7, mz0 - 6, 0, 46 * s, 2.2, true, true);
+  // トラック（鉱石の山へ）
+  fxTruck(mb, [[hw - 2, 0, hd - 1], [hw - 2, 0, mz0 - 3], [px0 + 4, 0, -hd + 16]], 8, 0x9a6b3a);
+  void rng;
+}
+
+// 石油化学プラント：球形タンク、浮き屋根の円筒タンク、蒸留塔（足場とプラットフォーム、夜の明かり）、パイプラック、フレアスタック（炎）
+function petrochem(mb: MeshBuilder, f: LotFrame, rng: Rng, den: number) {
+  const hw = f.W / 2, hd = f.D / 2;
+  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.08, PALETTE.concrete);
+  const s = 1 + den * 0.2;
+  // 球形タンク（奥の列）
+  const nS = Math.max(2, Math.floor((f.W - 16) / 12));
+  for (let k = 0; k < nS; k++) sphereTank(mb, -hw + 9 + k * 12, -hd + 8, 4.2);
+  // 浮き屋根の円筒タンク（手前右）
+  for (let k = 0; k < Math.max(1, Math.floor(f.W / 26)); k++) {
+    const x = hw - 9 - k * 15, z = hd - 10;
+    mb.cylinder(x, z, 0, 9, 6.5, 22, IND.tankGreen, C(0xb9beb6));
+    mb.cylinder(x, z, 8.6, 9.1, 6.6, 22, IND.white, IND.white);
+    // 防油堤
+    mb.box(x - 8, 0, z - 8, x + 8, 1, z - 7.6, PALETTE.concrete);
+    mb.box(x - 8, 0, z + 7.6, x + 8, 1, z + 8, PALETTE.concrete);
+  }
+  // 蒸留塔と足場（中央）
+  const cx0 = -hw + 10, cz = -hd + 22;
+  const nC = 2 + rng.int(3);
+  for (let k = 0; k < nC; k++) {
+    const x = cx0 + k * 6, th = (22 + rng.next() * 14) * s, r = 1.4 + rng.next() * 0.8;
+    mb.cylinder(x, cz, 0, th, r, 14, C(0xd3d6d9), IND.steel);
+    mb.dome(x, cz, th, r, r * 0.6, C(0xd3d6d9), 14, 3);
+    for (let y = 6; y < th; y += 6) mb.cylinder(x, cz, y, y + 0.3, r + 0.8, 14, IND.yellow, IND.yellow);
+    plantLights(mb, x, cz, 6, th, r + 0.9);
+  }
+  // 加熱炉（箱と短い煙突）
+  const hx = cx0 + nC * 6 + 4;
+  mb.box(hx, 0, cz - 4, hx + 8, 10, cz + 4, IND.metal[1], PAT.industrial, IND.metal[2]);
+  mb.cylinder(hx + 4, cz, 10, 22 * s, 0.9, 10, IND.metal[0], PALETTE.dark);
+  fxSmoke(mb, hx + 4, 22 * s, cz, 0.7);
+  // パイプラック（中央を横切る、配管の束）
+  const rz = cz + 8;
+  for (let x = -hw + 4; x < hw - 4; x += 7) mb.box(x - 0.3, 0, rz - 2, x + 0.3, 7, rz + 2, IND.steel);
+  for (const [y, c] of [[6.2, IND.pipe], [6.9, C(0x6f8fae)], [5.5, C(0xb9a06a)]] as [number, THREE.Color][]) for (const dz of [-1.2, 0, 1.2]) mb.box(-hw + 4, y, rz + dz - 0.3, hw - 4, y + 0.55, rz + dz + 0.3, c);
+  // フレアスタック（細い塔、先で炎が燃える）
+  const fx0 = hw - 5, fz0 = -hd + 5, fh = (40 + rng.next() * 10) * s;
+  mb.cylinder(fx0, fz0, 0, fh, 0.7, 10, IND.steel, PALETTE.dark, 0.5);
+  for (const [ox, oz] of [[-3, -3], [3, -3], [0, 3.5]]) mb.quad([fx0 + ox - 0.2, 0, fz0 + oz], [fx0 + ox + 0.2, 0, fz0 + oz], [fx0 + 0.2, fh * 0.8, fz0], [fx0 - 0.2, fh * 0.8, fz0], IND.steel);
+  fxFlare(mb, fx0, fh + 0.3, fz0, 1.2);
+  // 制御棟
+  mb.box(-hw + 2, 0, hd - 10, -hw + 14, 6, hd - 2, IND.metal[0], PAT.office, flatRoof());
+  // タンクローリー
+  fxTruck(mb, [[-hw + 18, 0, hd - 0.5], [-hw + 18, 0, rz + 5], [0, 0, rz + 5]], 10, 0xe8e8e8);
+}
+
+// 煙突の工場（作り直し）：金属パネルの建屋（屋根の換気モニター）、集じん機（円錐の底のサイロ）と太いダクト、紅白の煙突、事務所
+function stackFactory(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
+  const hw = f.W / 2, hd = f.D / 2;
+  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.08, PALETTE.concrete);
+  const wall = rng.pick(IND.metal), roof = rng.pick([C(0x5c6b78), C(0x7d8a94), C(0x4f6a5a)]);
+  const x0 = -hw + 3, x1 = hw - 3 - Math.min(9, f.W * 0.25), z0 = -hd + 3, z1 = hd - 9;
+  const h = (10 + rng.next() * 3) * (1 + den * 0.25);
+  mb.box(x0, 0, z0, x1, h, z1, wall, PAT.industrial, roof);
+  mb.gableX(x0, z0, x1, z1, h, 2.2, roof, wall, 0.4);
+  // 屋根の換気モニター（棟の上の細長い箱）
+  mb.box(x0 + 3, h + 2.2, (z0 + z1) / 2 - 1.4, x1 - 3, h + 3.6, (z0 + z1) / 2 + 1.4, wall, PAT.industrial, roof);
+  // 集じん機とダクト
+  const sx = x1 + 4.5, sz = z0 + 6;
+  mb.cylinder(sx, sz, 4, 13, 2.6, 14, IND.metal[0], IND.metal[0]);
+  mb.cylinder(sx, sz, 1.5, 4, 0.6, 14, IND.metal[0], IND.metal[0], 2.6);
+  for (const [ox, oz] of [[-2, -2], [2, -2], [-2, 2], [2, 2]]) mb.box(sx + ox - 0.15, 0, sz + oz - 0.15, sx + ox + 0.15, 4, sz + oz + 0.15, IND.steel);
+  mb.box(x1, h - 2, sz - 0.8, sx - 2.6, h - 0.4, sz + 0.8, IND.pipe);
+  // 煙突
+  redWhiteStack(mb, sx, sz + 7, 0, (26 + rng.next() * 10) * (1 + den * 0.3), 1.4, true, rng.next() < 0.4);
+  // 事務所と搬入口
+  mb.box(x0, 0, z1, x0 + Math.min(12, (x1 - x0) / 2), 7, z1 + 4.5, MW, PAT.ribbon, flatRoof());
+  for (let x = x0 + 14; x < x1 - 4; x += 5) mb.box(x, 0, z1, x + 3.6, 4, z1 + 0.15, C(0x6b7178));
+  fxTruck(mb, [[x1 - 4, 0, hd - 0.5], [x1 - 4, 0, z1 + 5]], 7, 0xf2f2f2);
+  tf(-hw + 1.5, hd - 1.5, 0.8);
+}
+
+// 現代の工場：白か黒の金属パネル、のこぎり屋根の天窓（北向きのガラス）、ガラスの事務棟、荷積み場（ひさしとトラック）、駐車場
+function modernFactory(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
+  const hw = f.W / 2, hd = f.D / 2;
+  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.08, PALETTE.concrete);
+  const black = rng.next() < 0.3;
+  const wall = black ? C(0x2e3236) : rng.pick([MW, C(0xe4e6e8), C(0xd5d9dc)]);
+  const accent = rng.pick([C(0x1f6fd0), C(0xd23a3a), C(0x2e9e5b), C(0xe0a800)]);
+  const big = f.D >= 40;
+  const x0 = -hw + 3, x1 = hw - 3, z0 = -hd + 3, z1 = hd - (big ? 20 : 11);
+  const h = 11 + den * 2;
+  mb.box(x0, 0, z0, x1, h, z1, wall, PAT.industrial, C(0xbfc5ca));
+  // 会社の色の帯
+  mb.box(x0 - 0.05, h - 2, z0 - 0.05, x1 + 0.05, h - 1.2, z1 + 0.05, accent);
+  // のこぎり屋根：北（-z）向きのガラス面
+  const teeth = Math.max(2, Math.floor((z1 - z0) / 7)), tw = (z1 - z0) / teeth;
+  for (let k = 0; k < teeth; k++) {
+    const a = z0 + k * tw, b = a + tw;
+    mb.quad([x0, h, b], [x1, h, b], [x1, h + 3.2, a], [x0, h + 3.2, a], C(0xc9cfd5));
+    mb.quad([x1, h, a], [x0, h, a], [x0, h + 3.2, a], [x1, h + 3.2, a], MGL, PAT.fullglass);
+    mb.tri([x0, h, a], [x0, h, b], [x0, h + 3.2, a], wall);
+    mb.tri([x1, h, b], [x1, h, a], [x1, h + 3.2, a], wall);
+  }
+  // ガラスの事務棟（角）
+  const ow = Math.min(18, (x1 - x0) * 0.35);
+  mb.box(x0, 0, z1, x0 + ow, 8, z1 + 6, MGL, PAT.fullglass, MW);
+  mb.box(x0 - 0.3, 8, z1 - 0.3, x0 + ow + 0.3, 8.6, z1 + 6.3, MW, PAT.none, MW2);
+  litSign(mb, x0 + 1, 6.6, z1 + 6.05, x0 + ow - 1, 7.5, z1 + 6.2, accent);
+  // 荷積み場（シャッターとひさし）
+  const dockX0 = x0 + ow + 3;
+  for (let x = dockX0; x < x1 - 4; x += 4.6) mb.box(x, 0.8, z1, x + 3.4, 4.6, z1 + 0.15, C(0x6b7178));
+  mb.box(dockX0 - 1, 5.2, z1, x1 - 1, 5.5, z1 + 3, MW, PAT.none, MW2);
+  mb.box(dockX0 - 1, 0, z1, x1 - 1, 0.8, z1 + 1.5, PALETTE.concrete);
+  // 荷積み場に出入りするトラック（2台）
+  for (let k = 0; k < 2; k++) {
+    const x = dockX0 + 1.7 + k * 9.2;
+    if (x > x1 - 6) break;
+    fxTruck(mb, [[x - 1.7, 0, hd - 0.5], [x - 1.7, 0, z1 + 14], [x, 0, z1 + 9.5]], 9 + k * 3, rng.pick([0xf2f2f2, 0x1d3f8a, 0x9a1d1d]));
+  }
+  if (big) ihParking(mb, rng, x0, z1 + 7, x0 + ow + 2, hd - 0.6);
+  tf(hw - 1.5, hd - 1.5, 0.8);
+}
+
+// 多層の物流倉庫（日本の大型物流施設のような）：4層の白い箱、各階に横長の窓の帯とトラックの接車バース、
+// 端にトラックが上り下りするらせんのスロープ（円筒の壁）、屋上に太陽光パネル
+function logisticsHub(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
+  const hw = f.W / 2, hd = f.D / 2;
+  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.08, PALETTE.concrete);
+  const levels = 3 + (den > 1 ? 1 : 0), fh = 7, H = levels * fh;
+  const R = 11; // らせんの半径
+  const x0 = -hw + 3, x1 = hw - 3 - R * 2 - 2, z0 = -hd + 4, z1 = hd - 10;
+  const wall = rng.pick([MW, C(0xe9eaeb)]), accent = rng.pick([C(0x1f6fd0), C(0x2e9e5b), C(0xd23a3a)]);
+  mb.box(x0, 0, z0, x1, H, z1, wall, PAT.none, C(0xc9cdd2));
+  for (let k = 0; k < levels; k++) {
+    const y = k * fh;
+    // 各階：接車バースの暗い開口（正面）と、横長の窓の帯
+    mb.box(x0 + 2, y + 0.8, z1 - 0.1, x1 - 2, y + 5.2, z1 + 0.05, C(0x3a3f45));
+    mb.box(x0 - 0.05, y + 5.6, z0 - 0.05, x1 + 0.05, y + 6.6, z1 + 0.05, MGL, PAT.fullglass, MGL);
+    // 各階のひさし
+    mb.box(x0, y + 5.2, z1, x1, y + 5.5, z1 + 3, wall);
+  }
+  mb.box(x0 - 0.1, H - 1.4, z0 - 0.1, x1 + 0.1, H - 0.6, z1 + 0.1, accent);
+  litSign(mb, x0 + 3, H - 3.8, z1 + 0.1, x0 + 22, H - 2, z1 + 0.25, accent);
+  for (let z = z0 + 3; z < z1 - 3; z += 3.5) mb.box(x0 + 3, H, z, x1 - 3, H + 0.5, z + 2.4, C(0x22385a), PAT.none, C(0x22385a));
+  // らせんのスロープ：中心の柱、外の円筒の壁（階ごとの帯）
+  const sx = x1 + 1 + R, sz = (z0 + z1) / 2;
+  mb.cylinder(sx, sz, 0, H + 1, 2.6, 18, wall, wall);
+  const turns = levels, N = 28 * turns;
+  for (let i = 0; i < N; i++) {
+    const a0 = (i / 28) * Math.PI * 2, a1 = ((i + 1) / 28) * Math.PI * 2, y0 = (i / N) * H, y1 = ((i + 1) / N) * H;
+    const P = (a: number, r: number, y: number): [number, number, number] => [sx + Math.cos(a) * r, y, sz + Math.sin(a) * r];
+    // 路面（上と下）と外の低い壁
+    mb.quad(P(a0, 3, y0 + 0.4), P(a0, R, y0 + 0.4), P(a1, R, y1 + 0.4), P(a1, 3, y1 + 0.4), C(0x8d9196));
+    mb.quad(P(a0, R, y0), P(a0, 3, y0), P(a1, 3, y1), P(a1, R, y1), C(0x8d9196));
+    mb.quad(P(a1, R, y1), P(a0, R, y0), P(a0, R, y0 + 1.8), P(a1, R, y1 + 1.8), wall);
+    mb.quad(P(a0, R, y0), P(a1, R, y1), P(a1, R, y1 + 1.8), P(a0, R, y0 + 1.8), wall);
+  }
+  // らせんを上り下りするトラック（1周ごとに点を取る）
+  const helix: [number, number, number][] = [[sx + R * 0.66, 0, hd - 0.5], [sx + R * 0.66, 0.5, sz + 1]];
+  for (let i = 0; i <= 28 * turns; i += 2) {
+    const a = (i / 28) * Math.PI * 2 + Math.PI * 0.0, y = (i / (28 * turns)) * H + 0.5;
+    helix.push([sx + Math.cos(a) * R * 0.66, y, sz + Math.sin(a) * R * 0.66]);
+  }
+  helix.push([x1 - 6, H - fh + 0.5, sz]);
+  fxTruck(mb, helix, 10, 0xf2f2f2);
+  fxTruck(mb, helix.slice(0, 2 + 14 * Math.max(1, turns - 1)), 7, 0x1d3f8a);
+  // 地上の接車バースのトラック
+  fxTruck(mb, [[x0 + 8, 0, hd - 0.5], [x0 + 8, 0, z1 + 7]], 12, 0x9a1d1d);
+  tf(-hw + 1.5, hd - 1.5, 0.8);
+  tf(-hw + 1.5, -hd + 1.5, 0.8);
+}
+
+// 自動車工場：長い組み立て棟、背の高い塗装棟（排気筒と煙）、プレス棟、完成車がずらりと並ぶ駐車場、運ぶキャリアカー
+function autoPlant(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
+  const hw = f.W / 2, hd = f.D / 2;
+  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.08, PALETTE.concrete);
+  const wall = rng.pick([MW, C(0xe4e6e8)]), accent = rng.pick([C(0x1f6fd0), C(0xd23a3a), C(0x1f1f1f)]);
+  const lotD = Math.min(22, f.D * 0.35);
+  const z0 = -hd + 3, z1 = hd - lotD - 3;
+  // 組み立て棟（左、長い）
+  const ax1 = hw * 0.25;
+  mb.box(-hw + 3, 0, z0, ax1, 13 + den, z1, wall, PAT.industrial, C(0xbfc5ca));
+  mb.box(-hw + 2.95, 11, z0 - 0.05, ax1 + 0.05, 12, z1 + 0.05, accent);
+  for (let x = -hw + 8; x < ax1 - 4; x += 9) mb.box(x, 13 + den, z0 + 3, x + 2, 14.5 + den, z1 - 3, MGL, PAT.fullglass, MGL);
+  // 塗装棟（右奥、背が高い）と排気筒
+  const px0 = ax1 + 3, pz1 = (z0 + z1) / 2;
+  mb.box(px0, 0, z0, hw - 3, 20, pz1, C(0xd5d9dc), PAT.industrial, C(0xb4bac1));
+  for (let x = px0 + 3; x < hw - 4; x += 7) {
+    mb.cylinder(x, z0 + 4, 20, 30, 0.8, 10, IND.metal[0], PALETTE.dark);
+    if (x < px0 + 10) fxSmoke(mb, x, 30, z0 + 4, 0.6);
+  }
+  // プレス棟（右手前）
+  mb.box(px0, 0, pz1 + 2, hw - 3, 15, z1, IND.metal[2], PAT.industrial, C(0x9aa1a7));
+  // 2つの棟をつなぐ渡り廊下（車体を運ぶ）
+  mb.box(ax1, 8, z0 + 6, px0, 11, z0 + 10, IND.metal[1]);
+  litSign(mb, -hw + 6, 9, z1 + 0.05, -hw + 22, 10.4, z1 + 0.2, accent);
+  // 完成車の駐車場（色とりどりの車が並ぶ）
+  const cars = [0xf2f2f2, 0x2b2b2b, 0x9a1d1d, 0x1d3f8a, 0x8a8f96, 0xd8d8d8, 0x3b5d3a, 0xb8bcc0].map(C);
+  const ly0 = hd - lotD - 1, ly1 = hd - 4;
+  mb.ground(-hw + 2, ly0, hw - 12, ly1, 0.1, PALETTE.asphalt);
+  for (let z = ly0 + 1.5; z < ly1 - 2; z += 5.5)
+    for (let x = -hw + 3; x < hw - 14; x += 2.3) {
+      if (rng.next() < 0.1) continue;
+      const col = cars[Math.floor(rng.next() * cars.length)];
+      mb.box(x, 0.25, z, x + 1.7, 1.0, z + 4.2, col);
+      mb.box(x + 0.1, 1.0, z + 1.1, x + 1.6, 1.45, z + 3.1, C(0x2a3440), PAT.none, col);
+    }
+  // キャリアカー（完成車を運び出す）
+  fxTruck(mb, [[hw - 6, 0, hd - 0.5], [hw - 6, 0, ly0 + 2], [hw - 16, 0, ly0 + 2]], 12, 0xd23a3a);
+  fxTruck(mb, [[hw - 9, 0, hd - 0.5], [hw - 9, 0, z1 + 3], [px0 + 4, 0, z1 + 3]], 8, 0xf2f2f2);
+  tf(hw - 2, -hd + 2, 0.8);
 }
 
 // ハイテク産業：敷地の大きさで種類を変える（どれも白・ガラス・四角が基本）

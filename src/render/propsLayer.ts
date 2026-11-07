@@ -8,7 +8,8 @@ import { labelWater } from '../sim/plan';
 import { MeshBuilder } from './builder';
 import { createBuildingMaterial } from './materials';
 import { airportLayout, bigContainerShip, bigNuclearScale, boat, containerShip, tugBoat, COOLING_TOWERS, INCIN_RAMP, plane, TERMINAL, terminalCranes } from './buildingGen';
-import { garbageTruck, tractor, vc } from './vehicles';
+import { boxTruck, garbageTruck, tractor, vc } from './vehicles';
+import type { FxSpot } from './buildingGen';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 interface Route {
@@ -89,6 +90,12 @@ export class PropsLayer {
   private ramps: { ax: number; az: number; ay: number; bx: number; bz: number; by: number; t: number }[] = [];
   private rampTrucks: THREE.InstancedMesh;
   private runways: Runway[] = [];
+  // 工場の煙（煙突から上がって広がり、消える灰色のかたまり）、フレアの炎、敷地の中を行き来するトラック
+  private smoke: THREE.InstancedMesh;
+  private flames: THREE.InstancedMesh;
+  private fxTrucks: THREE.InstancedMesh;
+  private fx: FxSpot[] = [];
+  private fxT = 0;
   private mtx = new THREE.Matrix4();
   private q = new THREE.Quaternion();
   private up = new THREE.Vector3(0, 1, 0);
@@ -134,6 +141,17 @@ export class PropsLayer {
     this.rampTrucks.frustumCulled = false;
     this.rampTrucks.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.group.add(this.rampTrucks);
+    this.smoke = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 2), new THREE.MeshLambertMaterial({ color: 0xd9d9d6, transparent: true, opacity: 0.5, depthWrite: false }), 600);
+    this.flames = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 3, 10).translate(0, 1.5, 0), new THREE.MeshBasicMaterial({ color: 0xff8a2a, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }), 80);
+    this.fxTrucks = new THREE.InstancedMesh(boxTruck(), new THREE.MeshLambertMaterial({ vertexColors: true }), 160);
+    for (const m of [this.smoke, this.flames, this.fxTrucks]) {
+      m.count = 0;
+      m.frustumCulled = false;
+      m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      this.group.add(m);
+    }
+    this.smoke.setColorAt(0, new THREE.Color());
+    this.fxTrucks.castShadow = true;
     this.steam.count = 0;
     this.steam.frustumCulled = false;
     this.steam.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -449,6 +467,82 @@ export class PropsLayer {
     for (const m of [this.tugs, this.ropes, this.wakes]) m.instanceMatrix.needsUpdate = true;
   }
 
+  setFx(list: FxSpot[]) {
+    this.fx = list;
+  }
+
+  private updateFx(dt: number) {
+    this.fxT += dt;
+    const T = this.fxT;
+    const v = new THREE.Vector3(), sc = new THREE.Vector3(), col = new THREE.Color();
+    let ns = 0, nf = 0, nt = 0;
+    this.q.identity();
+    const P = 7, period = 11;
+    for (let i = 0; i < this.fx.length; i++) {
+      const f = this.fx[i];
+      if (f.kind === 'smoke') {
+        // 煙：煙突の口から上がりながら膨らみ、風で流れて薄れる
+        for (let p = 0; p < P && ns < 600; p++) {
+          const t = ((T / period + p / P + i * 0.271) % 1 + 1) % 1;
+          const r = (1.4 + t * 7) * f.s * (1 - Math.max(0, (t - 0.75) / 0.25));
+          if (r < 0.2) continue;
+          v.set(f.x + t * 22 * f.s + Math.sin(p * 2.3 + i) * 1.2, f.y + 1 + t * 26 * f.s, f.z + t * 8 * f.s + Math.cos(p * 1.9 + i) * 1.2);
+          sc.set(r, r * 0.85, r);
+          this.mtx.compose(v, this.q, sc);
+          this.smoke.setMatrixAt(ns, this.mtx);
+          const g = f.dark ? 0.55 + t * 0.3 : 0.86 + t * 0.08;
+          this.smoke.setColorAt(ns++, col.setRGB(g, g, g * 0.98));
+        }
+      } else if (f.kind === 'flare') {
+        // 炎：ゆらゆら伸び縮みする
+        if (nf >= 80) continue;
+        const fl = 0.75 + 0.25 * Math.sin(T * 9 + i * 3) + 0.15 * Math.sin(T * 23 + i);
+        v.set(f.x, f.y, f.z);
+        sc.set(f.s * (0.9 + 0.2 * Math.sin(T * 13 + i)), f.s * fl * 1.4, f.s * (0.9 + 0.2 * Math.cos(T * 11 + i)));
+        this.q.setFromAxisAngle(new THREE.Vector3(1, 0, 0.4).normalize(), Math.sin(T * 2 + i) * 0.12);
+        this.mtx.compose(v, this.q, sc);
+        this.flames.setMatrixAt(nf++, this.mtx);
+        this.q.identity();
+      } else if (nt < 160) {
+        // トラック：点の列に沿って行き、止まって荷物を積み降ろしし、戻る
+        const pts = f.pts, n = pts.length / 3;
+        let L = 0;
+        const seg: number[] = [];
+        for (let k = 0; k < n - 1; k++) { const d = Math.hypot(pts[k * 3 + 3] - pts[k * 3], pts[k * 3 + 5] - pts[k * 3 + 2]); seg.push(d); L += d; }
+        const sp = 7, go = L / sp, cyc = go * 2 + f.wait * 2;
+        let t = ((T + i * 5.3) % cyc + cyc) % cyc, u: number, back = false;
+        if (t < go) u = t / go;
+        else if (t < go + f.wait) u = 1;
+        else if (t < go * 2 + f.wait) { u = 1 - (t - go - f.wait) / go; back = true; }
+        else u = 0;
+        let d = u * L, k = 0;
+        while (k < seg.length - 1 && d > seg[k]) { d -= seg[k]; k++; }
+        const a = k * 3, b = a + 3, w = seg[k] > 0 ? Math.min(1, d / seg[k]) : 0;
+        v.set(pts[a] + (pts[b] - pts[a]) * w, pts[a + 1] + (pts[b + 1] - pts[a + 1]) * w, pts[a + 2] + (pts[b + 2] - pts[a + 2]) * w);
+        const dx = pts[b] - pts[a], dz = pts[b + 2] - pts[a + 2], dy = pts[b + 1] - pts[a + 1];
+        const pitch = Math.atan2(dy, Math.hypot(dx, dz) || 1);
+        // 帰りは反対側の車線を、前向きに走る
+        const yaw = Math.atan2(dx, dz) + (back ? Math.PI : 0);
+        const off = back ? -1.7 : 1.7, l = Math.hypot(dx, dz) || 1;
+        v.x += (dz / l) * off;
+        v.z += (-dx / l) * off;
+        this.q.setFromEuler(new THREE.Euler(back ? pitch : -pitch, yaw, 0, 'YXZ'));
+        sc.set(1, 1, 1);
+        this.mtx.compose(v, this.q, sc);
+        this.fxTrucks.setMatrixAt(nt, this.mtx);
+        this.fxTrucks.setColorAt(nt++, col.setHex(f.color));
+        this.q.identity();
+      }
+    }
+    this.smoke.count = ns;
+    this.flames.count = nf;
+    this.fxTrucks.count = nt;
+    for (const m of [this.smoke, this.flames, this.fxTrucks]) {
+      m.instanceMatrix.needsUpdate = true;
+      if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    }
+  }
+
   private updateSteam(dt: number) {
     this.steamT += dt;
     const P = 10, period = 16;
@@ -575,6 +669,7 @@ export class PropsLayer {
     this.updateTerminals(dt);
     this.updateRampTrucks(dt);
     this.updateSteam(dt);
+    this.updateFx(dt);
     this.updateShips(dt);
     const counts = [0, 0];
     for (const r of this.routes) {

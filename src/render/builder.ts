@@ -40,6 +40,11 @@ export class MeshBuilder {
   private tz = 0;
   abandoned = false;
 
+  // 敷地の座標を世界の座標に直す（煙や炎などの動くものの位置を決めるときに使う）
+  world(x: number, y: number, z: number): [number, number, number] {
+    return [x * this.cos - z * this.sin + this.tx, y + this.ty, x * this.sin + z * this.cos + this.tz];
+  }
+
   setTransform(angle: number, tx: number, ty: number, tz: number) {
     this.cos = Math.cos(angle);
     this.sin = Math.sin(angle);

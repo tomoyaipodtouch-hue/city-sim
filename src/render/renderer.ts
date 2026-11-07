@@ -254,6 +254,7 @@ export class CityRenderer {
       if (this.buildings.update(g, this.buildingList, heights)) this.dirty.trees = true;
       updateAO(g, this.buildingList);
       this.lights.setBeacons(this.buildings.allBeacons());
+      this.props.setFx(this.buildings.allFx());
       this.props.setBuildings(g, this.buildingList);
       this.cars.setStations(g, this.buildingList);
       this.stationsMesh.rebuild(g, this.buildingList);
