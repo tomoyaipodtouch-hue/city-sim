@@ -70,10 +70,16 @@ export class TerrainLayer {
         void main(){
           vec2 cell = vW.xz / ${CELL.toFixed(1)};
           vec4 c = texture2D(uData, cell / uN);
-          vec2 f = abs(fract(cell) - 0.5);
-          float line = step(0.47, max(f.x, f.y)) * uGrid;
-          vec3 rgb = mix(c.rgb, vec3(1.0), line * 0.6);
-          float a = max(c.a, line * 0.35);
+          // マスの線：画面の上で約1ピクセルの細い線（ふちはなめらか）。引いて見てマスが小さくなるほど薄くし、遠くでは消す
+          vec2 fw = max(fwidth(cell), vec2(1e-4));
+          vec2 d = abs(fract(cell - 0.5) - 0.5) / fw;
+          float l = 1.0 - smoothstep(0.0, 1.2, min(d.x, d.y));
+          float px = 1.0 / max(fw.x, fw.y); // 1マスが画面で何ピクセルか
+          float line = l * smoothstep(16.0, 44.0, px) * uGrid;
+          // データ表示がないところ（色が黒）は、線だけを白く重ねる
+          vec3 base = c.a > 0.01 ? c.rgb : vec3(1.0);
+          vec3 rgb = mix(base, vec3(1.0), line * 0.5);
+          float a = max(c.a, line * 0.16);
           if (a < 0.01) discard;
           gl_FragColor = vec4(rgb, a);
         }`,
