@@ -5,6 +5,7 @@ import type { Building } from '../sim/world';
 import { MeshBuilder } from './builder';
 import { generateBuilding, setupLot, TreeSpot, farmFields } from './buildingGen';
 import { createBuildingMaterial } from './materials';
+import { PondBuilder, createPondMaterial, createGlowMaterial } from './parkPond';
 import { CIVIC, CivicId, FARM_TILE, ZoneType } from '../sim/defs';
 
 const CHUNK = 16;
@@ -12,6 +13,8 @@ const CHUNK = 16;
 interface Chunk {
   key: string;
   mesh: THREE.Mesh | null;
+  pond: THREE.Mesh | null; // 大公園の池の水面
+  glow: THREE.Mesh | null; // 夜の街灯の光だまり
   trees: TreeSpot[];
   beacons: number[]; // 航空障害灯の位置（x, y, z の並び）
 }
@@ -19,6 +22,13 @@ interface Chunk {
 export class BuildingLayer {
   group = new THREE.Group();
   material = createBuildingMaterial();
+  pondMaterial = createPondMaterial();
+  glowMaterial = createGlowMaterial();
+  // 夜の明るさ（0..1）に合わせて、街灯の光だまりを出す
+  setNight(v: number) {
+    this.glowMaterial.opacity = v;
+    this.glowMaterial.visible = v > 0.02;
+  }
   private chunks = new Map<number, Chunk>();
   private heightKeys = new Map<number, number>();
 
@@ -72,6 +82,11 @@ export class BuildingLayer {
         this.group.remove(old.mesh);
         old.mesh.geometry.dispose();
       }
+      for (const m of [old?.pond, old?.glow]) {
+        if (!m) continue;
+        this.group.remove(m);
+        m.geometry.dispose();
+      }
       treesChanged = true;
       if (!bs.length) {
         this.chunks.delete(c);
@@ -80,10 +95,11 @@ export class BuildingLayer {
       const mb = new MeshBuilder();
       const trees: TreeSpot[] = [];
       const beacons: number[] = [];
+      const pb = new PondBuilder();
       for (const b of bs) {
         const f = setupLot(mb, b, groundAt, minAt);
         const v0 = mb.pos.length;
-        generateBuilding(mb, b, f, trees, isCpark);
+        generateBuilding(mb, b, f, trees, isCpark, pb);
         // 農家：同じ区画（8×8）の空いた農地を、ぜんぶ畑にする
         if (b.type === 'IA' && g.zone[g.idx(b.x, b.y)] === ZoneType.F) farmFields(mb, g, b, farmEmpty(g, b), trees);
         // 高さ 60m を超える建物のいちばん高いところに、航空障害灯を付ける
@@ -95,7 +111,20 @@ export class BuildingLayer {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       this.group.add(mesh);
-      this.chunks.set(c, { key, mesh, trees, beacons });
+      let pond: THREE.Mesh | null = null;
+      if (!pb.empty) {
+        pond = new THREE.Mesh(pb.toGeometry(), this.pondMaterial);
+        pond.receiveShadow = true;
+        this.group.add(pond);
+      }
+      let glow: THREE.Mesh | null = null;
+      const gg = pb.glowGeometry();
+      if (gg) {
+        glow = new THREE.Mesh(gg, this.glowMaterial);
+        glow.renderOrder = 2;
+        this.group.add(glow);
+      }
+      this.chunks.set(c, { key, mesh, pond, glow, trees, beacons });
     }
     return treesChanged;
   }

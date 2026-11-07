@@ -19,6 +19,7 @@ import { updateAO } from './ao';
 import { PostFX } from './post';
 import { shared } from './materials';
 import { findIslands } from './turnback';
+import { pondUniforms } from './parkPond';
 
 export interface Quality {
   shadows: boolean;
@@ -324,6 +325,9 @@ export class CityRenderer {
       wu.uTime.value += mdt;
       wu.uSky.value.copy(this.sky.uniforms.uHorizon.value).lerp(this.sky.uniforms.uZenith.value, 0.3);
       wu.uNight.value = this.night;
+      pondUniforms.uTime.value = wu.uTime.value;
+      pondUniforms.uSky.value.copy(wu.uSky.value);
+      pondUniforms.uNight.value = this.night;
     }
     this.sky.follow(this.rig.camera);
     this.lights.update(now / 1000);
@@ -403,6 +407,7 @@ export class CityRenderer {
     this.renderer.toneMappingExposure = 1.15 - 0.1 * night;
     shared.uNight.value = smooth(0.25, 0.85, night);
     this.stationsMesh.lights.visible = shared.uNight.value > 0.3;
+    this.buildings.setNight(shared.uNight.value);
     // ガラスに映る空と太陽
     shared.uSunDir.value.copy(this.sunDir);
     shared.uSunCol.value.copy(sunCol).multiplyScalar(day);

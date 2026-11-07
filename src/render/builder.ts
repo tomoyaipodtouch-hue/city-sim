@@ -269,6 +269,16 @@ export class MeshBuilder {
     this.matOverride = keep;
   }
 
+  // 地面の板（4つの角で色を変え、なめらかにつなぐ）。色は角 (x0,z0), (x1,z0), (x1,z1), (x0,z1) の順
+  groundGrad(x0: number, z0: number, x1: number, z1: number, y: number, c00: THREE.Color, c10: THREE.Color, c11: THREE.Color, c01: THREE.Color) {
+    this.curMat = MAT.ground;
+    const i0 = this.vtx(x0, y, z1, 0, 1, 0, c01, 0, 0, 0);
+    const i1 = this.vtx(x1, y, z1, 0, 1, 0, c11, 0, 0, 0);
+    const i2 = this.vtx(x1, y, z0, 0, 1, 0, c10, 0, 0, 0);
+    const i3 = this.vtx(x0, y, z0, 0, 1, 0, c00, 0, 0, 0);
+    this.idx.push(i0, i1, i2, i0, i2, i3);
+  }
+
   get vertexCount() {
     return this.pos.length / 3;
   }

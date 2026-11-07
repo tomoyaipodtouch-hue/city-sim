@@ -7,6 +7,7 @@ import { CELL } from '../sim/constants';
 import type { Building } from '../sim/world';
 import type { Grid } from '../sim/grid';
 import { BState } from '../sim/world';
+import { PondBuilder, cpLake, LAKE_T } from './parkPond';
 
 export interface TreeSpot {
   x: number;
@@ -75,7 +76,7 @@ let resPat: number = PAT.balcony;
 let louvers = false;
 const flatRoof = () => curRoof;
 
-export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, trees: TreeSpot[], isCpark: (x: number, y: number) => boolean = () => false) {
+export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, trees: TreeSpot[], isCpark: (x: number, y: number) => boolean = () => false, pond?: PondBuilder) {
   const rng = new Rng(b.seed);
   curRoof = FLAT_ROOFS[b.seed % FLAT_ROOFS.length];
   // 外壁のデザイン（建物ごとに選ぶ）：全面ガラス・横長の連続窓・ふつうの窓、縦ルーバーの有無、マンションのバルコニー
@@ -138,7 +139,7 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     case 'greenway': greenway(mb, f, rng, tf); break;
     case 'sports': sportsPark(mb, f, rng, tf); break;
     case 'garden': pondGarden(mb, f, rng, tf); break;
-    case 'cpark_a': case 'cpark_b': centralPark(mb, b, f, trees, isCpark); break;
+    case 'cpark_a': case 'cpark_b': centralPark(mb, b, f, trees, isCpark, pond); break;
     case 'busstop': busStop(mb, f); break;
     case 'station': station(mb, f, 0); break;
     case 'el_station': station(mb, f, 8); break;
@@ -1070,51 +1071,238 @@ const cpHash = (x: number, z: number) => {
   h = Math.imul(h ^ (h >>> 13), 1274126177);
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 };
-const cpLake = (x: number, z: number) => Math.sin(x / 61 + 1.3) * Math.sin(z / 47 + 0.4) + 0.45 * Math.sin((x - z) / 33);
 const cpMeadow = (x: number, z: number) => Math.sin(x / 83 + 2.1) * Math.sin(z / 71 + 1.7);
-const LAKE_T = 0.95;
-function centralPark(mb: MeshBuilder, b: Building, f: LotFrame, trees: TreeSpot[], isCpark: (x: number, y: number) => boolean) {
+// 小道の中心線：3マスおきに東西（j）・南北（i）へ、ゆるく曲がりながら続く
+const pathZ = (x: number, j: number) => (3 * j + 1.5) * CELL + 9 * Math.sin(x / 41 + j * 1.9);
+const pathX = (z: number, i: number) => (3 * i + 1.5) * CELL + 9 * Math.sin(z / 37 + i * 2.3);
+const CP = {
+  lawnSun: C(0x7fb054), lawn: C(0x6a9a46), lawn2: C(0x73a24c), forest: C(0x557d3a),
+  path: C(0xb9b3a7), curb: C(0xdcd8cf), stone: C(0xc2baa9), stoneDark: C(0x8f887b),
+  rock: [C(0x8d8a83), C(0x7a7771), C(0x9c978c)], reed: [C(0x7c8c45), C(0x95985a), C(0x6b7d3c)],
+  pole: C(0x26332b), lamp: C(0xffe3a6), bench: C(0x8a5e3a), iron: C(0x2b2f2c),
+  flowers: [C(0xd8475a), C(0xf2c94c), C(0xe58fb6), C(0xf7f3ea), C(0x9b6fd0)], bed: C(0x5b4632),
+  boathouse: C(0xe9e4d8), roof: C(0x51605a), deck: C(0x8f6b45),
+  boats: [C(0xf2f0ea), C(0xb9392f), C(0x2f6f8f), C(0x3e7a4a)],
+};
+function centralPark(mb: MeshBuilder, b: Building, f: LotFrame, trees: TreeSpot[], isCpark: (x: number, y: number) => boolean, pond?: PondBuilder) {
   // 世界座標で描く
   mb.setTransform(0, 0, f.base, 0);
   const X0 = b.x * CELL, Z0 = b.y * CELL, X1 = (b.x + b.w) * CELL, Z1 = (b.y + b.h) * CELL;
   const tree = (x: number, z: number, s: number, kind = 0) => trees.push({ x, y: f.base, z, s, kind });
   const lake = (x: number, z: number) => cpLake(x, z) > LAKE_T;
-  // 芝生（広い芝生広場は明るい色）
+  const inside = (x: number, z: number, m = 0) => x > X0 + m && x < X1 - m && z > Z0 + m && z < Z1 - m;
+  // 池と岸辺（なめらかな曲線の岸。水面は別のメッシュ）
+  pond?.add(X0, Z0, X1, Z1, f.base + 0.13);
+  // 芝生：日の当たる芝生広場は明るく、森の中は暗く、場所ごとに少しずつ色を変える
   const S = 4;
+  const lawnAt = (x: number, z: number) => {
+    // 芝生広場（明るい）→ ふつうの芝生 → 森の中（暗い）へ、なめらかに変わる。ところどころ少しむらがある
+    const m = cpMeadow(x, z), w = 0.5 + 0.5 * Math.sin(x / 9.3 + z / 13.7) * Math.sin(z / 8.1 - x / 15.2);
+    const c = m > 0.2 ? CP.lawn.clone().lerp(CP.lawnSun, Math.min(1, (m - 0.2) / 0.35)) : CP.lawn.clone().lerp(CP.forest, Math.min(1, (0.2 - m) / 0.5));
+    return c.lerp(CP.lawn2, w * 0.35);
+  };
   for (let z = Z0; z < Z1; z += S)
     for (let x = X0; x < X1; x += S) {
-      const cx = x + S / 2, cz = z + S / 2, v = cpLake(cx, cz);
-      const col = v > LAKE_T ? PALETTE.water : v > LAKE_T - 0.08 ? C(0xb7ab92) : cpMeadow(cx, cz) > 0.55 ? PALETTE.lawn : PALETTE.lawn2;
-      mb.ground(x + (x === X0 ? 0.1 : 0), z + (z === Z0 ? 0.1 : 0), x + S - (x + S >= X1 ? 0.1 : 0), z + S - (z + S >= Z1 ? 0.1 : 0), v > LAKE_T ? 0.06 : 0.08, col);
+      // 隣の大公園とすき間なくつながるように、端まで敷く
+      const xa = x, za = z, xb = Math.min(X1, x + S), zb = Math.min(Z1, z + S);
+      mb.groundGrad(xa, za, xb, zb, 0.08, lawnAt(x, z), lawnAt(x + S, z), lawnAt(x + S, z + S), lawnAt(x, z + S));
     }
-  // 小道：3マスおきに東西・南北へ、ゆるく曲がりながら続く
-  const pathCol = C(0xc8b896), PW = 1.6, step = 2;
-  const onPath = (x: number, z: number) => {
-    for (let j = Math.floor(z / (3 * CELL)) - 1; j <= Math.floor(z / (3 * CELL)) + 1; j++) if (Math.abs(z - ((3 * j + 1.5) * CELL + 9 * Math.sin(x / 41 + j * 1.9))) < PW + 1.5) return true;
-    for (let i = Math.floor(x / (3 * CELL)) - 1; i <= Math.floor(x / (3 * CELL)) + 1; i++) if (Math.abs(x - ((3 * i + 1.5) * CELL + 9 * Math.sin(z / 37 + i * 2.3))) < PW + 1.5) return true;
+  // 小道：なめらかな帯の舗装路と縁石。池の上は石の橋になる（池の中ほど高く、アーチのように）
+  const PW = 1.7, ST = 1.5;
+  const flat = (a: number[], bb: number[], c: number[], d: number[], col: THREE.Color) => {
+    const keep = mb.matOverride;
+    mb.matOverride = MAT.ground;
+    mb.quad(a as [number, number, number], bb as [number, number, number], c as [number, number, number], d as [number, number, number], col);
+    mb.matOverride = keep;
+  };
+  const bridgeH = (x: number, z: number) => 0.14 + 1.1 * Math.max(0, Math.min(1, (cpLake(x, z) - (LAKE_T - 0.05)) / 0.12));
+  const lamps: [number, number][] = [];
+  // 交わるもう一方の小道の上かどうか
+  const crossing = (x: number, z: number, horiz: boolean) => {
+    if (horiz) { for (let i = Math.floor(x / (3 * CELL)) - 1; i <= Math.floor(x / (3 * CELL)) + 1; i++) if (Math.abs(x - pathX(z, i)) < PW + 0.6) return true; }
+    else for (let j = Math.floor(z / (3 * CELL)) - 1; j <= Math.floor(z / (3 * CELL)) + 1; j++) if (Math.abs(z - pathZ(x, j)) < PW + 0.6) return true;
     return false;
   };
-  const seg = (x: number, z: number, horiz: boolean) => {
-    if (x < X0 || x > X1 || z < Z0 || z > Z1 || lake(x, z)) return;
-    const x0 = Math.max(X0, horiz ? x - step / 2 - 0.3 : x - PW), x1 = Math.min(X1, horiz ? x + step / 2 + 0.3 : x + PW);
-    const z0 = Math.max(Z0, horiz ? z - PW : z - step / 2 - 0.3), z1 = Math.min(Z1, horiz ? z + PW : z + step / 2 + 0.3);
-    if (x1 > x0 && z1 > z0) mb.ground(x0, z0, x1, z1, 0.11, pathCol);
-    // ベンチと街灯
-    const h = cpHash(Math.round(x / step), Math.round(z / step) * 7 + (horiz ? 1 : 2));
-    if (h < 0.035) {
-      const o = PW + 0.7;
-      if (horiz) mb.box(x - 0.9, 0, z + o - 0.25, x + 0.9, 0.5, z + o + 0.25, PALETTE.wood);
-      else mb.box(x + o - 0.25, 0, z - 0.9, x + o + 0.25, 0.5, z + 0.9, PALETTE.wood);
-    } else if (h > 0.97) {
-      const lx = horiz ? x : x - PW - 0.6, lz = horiz ? z - PW - 0.6 : z;
-      mb.box(lx - 0.08, 0, lz - 0.08, lx + 0.08, 3.6, lz + 0.08, PALETTE.dark);
-      mb.box(lx - 0.25, 3.6, lz - 0.25, lx + 0.25, 3.9, lz + 0.25, PALETTE.white);
+  const ribbon = (pt: (s: number) => [number, number], s0: number, s1: number, seed: number, horiz: boolean) => {
+    // 点はマップ全体で同じ位置（ST おき）に取る。隣の公園と同じ点になり、つなぎ目で道がずれない
+    const k0 = Math.floor(s0 / ST), k1 = Math.ceil(s1 / ST);
+    let prev: { x: number; z: number; px: number; pz: number; h: number; skip: boolean } | null = null;
+    // 池を渡る区間：短ければ石の橋、長ければ橋を架けずに小道は岸で終わる
+    const wetS: [number, number][] = [];
+    {
+      let a = NaN;
+      for (let s = s0 - 40; s <= s1 + 40; s += 0.5) {
+        const [x, z] = pt(s), w = cpLake(x, z) > LAKE_T - 0.03;
+        if (w && isNaN(a)) a = s;
+        if (!w && !isNaN(a)) { wetS.push([a, s]); a = NaN; }
+      }
+      if (!isNaN(a)) wetS.push([a, s1 + 40]);
+    }
+    const inLongLake = (s: number) => wetS.some(([a, c]) => c - a > 20 && s > a - 1.5 && s < c + 1.5);
+    for (let k = k0; k <= k1; k++) {
+      const s = k * ST;
+      const [x, z] = pt(s), [xa, za] = pt(s + 0.3);
+      let tx = xa - x, tz = za - z;
+      const l = Math.hypot(tx, tz) || 1;
+      tx /= l; tz /= l;
+      const cur = { x, z, px: -tz, pz: tx, h: bridgeH(x, z), skip: inLongLake(s) };
+      // 区間のまん中が公園の中にあるものだけ描く（隣の公園の区間と少し重なって、すき間ができない）
+      const mx = prev ? (prev.x + x) / 2 : x, mz = prev ? (prev.z + z) / 2 : z;
+      const out = mx < X0 || mx > X1 || mz < Z0 || mz > Z1;
+      if (prev && !out && !cur.skip && !prev.skip) {
+        const P = (q: typeof cur, o: number, y: number) => [q.x + q.px * o, y, q.z + q.pz * o];
+        const onBridge = prev.h > 0.2 || cur.h > 0.2;
+        if (onBridge) {
+          // 石の橋：床、側面、欄干
+          flat(P(prev, -PW, prev.h), P(prev, PW, prev.h), P(cur, PW, cur.h), P(cur, -PW, cur.h), CP.stone);
+          for (const o of [-PW, PW]) {
+            const a = P(prev, o, prev.h), c = P(cur, o, cur.h);
+            mb.quad(o < 0 ? [c[0], 0, c[2]] : [a[0], 0, a[2]], o < 0 ? [a[0], 0, a[2]] : [c[0], 0, c[2]], o < 0 ? (a as [number, number, number]) : (c as [number, number, number]), o < 0 ? (c as [number, number, number]) : (a as [number, number, number]), CP.stoneDark);
+            const w = 0.22, hh = 0.75;
+            const a0 = P(prev, o - Math.sign(o) * w, prev.h), c0 = P(cur, o - Math.sign(o) * w, cur.h);
+            mb.quad([a[0], a[1] + hh, a[2]], [c[0], c[1] + hh, c[2]], [c0[0], c0[1] + hh, c0[2]], [a0[0], a0[1] + hh, a0[2]], CP.stone);
+            mb.quad(o < 0 ? [c[0], c[1], c[2]] : [a[0], a[1], a[2]], o < 0 ? [a[0], a[1], a[2]] : [c[0], c[1], c[2]], o < 0 ? [a[0], a[1] + hh, a[2]] : [c[0], c[1] + hh, c[2]], o < 0 ? [c[0], c[1] + hh, c[2]] : [a[0], a[1] + hh, a[2]], CP.stoneDark);
+            mb.quad(o < 0 ? [a0[0], a0[1], a0[2]] : [c0[0], c0[1], c0[2]], o < 0 ? [c0[0], c0[1], c0[2]] : [a0[0], a0[1], a0[2]], o < 0 ? [c0[0], c0[1] + hh, c0[2]] : [a0[0], a0[1] + hh, a0[2]], o < 0 ? [a0[0], a0[1] + hh, a0[2]] : [c0[0], c0[1] + hh, c0[2]], CP.stone);
+          }
+        } else {
+          flat(P(prev, -PW, 0.11), P(prev, PW, 0.11), P(cur, PW, 0.11), P(cur, -PW, 0.11), CP.path);
+          // 縁石（交差点の中には付けない）
+          if (!crossing(x, z, horiz) && !crossing(prev.x, prev.z, horiz))
+            for (const o of [-PW - 0.3, PW]) flat(P(prev, o, 0.12), P(prev, o + 0.3, 0.12), P(cur, o + 0.3, 0.12), P(cur, o, 0.12), CP.curb);
+          // 街灯とベンチ（道の脇に、決まった間隔で）
+          const h = cpHash(Math.round(x * 2), Math.round(z * 2) + seed);
+          if (inside(x, z, 2.5)) {
+            if (((k % 18) + 18) % 18 === 4 || ((k % 18) + 18) % 18 === 13) lamps.push([x + cur.px * (PW + 0.9) * (((k % 18) + 18) % 18 < 9 ? 1 : -1), z + cur.pz * (PW + 0.9) * (((k % 18) + 18) % 18 < 9 ? 1 : -1)]);
+            else if (h < 0.09 && ((k % 9) + 9) % 9 !== 3 && ((k % 9) + 9) % 9 !== 5) {
+              // ベンチ：道に背を向けずに道の方を向く
+              const sd = h < 0.045 ? 1 : -1, bx = x + cur.px * (PW + 1.0) * sd, bz = z + cur.pz * (PW + 1.0) * sd;
+              const ax = tx * 0.85, az = tz * 0.85, nx = cur.px * sd, nz = cur.pz * sd;
+              const Q = (u: number, v: number, y: number): [number, number, number] => [bx + ax * u + nx * v, y, bz + az * u + nz * v];
+              mb.quad(Q(-1, -0.25, 0.45), Q(1, -0.25, 0.45), Q(1, 0.25, 0.45), Q(-1, 0.25, 0.45), CP.bench);
+              mb.quad(Q(1, -0.25, 0.45), Q(-1, -0.25, 0.45), Q(-1, -0.25, 0.42), Q(1, -0.25, 0.42), CP.bench);
+              mb.quad(Q(-1, 0.3, 0.5), Q(1, 0.3, 0.5), Q(1, 0.33, 0.95), Q(-1, 0.33, 0.95), CP.bench);
+              mb.quad(Q(1, 0.36, 0.5), Q(-1, 0.36, 0.5), Q(-1, 0.39, 0.95), Q(1, 0.39, 0.95), CP.bench);
+              for (const u of [-0.85, 0.85]) {
+                const [lx, , lz] = Q(u, 0, 0);
+                mb.box(lx - 0.05, 0, lz - 0.05, lx + 0.05, 0.45, lz + 0.05, CP.iron);
+              }
+            }
+          }
+          // 花壇：日の当たる広場の道ばたに、ときどき
+          if (h > 0.985 && cpMeadow(x, z) > 0.2 && inside(x, z, 6)) {
+            const sd = h > 0.9925 ? 1 : -1, fx = x + cur.px * (PW + 2.6) * sd, fz = z + cur.pz * (PW + 2.6) * sd;
+            if (!lake(fx, fz)) {
+              mb.box(fx - 2.2, 0, fz - 1.2, fx + 2.2, 0.28, fz + 1.2, CP.stoneDark, PAT.none, CP.bed);
+              for (let q = 0; q < 10; q++) {
+                const u = -1.8 + (q % 5) * 0.9, v = q < 5 ? -0.5 : 0.5;
+                mb.box(fx + u - 0.38, 0.28, fz + v - 0.38, fx + u + 0.38, 0.5, fz + v + 0.38, CP.flowers[(Math.floor(h * 1000) + q) % CP.flowers.length]);
+              }
+            }
+          }
+        }
+      }
+      prev = cur;
     }
   };
-  for (let j = Math.floor(Z0 / (3 * CELL)) - 1; j <= Math.ceil(Z1 / (3 * CELL)); j++)
-    for (let x = Math.floor(X0 / step) * step + step / 2; x < X1; x += step) seg(x, (3 * j + 1.5) * CELL + 9 * Math.sin(x / 41 + j * 1.9), true);
-  for (let i = Math.floor(X0 / (3 * CELL)) - 1; i <= Math.ceil(X1 / (3 * CELL)); i++)
-    for (let z = Math.floor(Z0 / step) * step + step / 2; z < Z1; z += step) seg((3 * i + 1.5) * CELL + 9 * Math.sin(z / 37 + i * 2.3), z, false);
+  for (let j = Math.floor(Z0 / (3 * CELL)) - 1; j <= Math.ceil(Z1 / (3 * CELL)); j++) {
+    // 公園の中を通る区間だけ
+    let s0 = Infinity, s1 = -Infinity;
+    for (let x = X0; x <= X1; x += 1) { const z = pathZ(x, j); if (z > Z0 - PW && z < Z1 + PW) { s0 = Math.min(s0, x); s1 = Math.max(s1, x); } }
+    if (s1 > s0) ribbon((s) => [s, pathZ(s, j)], s0, s1, j * 7 + 1, true);
+  }
+  for (let i = Math.floor(X0 / (3 * CELL)) - 1; i <= Math.ceil(X1 / (3 * CELL)); i++) {
+    let s0 = Infinity, s1 = -Infinity;
+    for (let z = Z0; z <= Z1; z += 1) { const x = pathX(z, i); if (x > X0 - PW && x < X1 + PW) { s0 = Math.min(s0, z); s1 = Math.max(s1, z); } }
+    if (s1 > s0) ribbon((s) => [pathX(s, i), s], s0, s1, i * 13 + 2, false);
+  }
+  const onPath = (x: number, z: number, m = 1.5) => {
+    for (let j = Math.floor(z / (3 * CELL)) - 1; j <= Math.floor(z / (3 * CELL)) + 1; j++) if (Math.abs(z - pathZ(x, j)) < PW + m) return true;
+    for (let i = Math.floor(x / (3 * CELL)) - 1; i <= Math.floor(x / (3 * CELL)) + 1; i++) if (Math.abs(x - pathX(z, i)) < PW + m) return true;
+    return false;
+  };
+  // 街灯：細い柱に、夜にともる灯り
+  for (const [lx, lz] of lamps) {
+    if (lake(lx, lz) || cpLake(lx, lz) > LAKE_T - 0.03) continue;
+    mb.box(lx - 0.09, 0, lz - 0.09, lx + 0.09, 3.6, lz + 0.09, CP.pole);
+    mb.box(lx - 0.2, 3.6, lz - 0.2, lx + 0.2, 3.7, lz + 0.2, CP.pole);
+    mb.box(lx - 0.17, 3.7, lz - 0.17, lx + 0.17, 4.15, lz + 0.17, CP.lamp, PAT.lit);
+    mb.box(lx - 0.22, 4.15, lz - 0.22, lx + 0.22, 4.25, lz + 0.22, CP.pole);
+    pond?.addGlow(lx, f.base + 0.16, lz);
+  }
+  // 池のまわり：岸の石や岩、水ぎわの葦
+  for (let z = Z0 + 1; z < Z1 - 1; z += 2.2)
+    for (let x = X0 + 1; x < X1 - 1; x += 2.2) {
+      const h = cpHash(Math.round(x * 3) + 11, Math.round(z * 3));
+      const px = x + (cpHash(Math.round(z), Math.round(x)) - 0.5) * 1.6, pz = z + (h - 0.5) * 1.6;
+      const v = cpLake(px, pz);
+      if (onPath(px, pz, 0.6)) continue;
+      if (v > LAKE_T - 0.06 && v < LAKE_T - 0.005 && h < 0.42) {
+        const r = 0.45 + h * 1.6;
+        mb.dome(px, pz, 0.05, r, r * (0.45 + cpHash(Math.round(px), 3) * 0.35), CP.rock[Math.floor(h * 30) % 3], 7, 3);
+      } else if (v > LAKE_T - 0.004 && v < LAKE_T + 0.035 && h < 0.3) {
+        // 葦の茂み
+        for (let q = 0; q < 7; q++) {
+          const rx = px + (cpHash(q, Math.round(px * 7)) - 0.5) * 1.6, rz = pz + (cpHash(Math.round(pz * 7), q) - 0.5) * 1.6;
+          const hh = 0.9 + cpHash(q * 3, Math.round(rx * 5)) * 0.9, w = 0.05;
+          mb.box(rx - w, 0.1, rz - w, rx + w, hh, rz + w, CP.reed[q % 3]);
+        }
+      }
+    }
+  // ボート小屋と桟橋：池の岸のうち、小道から離れた場所に1つ（公園ごと）
+  let best: [number, number, number, number] | null = null, bs = -1;
+  for (let z = Z0 + 8; z < Z1 - 8; z += 2)
+    for (let x = X0 + 8; x < X1 - 8; x += 2) {
+      const v = cpLake(x, z);
+      if (v < LAKE_T - 0.09 || v > LAKE_T - 0.05 || onPath(x, z, 4)) continue;
+      const gx = cpLake(x + 1, z) - cpLake(x - 1, z), gz = cpLake(x, z + 1) - cpLake(x, z - 1), gl = Math.hypot(gx, gz) || 1;
+      const sc = gl + cpHash(Math.round(x), Math.round(z)) * 0.02;
+      if (sc > bs && !onPath(x - (gx / gl) * 5, z - (gz / gl) * 5, 3)) { bs = sc; best = [x, z, gx / gl, gz / gl]; }
+    }
+  if (best && cpHash(b.x * 7 + 1, b.y * 13 + 5) < 0.5) {
+    const [hx, hz, ux, uz] = best, vx = -uz, vz = ux;
+    const Q = (a: number, c: number): [number, number] => [hx - ux * a + vx * c, hz - uz * a + vz * c];
+    const boxR = (a0: number, c0: number, a1: number, c1: number, y0: number, y1: number, col: THREE.Color) => {
+      const p = [Q(a0, c0), Q(a1, c0), Q(a1, c1), Q(a0, c1)];
+      const top = (k: number): [number, number, number] => [p[k][0], y1, p[k][1]], bot = (k: number): [number, number, number] => [p[k][0], y0, p[k][1]];
+      for (let k = 0; k < 4; k++) mb.quad(bot((k + 1) % 4), bot(k), top(k), top((k + 1) % 4), col);
+      mb.quad(top(0), top(1), top(2), top(3), col);
+    };
+    // 小屋（白い壁、窓の帯、緑がかった屋根）
+    boxR(1.5, -4, 7.5, 4, 0, 3.2, CP.boathouse);
+    boxR(1.45, -3.6, 7.55, 3.6, 1.4, 2.3, C(0x50606a));
+    boxR(1.2, -4.4, 7.8, 4.4, 3.2, 3.45, CP.roof);
+    boxR(2.4, -3.4, 6.6, 3.4, 3.45, 4.4, CP.roof);
+    // 桟橋（池の上へ）
+    boxR(-6, -1.2, 1.5, 1.2, 0.3, 0.45, CP.deck);
+    for (const a of [-5.5, -2.5]) for (const c of [-1.1, 1.1]) boxR(a - 0.12, c - 0.12, a + 0.12, c + 0.12, 0, 0.3, CP.deck);
+    // 桟橋につないだボート
+    for (const [a, c, k] of [[-4, 2.2, 0], [-4, -2.2, 1]] as const) {
+      const [bx, bz] = Q(a, c), col = CP.boats[(k + Math.floor(hx)) % CP.boats.length];
+      const B = (u: number, w: number): [number, number] => [bx - ux * u + vx * w, bz - uz * u + vz * w];
+      const pts = [B(-1.5, 0), B(-0.6, 0.6), B(1.3, 0.55), B(1.3, -0.55), B(-0.6, -0.6)];
+      for (let q = 0; q < 5; q++) {
+        const a0 = pts[q], a1 = pts[(q + 1) % 5];
+        mb.quad([a1[0], 0.15, a1[1]], [a0[0], 0.15, a0[1]], [a0[0], 0.55, a0[1]], [a1[0], 0.55, a1[1]], col);
+      }
+      const ctr = B(0, 0);
+      for (let q = 0; q < 5; q++) mb.tri([ctr[0], 0.3, ctr[1]], [pts[(q + 1) % 5][0], 0.5, pts[(q + 1) % 5][1]], [pts[q][0], 0.5, pts[q][1]], C(0x6a4a30));
+    }
+  }
+  // 池に浮かぶボート（深いところに、少しだけ）
+  for (let z = Z0 + 6; z < Z1 - 6; z += 9)
+    for (let x = X0 + 6; x < X1 - 6; x += 9) {
+      const h = cpHash(Math.round(x) + 5, Math.round(z) + 3);
+      if (h > 0.12 || cpLake(x, z) < LAKE_T + 0.12) continue;
+      const ang = h * 50, ca = Math.cos(ang), sa = Math.sin(ang), col = CP.boats[Math.floor(h * 400) % CP.boats.length];
+      const B = (u: number, w: number): [number, number] => [x + ca * u - sa * w, z + sa * u + ca * w];
+      const pts = [B(1.5, 0), B(0.6, 0.6), B(-1.3, 0.55), B(-1.3, -0.55), B(0.6, -0.6)];
+      for (let q = 0; q < 5; q++) {
+        const a0 = pts[q], a1 = pts[(q + 1) % 5];
+        mb.quad([a0[0], 0.15, a0[1]], [a1[0], 0.15, a1[1]], [a1[0], 0.55, a1[1]], [a0[0], 0.55, a0[1]], col);
+      }
+      const ctr = B(0, 0);
+      for (let q = 0; q < 5; q++) mb.tri([ctr[0], 0.3, ctr[1]], [pts[q][0], 0.5, pts[q][1]], [pts[(q + 1) % 5][0], 0.5, pts[(q + 1) % 5][1]], C(0x6a4a30));
+    }
   // 外周：隣が大公園でない辺に、低い石垣と並木
   const wall = C(0x9a948a);
   for (let x = b.x; x < b.x + b.w; x++) {
@@ -1125,16 +1313,16 @@ function centralPark(mb: MeshBuilder, b: Building, f: LotFrame, trees: TreeSpot[
     if (!isCpark(b.x - 1, y)) { mb.box(X0 + 0.2, 0, y * CELL, X0 + 0.7, 0.9, (y + 1) * CELL, wall); for (const o of [8]) tree(X0 + 2.6, y * CELL + o, 0.9 + cpHash(o, y) * 0.3); }
     if (!isCpark(b.x + b.w, y)) { mb.box(X1 - 0.7, 0, y * CELL, X1 - 0.2, 0.9, (y + 1) * CELL, wall); for (const o of [8]) tree(X1 - 2.6, y * CELL + o, 0.9 + cpHash(o + 50, y) * 0.3); }
   }
-  // 木立：芝生広場・池・小道を避けて、ところどころ森のように
-  for (let z = Z0 + 2; z < Z1 - 1; z += 4)
-    for (let x = X0 + 2; x < X1 - 1; x += 4) {
+  // 木立：芝生広場はまばらに、森の部分は密に（池・小道は避ける）
+  for (let z = Z0 + 1.5; z < Z1 - 1; z += 3)
+    for (let x = X0 + 1.5; x < X1 - 1; x += 3) {
       const h = cpHash(x, z);
-      const tx = x + (cpHash(z, x) - 0.5) * 2.4, tz = z + (h - 0.5) * 2.4;
+      const tx = x + (cpHash(z, x) - 0.5) * 2.2, tz = z + (h - 0.5) * 2.2;
       if (tx < X0 + 3.5 || tx > X1 - 3.5 || tz < Z0 + 3.5 || tz > Z1 - 3.5) continue;
-      if (cpLake(tx, tz) > LAKE_T - 0.14 || onPath(tx, tz)) continue;
+      if (cpLake(tx, tz) > LAKE_T - 0.1 || onPath(tx, tz, 1.2)) continue;
       const m = cpMeadow(tx, tz);
-      const dens = m > 0.45 ? 0.04 : 0.3 + 0.35 * Math.max(0, -m);
-      if (h < dens) tree(tx, tz, 0.85 + cpHash(x + 3, z) * 0.6, cpHash(x, z + 9) < 0.25 ? 1 : 0);
+      const dens = m > 0.45 ? 0.025 : m > 0.1 ? 0.18 : 0.42 + 0.4 * Math.max(0, -m);
+      if (h < dens) tree(tx, tz, 0.8 + cpHash(x + 3, z) * 0.7, cpHash(x, z + 9) < 0.22 ? 1 : 0);
     }
 }
 
