@@ -17,6 +17,7 @@ export const PAT = {
   fullglass: 10, // ほぼガラスだけの外壁（極細の窓枠と、階ごとの細い線）
   glow: 11, // 夜に光る帯（頂部のライトアップ）
   lit: 12, // 夜に照明で明るくなる面（スタジアムのフィールド）。色はそのまま明るくなる
+  led: 13, // 夜に色がゆっくり変わる LED の面（光の冠）
 } as const;
 
 export class MeshBuilder {

@@ -9,6 +9,7 @@ export const shared = {
   uSunCol: { value: new THREE.Color(1, 0.95, 0.85) },
   uSkyTop: { value: new THREE.Color(0.45, 0.62, 0.85) },
   uSkyHz: { value: new THREE.Color(0.75, 0.82, 0.9) },
+  uTime: { value: 0 }, // 光の冠の色を変えるのに使う（秒）
 };
 
 export function createBuildingMaterial(): THREE.MeshLambertMaterial {
@@ -19,6 +20,7 @@ export function createBuildingMaterial(): THREE.MeshLambertMaterial {
     sh.uniforms.uSunCol = shared.uSunCol;
     sh.uniforms.uSkyTop = shared.uSkyTop;
     sh.uniforms.uSkyHz = shared.uSkyHz;
+    sh.uniforms.uTime = shared.uTime;
     sh.uniforms.uDetail = { value: detailTexture() };
     sh.uniforms.uTile = { value: MAT_TILE_M };
     sh.vertexShader = sh.vertexShader
@@ -52,6 +54,7 @@ export function createBuildingMaterial(): THREE.MeshLambertMaterial {
         uniform vec3 uSunCol;
         uniform vec3 uSkyTop;
         uniform vec3 uSkyHz;
+        uniform float uTime;
         // ガラスの映り込みに使う値（色を決めるところで決め、光の計算のところで使う）
         float gWin = 0.0;
         float gRefl = 0.0;
@@ -59,6 +62,7 @@ export function createBuildingMaterial(): THREE.MeshLambertMaterial {
         float gGlow = 0.0;
         float gPane = 0.5;
         float gLit = 0.0;
+        vec3 gLed = vec3(0.0);
         uniform highp sampler2DArray uDetail;
         uniform float uTile[10];
         varying float vMat;
@@ -182,6 +186,13 @@ export function createBuildingMaterial(): THREE.MeshLambertMaterial {
             gRefl = 1.35;
           } else if (pat > 11.5 && pat < 12.5) { // 夜に照明で明るくなる面
             gLit = 1.0;
+          } else if (pat > 12.5 && pat < 13.5) { // 夜に色がゆっくり変わる LED の面（光の冠）
+            float hue = fract(uTime * 0.02 + vWp.y * 0.004 + (vWp.x + vWp.z) * 0.001);
+            vec3 rgb = clamp(abs(mod(hue * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+            gLed = mix(vec3(1.0), rgb, 0.85);
+            // 縦の細いすき間（穴のあいた金属の板）
+            float slit = 1.0 - box1(0.08, 0.92, fract(uv.x / 1.2), max(fwidth(uv.x) * 0.7, 1e-4));
+            diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.6, slit);
           } else if (pat > 10.5 && pat < 11.5) { // 夜に光る帯
             gGlow = 1.0;
             diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.8, 0.82, 0.85), 0.5);
@@ -229,6 +240,7 @@ export function createBuildingMaterial(): THREE.MeshLambertMaterial {
         `#include <emissivemap_fragment>
         totalEmissiveRadiance += vec3(1.0, 0.82, 0.5) * lit * uNight * 0.9;
         totalEmissiveRadiance += vec3(0.75, 0.88, 1.0) * gGlow * uNight * 1.4;
+        totalEmissiveRadiance += gLed * uNight * 1.3;
         totalEmissiveRadiance += diffuseColor.rgb * gLit * uNight * 1.1;
         if (gWin > 0.001) {
           // ガラスの映り込み：斜めから見るほど空が強く映り、太陽の方向にはキラッと光る
