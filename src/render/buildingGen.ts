@@ -147,6 +147,7 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     case 'ferry_p': ferryTerminal(mb, f, false); break;
     case 'ferry_c': ferryTerminal(mb, f, true); break;
     case 'seaport': seaport(mb, f, rng); break;
+    case 'seaport_l': containerTerminal(mb, f, rng, tf); break;
     case 'airport_s': airport(mb, f, rng, 1, tf); break;
     case 'airport_l': airport(mb, f, rng, 2, tf); break;
     case 'freight_st': freightStation(mb, f, rng); break;
@@ -1420,10 +1421,16 @@ function crownScreen(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: nu
 }
 
 // ヘリポート（屋上の円と H）
+// ヘリポート：四角い台、白いふちと黄色の線、中央に H（夜はふちの灯りが光る）
 function helipad(mb: MeshBuilder, cx: number, cz: number, y: number, r: number) {
-  mb.cylinder(cx, cz, y - 0.3, y, r, 24, C(0x4a4f55), C(0x4a4f55));
-  mb.cylinder(cx, cz, y, y + 0.03, r * 0.82, 24, C(0xe9e4d4), C(0xe9e4d4));
-  mb.cylinder(cx, cz, y + 0.03, y + 0.06, r * 0.74, 24, C(0x4a4f55), C(0x4a4f55));
+  const g = C(0x4a4f55), W = PALETTE.white, yel = C(0xf2c200);
+  mb.box(cx - r, y - 0.3, cz - r, cx + r, y, cz + r, g, PAT.none, g);
+  const e = r * 0.08;
+  for (const [x0, z0, x1, z1] of [[cx - r, cz - r, cx + r, cz - r + e], [cx - r, cz + r - e, cx + r, cz + r], [cx - r, cz - r, cx - r + e, cz + r], [cx + r - e, cz - r, cx + r, cz + r]]) mb.box(x0, y, z0, x1, y + 0.03, z1, W, PAT.none, W);
+  const i = r * 0.8, t2 = r * 0.04;
+  for (const [x0, z0, x1, z1] of [[cx - i, cz - i, cx + i, cz - i + t2], [cx - i, cz + i - t2, cx + i, cz + i], [cx - i, cz - i, cx - i + t2, cz + i], [cx + i - t2, cz - i, cx + i, cz + i]]) mb.box(x0, y, z0, x1, y + 0.04, z1, yel, PAT.none, yel);
+  // 四隅の灯り
+  for (const [x, z] of [[cx - r, cz - r], [cx + r, cz - r], [cx - r, cz + r], [cx + r, cz + r]]) mb.box(x - 0.25, y, z - 0.25, x + 0.25, y + 0.35, z + 0.25, C(0x9fe08a), PAT.glow);
   const hw = r * 0.28, hh = r * 0.4, t = r * 0.08, Y = PALETTE.white;
   mb.box(cx - hw - t, y + 0.06, cz - hh, cx - hw + t, y + 0.09, cz + hh, Y);
   mb.box(cx + hw - t, y + 0.06, cz - hh, cx + hw + t, y + 0.09, cz + hh, Y);
@@ -2576,6 +2583,12 @@ function modernHospital(mb: MeshBuilder, f: LotFrame, tf: TF) {
   litSign(mb, tx0 - 0.82, 39.2, tz1 + 0.78, tx1 + 0.82, 39.8, tz1 + 0.84, C(0xbfe0ff));
   helipad(mb, (tx0 + tx1) / 2, (tz0 + tz1) / 2, 41.2, Math.min(7, (tz1 - tz0) * 0.42));
   redCross(mb, tx1 - 3.5, 34, tz1 + 0.9, 5);
+  // 裏側の赤十字（奥 -z に向ける）
+  {
+    const red = C(0xe53935), x = tx1 - 3.5, y = 34, z = tz0 - 0.3, sz = 5;
+    litSign(mb, x - sz * 0.5, y - sz * 0.17, z, x + sz * 0.5, y + sz * 0.17, z + 0.3, red);
+    litSign(mb, x - sz * 0.17, y - sz * 0.5, z, x + sz * 0.17, y + sz * 0.5, z + 0.3, red);
+  }
   // 車寄せ（正面）と駐車場
   canopy(mb, -9, pz1, 9, pz1 + 7, 5);
   mb.ground(-hw + 2, pz1, hw - 2, pz1 + 8, 0.09, PALETTE.asphalt);
@@ -2722,6 +2735,118 @@ function modernFire(mb: MeshBuilder, f: LotFrame, tf: TF, big: boolean) {
   mb.box(tx - 2.5, 0, tz - 2.5, tx + 2.5, th, tz + 2.5, MW, PAT.ribbon, MW2);
   mb.box(tx - 2.7, th - 3, tz - 2.7, tx + 2.7, th - 2, tz + 2.7, red);
   tf(-hw + 2, -hd + 2, 0.8);
+}
+
+// ================= 大型コンテナターミナル =================
+// 敷地の奥（-z）が岸壁。長い方向（x）に沿って岸壁があり、ガントリークレーンが並ぶ。
+// クレーンの位置と高さは propsLayer（トロリーの動き）でも使う
+export const TERMINAL = { boomY: 46, apron: 40, seaRail: 6, landRail: 36, boomOut: 52 };
+export function terminalCranes(W: number): number[] {
+  const n = Math.max(3, Math.min(6, Math.floor(W / 36)));
+  const out: number[] = [];
+  for (let k = 0; k < n; k++) out.push(-W / 2 + 22 + ((W - 44) * (k + 0.5)) / n);
+  return out;
+}
+// 太さのある細長い部材（両端の点のあいだ）
+function strut(mb: MeshBuilder, a: [number, number, number], b: [number, number, number], r: number, col: THREE.Color) {
+  const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], l = Math.hypot(ux, uy, uz) || 1;
+  let p1x = -uz, p1z = ux, pl = Math.hypot(p1x, p1z);
+  if (pl < 1e-3) { p1x = 1; p1z = 0; pl = 1; }
+  p1x /= pl; p1z /= pl;
+  const p2x = (uy * p1z) / l, p2y = (uz * p1x - ux * p1z) / l, p2z = (-uy * p1x) / l;
+  const cs: [number, number][] = [[1, 1], [-1, 1], [-1, -1], [1, -1]];
+  const P = (o: [number, number, number], s1: number, s2: number): [number, number, number] => [o[0] + (p1x * s1 + p2x * s2) * r, o[1] + p2y * s2 * r, o[2] + (p1z * s1 + p2z * s2) * r];
+  for (let k = 0; k < 4; k++) {
+    const [s1, s2] = cs[k], [t1, t2] = cs[(k + 1) & 3];
+    mb.quad(P(a, s1, s2), P(a, t1, t2), P(b, t1, t2), P(b, s1, s2), col);
+    mb.quad(P(a, s1, s2), P(b, s1, s2), P(b, t1, t2), P(a, t1, t2), col);
+  }
+}
+function containerTerminal(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
+  mb.flatRoofMat = MAT.none;
+  const W = f.W, D = f.D, hw = W / 2, hd = D / 2;
+  const T = TERMINAL;
+  const conc = C(0xbdb8ad), asph = C(0x4a4d51), yel = C(0xf2c200), white = PALETTE.white;
+  const cols = [0xc0392b, 0x2e6da4, 0xd9a400, 0x4c7a3b, 0x8a9097, 0xd35400, 0xe8e8e8, 0x1f6f8b, 0x7a3e9d].map((h) => new THREE.Color(h));
+  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.07, conc);
+  // 岸壁（水側に張り出す厚い壁）とフェンダー
+  mb.box(-hw, -5, -hd - 3, hw, 0.4, -hd + 1, C(0xa8a49b));
+  for (let x = -hw + 6; x < hw - 4; x += 12) mb.box(x - 1, -2.5, -hd - 3.6, x + 1, 0.2, -hd - 3, C(0x2a2d31));
+  // 岸壁のエプロン（クレーンのレールと、トラックの通り道）
+  mb.ground(-hw + 1, -hd + 1, hw - 1, -hd + T.apron, 0.09, asph);
+  for (const z of [-hd + T.seaRail, -hd + T.landRail]) for (const o of [-0.5, 0.5]) mb.ground(-hw + 1, z + o - 0.08, hw - 1, z + o + 0.08, 0.11, C(0xc9ccd1));
+  mb.ground(-hw + 1, -hd + 18.6, hw - 1, -hd + 18.9, 0.11, yel);
+  mb.ground(-hw + 1, -hd + 26.6, hw - 1, -hd + 26.9, 0.11, yel);
+  // ---- ガントリークレーン（STS）----
+  const craneCol = rng.next() < 0.5 ? C(0x2f6fb0) : C(0xd9472b);
+  for (const cx of terminalCranes(W)) {
+    const y0 = 0, yp = T.boomY - 4, yb = T.boomY;
+    const zs = -hd + T.seaRail, zl = -hd + T.landRail;
+    // 4 本の脚と、下の横つなぎ
+    for (const z of [zs, zl]) for (const sx of [-9, 9]) mb.box(cx + sx - 0.8, y0, z - 0.8, cx + sx + 0.8, yp, z + 0.8, craneCol);
+    for (const z of [zs, zl]) mb.box(cx - 9.8, 12, z - 0.7, cx + 9.8, 14, z + 0.7, craneCol);
+    for (const sx of [-9, 9]) mb.box(cx + sx - 0.7, yp - 2, zs, cx + sx + 0.7, yp, zl, craneCol);
+    for (const sx of [-9, 9]) for (const z of [zs, zl]) mb.box(cx + sx - 1.4, 0, z - 1.4, cx + sx + 1.4, 1.6, z + 1.4, C(0x3c434b)); // 台車
+    // ブーム（2 本の桁）：陸側の後ろから、海の上へ大きく張り出す
+    const zBack = zl + 16, zTip = -hd - T.boomOut;
+    for (const sx of [-2.2, 2.2]) mb.box(cx + sx - 0.7, yb - 2, zTip, cx + sx + 0.7, yb, zBack, craneCol);
+    for (let z = zTip + 4; z < zBack; z += 8) mb.box(cx - 2.9, yb - 0.6, z - 0.3, cx + 2.9, yb - 0.2, z + 0.3, craneCol);
+    // A 字の塔と、ブームを吊る斜めの引き綱
+    const apex: [number, number, number] = [cx, yb + 24, zs + 8];
+    for (const sx of [-8, 8]) for (const z of [zs + 2, zl - 6]) strut(mb, [cx + sx, yp, z], apex, 0.7, craneCol);
+    for (const zt of [zTip + 2, zTip + 22]) strut(mb, apex, [cx, yb, zt], 0.25, C(0x30343a));
+    strut(mb, apex, [cx, yb, zBack - 2], 0.25, C(0x30343a));
+    // 機械室（陸側の後ろ）と運転室
+    mb.box(cx - 5, yb, zBack - 12, cx + 5, yb + 6, zBack, white, PAT.industrial, C(0xc9ccd1));
+    mb.box(cx + 2.4, yb - 5, zs - 2, cx + 5.4, yb - 2, zs + 1, C(0xdfe6ee), PAT.fullglass);
+    // 夜の灯り（ブームの先）
+    mb.box(cx - 0.5, yb + 0.5, zTip - 0.5, cx + 0.5, yb + 1.3, zTip + 0.5, C(0xff4040), PAT.glow);
+  }
+  // ---- コンテナヤード：コンテナの山の区画と、門型の小さなクレーン（RTG）----
+  const yz0 = -hd + T.apron + 8, yz1 = hd - 46;
+  const bw = 28, bd = 15; // 区画の大きさ（x 方向 = 長さ、z 方向 = 幅）
+  for (let z = yz0; z + bd <= yz1; z += bd + 9) {
+    for (let x = -hw + 6; x + bw <= hw - 6; x += bw + 7) {
+      for (let row = 0; row < 6; row++) {
+        const rz = z + row * 2.5;
+        for (let k = 0; k < 2; k++) {
+          const x0 = x + k * 14.2, x1 = x0 + 12.2;
+          const hgt = 1 + rng.int(4);
+          for (let lv = 0; lv < hgt; lv++) mb.box(x0, lv * 2.6, rz, x1, lv * 2.6 + 2.5, rz + 2.4, rng.pick(cols));
+        }
+      }
+      // RTG（区画をまたぐ白い門型）
+      if (rng.next() < 0.6) {
+        const gx = x + 6 + rng.next() * (bw - 12);
+        for (const zz of [z - 2, z + bd + 1]) for (const dx of [-3, 3]) mb.box(gx + dx - 0.4, 0, zz - 0.4, gx + dx + 0.4, 15, zz + 0.4, white);
+        for (const dx of [-3, 3]) mb.box(gx + dx - 0.5, 14, z - 2.4, gx + dx + 0.5, 15.6, z + bd + 1.4, yel);
+        mb.box(gx - 3.4, 15, z + bd / 2 - 2, gx + 3.4, 17, z + bd / 2 + 2, white);
+      }
+    }
+  }
+  // ---- 冷凍コンテナの棚と、管理棟、ゲート（道路側）----
+  const gz0 = hd - 40;
+  mb.box(-hw + 6, 0, gz0, -hw + 40, 9, gz0 + 4, C(0x9aa1a7));
+  for (let x = -hw + 7; x < -hw + 39; x += 6.2) for (let lv = 0; lv < 3; lv++) mb.box(x, lv * 3 + 0.2, gz0 + 4.2, x + 6, lv * 3 + 2.7, gz0 + 6.6, C(0xf2f2ee));
+  mBlock(mb, -hw + 6, hd - 30, -hw + 34, hd - 8, 14, { pat: PAT.ribbon });
+  mb.box(-hw + 18, 14.7, hd - 22, -hw + 22, 30, hd - 18, white, PAT.none, white); // 管制塔の軸
+  mb.box(-hw + 15, 30, hd - 25, -hw + 25, 35, hd - 15, C(0x5f8fb8), PAT.fullglass, white);
+  // ゲート：トラックのレーンと、屋根、詰所
+  const gx0 = -hw + 44, gx1 = hw - 8;
+  mb.ground(gx0, hd - 34, gx1, hd - 1, 0.1, asph);
+  for (let x = gx0 + 6; x < gx1 - 2; x += 8) {
+    mb.ground(x - 0.1, hd - 30, x + 0.1, hd - 4, 0.12, white);
+    mb.box(x - 1.2, 0, hd - 18, x + 1.2, 3, hd - 15, C(0xf2f3f4), PAT.office, C(0x9aa1a7));
+  }
+  mb.box(gx0, 7, hd - 22, gx1, 7.8, hd - 11, white, PAT.none, C(0xd5d9dd));
+  for (let x = gx0 + 2; x < gx1; x += 16) mb.box(x - 0.3, 0, hd - 16.8, x + 0.3, 7, hd - 16.2, C(0x9aa1a7));
+  // 照明塔
+  for (let x = -hw + 20; x < hw - 10; x += 60) for (const z of [yz0 - 4, (yz0 + yz1) / 2]) {
+    mb.box(x - 0.5, 0, z - 0.5, x + 0.5, 32, z + 0.5, C(0x9aa1a7));
+    mb.box(x - 2.4, 32, z - 0.8, x + 2.4, 33.4, z + 0.8, C(0xfff3d0), PAT.glow);
+  }
+  tf(-hw + 3, hd - 3, 0.9);
+  tf(hw - 3, hd - 3, 0.9);
 }
 
 // ---- 農地の畑（農家の区画の空いたマス全部）----

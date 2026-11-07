@@ -7,6 +7,7 @@ import type { Building } from '../sim/world';
 import { Buf, ROAD_LIFT } from './roadLayer';
 import { estopGroup } from '../sim/plan';
 import { addBridgeStructures } from './bridgeStyles';
+import { findTurnbacks } from './turnback';
 
 const COL = {
   ballast: new THREE.Color(0x8a8378),
@@ -266,6 +267,32 @@ export class RailLayer {
           // T字の柱の上に、2本の桁を載せる
           B.box(cx - 0.6, ground - 0.5, cz - 0.6, cx + 0.6, ch - 2.4, cz + 0.6, COL.beam);
           B.box(cx - TRACK_GAP - 0.7, ch - 2.4, cz - TRACK_GAP - 0.7, cx + TRACK_GAP + 0.7, ch - 1.5, cz + TRACK_GAP + 0.7, COL.beam);
+        }
+      }
+    }
+    // 行き止まりの X 字の分岐器（シーサスクロッシング）と、車止め
+    for (const kind of ['rail', 'erail', 'mono', 'sub'] as const) {
+      for (const tb of findTurnbacks(g, kind).values()) {
+        const px = -tb.uz, pz = tb.ux, T = TRACK_GAP;
+        const at = (dist: number, lane: number): P => {
+          const x = tb.ex - tb.ux * dist + px * lane, z = tb.ez - tb.uz * dist + pz * lane;
+          const cx = Math.floor(x / CELL), cz = Math.floor(z / CELL);
+          const c = g.inb(cx, cz) ? g.idx(cx, cz) : tb.end;
+          return { x, z, h: kind === 'sub' ? g.cellH(c % n, (c / n) | 0) + 0.6 : RailLayer.lineH(g, kind, c) };
+        };
+        for (const [l0, l1] of [[T, -T], [-T, T]]) {
+          const pts = [at(tb.d0, l0), at(tb.d1, l1)];
+          if (kind === 'sub') { strip(U, pts, 0, 3.2, 0, COL.tube); continue; }
+          if (kind === 'mono') { strip(B, pts, 0, 0.9, 0.02, COL.beam); continue; }
+          if (kind === 'erail') strip(B, pts, 0, 2.5, 0.19, COL.slab);
+          else sleepers(pts, 0.13, 0);
+          strip(B, pts, -0.72, 0.14, kind === 'erail' ? 0.37 : 0.31, COL.steel);
+          strip(B, pts, 0.72, 0.14, kind === 'erail' ? 0.37 : 0.31, COL.steel);
+        }
+        // 車止め（両方の線路の行き止まり）
+        if (kind !== 'sub') for (const l of [T, -T]) {
+          const p = at(-1.5, l);
+          B.box(p.x - 0.9, p.h, p.z - 0.9, p.x + 0.9, p.h + 1.2, p.z + 0.9, new THREE.Color(0xd9a400));
         }
       }
     }

@@ -366,6 +366,24 @@ describe('stage 2a roads', () => {
     expect(tiles.size).toBe(farms.length);
   });
 
+  it('buildings can be rotated: square lots by 90 degrees, rectangles by 180', () => {
+    const w = new World(48);
+    w.g.heights.fill(6);
+    w.funds = 1e7;
+    expect(w.exec({ t: 'road', x0: 2, y0: 20, x1: 40, y1: 20, road: RoadType.Road }).ok).toBe(true);
+    expect(w.exec({ t: 'plop', id: 'library', x: 10, y: 22 }).ok).toBe(true);
+    expect(w.exec({ t: 'plop', id: 'police_l', x: 20, y: 22 }).ok).toBe(true);
+    const bs = [...w.buildings.values()];
+    const sq = bs.find((b) => b.type === 'library')!, rc = bs.find((b) => b.type === 'police_l')!;
+    const f0 = sq.face, r0 = rc.face;
+    w.exec({ t: 'rotate', id: sq.id });
+    expect(sq.face).not.toBe(f0);
+    for (let k = 0; k < 3; k++) w.exec({ t: 'rotate', id: sq.id });
+    expect(sq.face).toBe(f0);
+    w.exec({ t: 'rotate', id: rc.id });
+    expect(rc.face).toBe((r0 + 4) & 7);
+  });
+
   it('trees can be planted on empty land, but not on roads', () => {
     const w = new World(32);
     w.g.heights.fill(6);

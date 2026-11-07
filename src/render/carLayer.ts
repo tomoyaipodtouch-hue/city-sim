@@ -8,6 +8,7 @@ import type { Building } from '../sim/world';
 import { RailLayer, TRACK_GAP } from './railLayer';
 import { isUrbanHighway, urbanTurnOk } from '../sim/traffic';
 import { ROAD_LIFT } from './roadLayer';
+import { findTurnbacks, Turnback } from './turnback';
 import { boxTruck, cityBus, garbageTruck, trainCar, TRAIN_SPEC, TrainKind, hatchback, minivan, pickup, sedan, suv, tractor, trailerBox, trailerTank, vc } from './vehicles';
 
 const MAX_CARS = 1500;
@@ -36,6 +37,9 @@ interface Car extends Cell {
   lastStop?: number; // 最後に止まった駅のマス
   wait?: number; // 前の列車を待っている秒数
   hist: Cell[]; // 通ってきたマス（新しい順）。トレーラーや列車の後ろの車両の位置に使う
+  tb?: Turnback | null; // この先の折り返し（行き止まり）
+  tbKey?: number; // tb を調べたときの to
+  revPending?: boolean; // 行き止まりで止まっていて、このあと向きを変える
 }
 
 // 走る場所：道路（車・トラック・バス）、歩道、線路（鉄道・高架鉄道・モノレール・地下鉄）
@@ -355,6 +359,57 @@ export class CarLayer {
   // 駅のホームに接する線路のマス（路線ごと）
   private stations = new Map<string, Set<number>>();
   private busStopBuildings = 0;
+  // 線路の行き止まり（折り返し）。線路が変わったときに呼ぶ
+  private turnbacks = new Map<string, Map<number, Turnback>>();
+  setTurnbacks(g: Grid) {
+    for (const k of ['rail', 'erail', 'mono', 'sub'] as const) this.turnbacks.set(k, findTurnbacks(g, k));
+    for (const f of this.lineFleets) for (const c of f.cars) c.tbKey = -1;
+  }
+  // 列車の進む先（まっすぐ 16 マスまで）にある折り返し
+  private endAhead(f: Fleet, c: Car): Turnback | null {
+    if (c.tbKey === c.to) return c.tb ?? null;
+    c.tbKey = c.to;
+    c.tb = null;
+    const tbs = this.turnbacks.get(f.track);
+    if (!tbs || !tbs.size) return null;
+    const g = this.grid!, n = g.n, mask = g[f.track as LineKind];
+    let x = c.to % n, y = (c.to / n) | 0;
+    const d = c.d;
+    for (let k = 0; k < 16; k++) {
+      const i = y * n + x, tb = tbs.get(i);
+      if (tb && tb.ux * DX[d] + tb.uz * DY[d] > 0.5) { c.tb = tb; return tb; }
+      if (!(mask[i] & (1 << d))) break;
+      x += DX[d]; y += DY[d];
+      if (!g.inb(x, y)) break;
+    }
+    return null;
+  }
+  // 行き止まりで向きを変える：最後尾の位置が新しい先頭になり、来た道を戻る（右側通行なので、渡った先の線路をそのまま走る）
+  private reverseTrain(f: Fleet, c: Car) {
+    const rev = (q: Cell): Cell => {
+      const n = this.grid!.n, x = (q.from % n) - DX[q.din], y = ((q.from / n) | 0) - DY[q.din];
+      const to = this.grid!.inb(x, y) ? y * n + x : q.from;
+      return { from: q.from, to, din: opp(q.d), d: opp(q.din), hA: this.trackH(f, q.from) };
+    };
+    const segs: Cell[] = [c, ...c.hist];
+    let rem = (f.carsPer - 1) * f.spacing + f.halfLen * 1.6;
+    let k = 0, tf = 0;
+    for (; k < segs.length; k++) {
+      const L = CarLayer.cellLen(segs[k]);
+      const avail = (k === 0 ? c.t : 1) * L;
+      if (rem <= avail || k === segs.length - 1) { tf = Math.max(0, (avail - Math.min(rem, avail)) / L); break; }
+      rem -= avail;
+    }
+    const head = rev(segs[k]);
+    const hist: Cell[] = [];
+    for (let j = k - 1; j >= 0; j--) hist.push(rev(segs[j]));
+    c.from = head.from; c.to = head.to; c.din = head.din; c.d = head.d; c.hA = head.hA;
+    c.t = 1 - tf;
+    c.hist = hist;
+    c.tbKey = -1;
+    c.lastStop = -1;
+  }
+
   setStations(g: Grid, list: Building[]) {
     this.stations.clear();
     this.busStopBuildings = list.filter((b) => b.civic && CIVIC[b.type as CivicId].transit === 'bus').length;
@@ -483,7 +538,8 @@ export class CarLayer {
         // ランプから本線への合流・本線からランプへの分岐も、減速しない（合流は本線の速さまで加速する）
         const tf = line || walk ? 0 : g.nodeType(c.from), tt = line || walk ? 0 : g.nodeType(c.to);
         const fast = (q: number) => isHighway(q) || q === RoadType.Ramp;
-        const turning = c.din !== c.d && !(fast(tf) && fast(tt) && (isHighway(tf) || isHighway(tt)));
+        // 高架鉄道はカーブでも減速しない
+        const turning = c.din !== c.d && !(fast(tf) && fast(tt) && (isHighway(tf) || isHighway(tt))) && f.track !== 'erail';
         const merging = tf === RoadType.Ramp && isHighway(tt);
         const len = CarLayer.cellLen(c);
         const cg = line || walk ? 1 : Math.max(this.cong![c.from], 1);
@@ -550,6 +606,19 @@ export class CarLayer {
           }
           const nx = this.pickNext(f, c.to, c.d);
           if (!nx) {
+            // 列車は行き止まりで止まり、しばらくして向きを変える（マップの端なら隣の都市へ出ていく）
+            const g2 = this.grid!, ex = c.to % g2.n, ey = (c.to / g2.n) | 0;
+            const edge = ex === 0 || ey === 0 || ex === g2.n - 1 || ey === g2.n - 1;
+            if (f.mid && !edge) {
+              if (c.revPending && (c.stop ?? 0) <= 0) {
+                this.reverseTrain(f, c);
+                c.revPending = false;
+                continue;
+              }
+              if (!c.revPending) { c.revPending = true; c.stop = 14; }
+              c.t = 1;
+              break;
+            }
             c.alive = false;
             break;
           }
@@ -569,11 +638,21 @@ export class CarLayer {
         if (f.mid) {
           // 列車：車両ごとに、前と後ろの台車の位置から向きを決めて並べる
           const nCar = f.carsPer, sp = f.spacing, half = f.halfLen * 0.7;
+          // 折り返しの手前の X 字の分岐器では、反対側の線路へ渡る
+          const tb = this.endAhead(f, c);
+          const laneAt = () => {
+            if (!tb) return lane;
+            const dist = (tb.ex - P.x) * tb.ux + (tb.ez - P.z) * tb.uz;
+            const u = Math.max(0, Math.min(1, (tb.d0 - dist) / (tb.d0 - tb.d1)));
+            return lane * (1 - 2 * u * u * (3 - 2 * u));
+          };
           for (let j = 0; j < nCar; j++) {
             this.placeBack(f, c, Math.max(0, j * sp - half));
-            const fx = P.x - P.tz * lane, fz = P.z + P.tx * lane, fh = P.h;
+            const l0 = laneAt();
+            const fx = P.x - P.tz * l0, fz = P.z + P.tx * l0, fh = P.h;
             this.placeBack(f, c, j * sp + half);
-            const rx = P.x - P.tz * lane, rz = P.z + P.tx * lane, rh = P.h;
+            const l1 = laneAt();
+            const rx = P.x - P.tz * l1, rz = P.z + P.tx * l1, rh = P.h;
             let ang = Math.atan2(fx - rx, fz - rz);
             const tail = j === nCar - 1;
             if (tail) ang += Math.PI;

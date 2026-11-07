@@ -471,6 +471,17 @@ export class Hud {
       this.junctionOpen = true; // 操作中に作り直さないようにする
     }
     this.facilityId = 0;
+    // 建物の向き
+    if (bid) {
+      const b = this.game.buildings.get(bid);
+      if (b) {
+        const box = el('div', 'jpanel');
+        const btn = el('button', 'btn', b.w === b.h ? '向きを変える（90°）' : '向きを変える（180°）');
+        btn.onclick = () => { sfx.click(); void this.game.exec({ t: 'rotate', id: b.id }); };
+        box.append(btn);
+        this.info.append(box);
+      }
+    }
     // 交差点の設定（地上の一般道で、3方向以上につながっている場所）
     this.junctionOpen = false;
     if ((g.road[i] && g.deck[i] > 0) || (g.erail[i] && g.isWater(c.x, c.y))) {

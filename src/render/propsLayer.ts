@@ -6,8 +6,9 @@ import { CIVIC, CivicId } from '../sim/defs';
 import type { Building } from '../sim/world';
 import { labelWater } from '../sim/plan';
 import { MeshBuilder } from './builder';
-import { airportLayout, bigNuclearScale, boat, containerShip, COOLING_TOWERS, INCIN_RAMP, plane } from './buildingGen';
-import { garbageTruck } from './vehicles';
+import { airportLayout, bigNuclearScale, boat, containerShip, COOLING_TOWERS, INCIN_RAMP, plane, TERMINAL, terminalCranes } from './buildingGen';
+import { garbageTruck, tractor, vc } from './vehicles';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 interface Route {
   ax: number;
@@ -24,6 +25,7 @@ interface Ship {
   pz: Float32Array;
   acc: Float32Array; // 先頭からの距離
   berth: [number, number, number]; // 岸壁での位置と向き
+  big?: boolean; // 大型コンテナターミナルの大きな船
   t: number; // 周期の中の時刻（秒）
   hd: number; // 今の向き
 }
@@ -64,6 +66,12 @@ export class PropsLayer {
   private routes: Route[] = [];
   private ships: Ship[] = [];
   private shipMesh: THREE.InstancedMesh;
+  private bigShipMesh!: THREE.InstancedMesh;
+  private trolleys!: THREE.InstancedMesh;
+  private cables!: THREE.InstancedMesh;
+  private boxes!: THREE.InstancedMesh;
+  private yardTrucks!: THREE.InstancedMesh;
+  private terminals: { b: Building; W: number; D: number; base: number; xs: number[]; t: number }[] = [];
   // 冷却塔の湯気（ふわっと膨らみながら上がって消える白いかたまり）
   private steam: THREE.InstancedMesh;
   private towers: { x: number; y: number; z: number; k: number }[] = [];
@@ -84,6 +92,20 @@ export class PropsLayer {
     ];
     this.planes = new THREE.InstancedMesh(geo((mb) => plane(mb, 0, 0, 1)), mat, 20);
     this.shipMesh = new THREE.InstancedMesh(geo((mb) => containerShip(mb, SHIP_LEN, 7)), mat, 40);
+    this.bigShipMesh = new THREE.InstancedMesh(geo((mb) => containerShip(mb, 230, 11)), mat, 20);
+    // ガントリークレーンのトロリー、吊り具とワイヤー、運ぶコンテナ、コンテナ車
+    this.trolleys = new THREE.InstancedMesh(new THREE.BoxGeometry(5, 2.6, 6), new THREE.MeshLambertMaterial({ color: 0xf2f3f4 }), 60);
+    this.cables = new THREE.InstancedMesh(new THREE.BoxGeometry(0.12, 1, 0.12).translate(0, -0.5, 0), new THREE.MeshLambertMaterial({ color: 0x30343a }), 120);
+    this.boxes = new THREE.InstancedMesh(new THREE.BoxGeometry(12.2, 2.6, 2.5), new THREE.MeshLambertMaterial({ color: 0xffffff }), 120);
+    const chassis = vc(new THREE.BoxGeometry(2.4, 0.4, 12.6).translate(0, 1.15, -7.6), 0x2a2d31);
+    this.yardTrucks = new THREE.InstancedMesh(mergeGeometries([tractor(), chassis])!, mat, 60);
+    for (const m of [this.bigShipMesh, this.trolleys, this.cables, this.boxes, this.yardTrucks]) {
+      m.count = 0;
+      m.castShadow = true;
+      m.frustumCulled = false;
+      m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      this.group.add(m);
+    }
     this.steam = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 3), new THREE.MeshLambertMaterial({ color: 0xf4f4f2, transparent: true, opacity: 0.55, depthWrite: false }), 240);
     this.rampTrucks = new THREE.InstancedMesh(garbageTruck(), new THREE.MeshLambertMaterial({ vertexColors: true }), 40);
     this.rampTrucks.count = 0;
@@ -107,6 +129,16 @@ export class PropsLayer {
   setBuildings(g: Grid, list: Building[]) {
     const water = labelWater(g);
     this.towers = [];
+    const oldT = this.terminals;
+    this.terminals = [];
+    for (const b of list) {
+      if (b.type !== 'seaport_l') continue;
+      const [W, D] = lotDepth(b);
+      let base = -Infinity;
+      for (let y = b.y; y < b.y + b.h; y++) for (let x = b.x; x < b.x + b.w; x++) base = Math.max(base, g.cellMaxH(x, y));
+      const prev = oldT.find((o) => o.b.id === b.id);
+      this.terminals.push({ b, W, D, base, xs: terminalCranes(W), t: prev?.t ?? Math.random() * 36 });
+    }
     const oldRamps = this.ramps;
     this.ramps = [];
     for (const b of list) {
@@ -234,8 +266,9 @@ export class PropsLayer {
     for (const c of keep) pts.push([(c % n + 0.5) * CELL, (((c / n) | 0) + 0.5) * CELL]);
     // 岸壁：敷地の水側に横付けする（向きは岸壁に沿う）
     const [W, D] = lotDepth(b);
-    const [bx, bz] = lotToWorld(b, 0, -D / 2 - 13);
-    const [ax, az] = lotToWorld(b, 0, -D / 2 - 55);
+    const big = b.type === 'seaport_l';
+    const [bx, bz] = lotToWorld(b, 0, -D / 2 - (big ? 22 : 13));
+    const [ax, az] = lotToWorld(b, 0, -D / 2 - (big ? 110 : 55));
     const acx = Math.floor(ax / CELL), acy = Math.floor(az / CELL);
     if (g.inb(acx, acy) && water.label[acy * n + acx] === body && clear(acy * n + acx, keep[keep.length - 2] ?? keep[0])) {
       pts.pop();
@@ -250,11 +283,11 @@ export class PropsLayer {
       if (k) acc[k] = acc[k - 1] + Math.hypot(x - px[k - 1], z - pz[k - 1]);
     });
     const L = acc[pts.length - 1];
-    const count = L > 900 ? 2 : 1;
+    const count = big ? 1 : L > 900 ? 2 : 1;
     const cycle = (2 * L) / SHIP_SPEED + DOCK_SECS + AWAY_SECS + 40;
     for (let k = 0; k < count; k++) {
       const prevShip = old.find((s) => s.berth[0] === bx && s.berth[1] === bz && old.indexOf(s) % 2 === k % 2);
-      this.ships.push({ px, pz, acc, berth: [bx, bz, berthHd], t: prevShip?.t ?? (k * cycle) / 2 + Math.random() * 20, hd: prevShip?.hd ?? 0 });
+      this.ships.push({ px, pz, acc, berth: [bx, bz, berthHd], t: prevShip?.t ?? (k * cycle) / 2 + Math.random() * 20, hd: prevShip?.hd ?? 0, big });
     }
   }
 
@@ -269,7 +302,7 @@ export class PropsLayer {
   }
 
   private updateShips(dt: number) {
-    let k = 0;
+    let k = 0, kb = 0;
     for (const s of this.ships) {
       const L = s.acc[s.acc.length - 1], run = L / SHIP_SPEED, fin = 20; // fin = 岸壁に寄せる時間
       const cycle = 2 * run + 2 * fin + DOCK_SECS + AWAY_SECS;
@@ -297,10 +330,13 @@ export class PropsLayer {
       if (k >= 40) break;
       this.q.setFromAxisAngle(this.up, s.hd);
       this.mtx.compose(new THREE.Vector3(x, 0, z), this.q, new THREE.Vector3(1, 1, 1));
-      this.shipMesh.setMatrixAt(k++, this.mtx);
+      if (s.big) { if (kb < 20) this.bigShipMesh.setMatrixAt(kb++, this.mtx); }
+      else this.shipMesh.setMatrixAt(k++, this.mtx);
     }
     this.shipMesh.count = k;
     this.shipMesh.instanceMatrix.needsUpdate = true;
+    this.bigShipMesh.count = kb;
+    this.bigShipMesh.instanceMatrix.needsUpdate = true;
   }
 
   private updateSteam(dt: number) {
@@ -355,7 +391,78 @@ export class PropsLayer {
     if (this.rampTrucks.instanceColor) this.rampTrucks.instanceColor.needsUpdate = true;
   }
 
+  // コンテナターミナル：クレーンのトロリーが船から岸壁のトラックへコンテナを運び、トラックが受け取って出ていく（36 秒でひとまわり）
+  private updateTerminals(dt: number) {
+    const P = 36, T = TERMINAL;
+    let nt = 0, nc = 0, nb = 0, nk = 0;
+    const v = new THREE.Vector3(), sc = new THREE.Vector3(1, 1, 1), col = new THREE.Color();
+    const palette = [0xc0392b, 0x2e6da4, 0xd9a400, 0x4c7a3b, 0xd35400, 0x1f6f8b];
+    for (const tm of this.terminals) {
+      tm.t = (tm.t + dt) % P;
+      const b = tm.b, hd = tm.D / 2;
+      const a = b.face === 0 ? -Math.PI / 2 : b.face === 4 ? Math.PI / 2 : b.face === 6 ? Math.PI : 0;
+      this.q.setFromAxisAngle(this.up, -a);
+      const zShip = -hd - 26, zLand = -hd + 22.5, yTop = tm.base + T.boomY - 2.6;
+      tm.xs.forEach((cx, ci) => {
+        const u = ((tm.t / P + ci * 0.23) % 1 + 1) % 1;
+        const ease = (x: number) => x * x * (3 - 2 * x);
+        // トロリーの位置（z）と、吊り具の高さ（y）、コンテナを持っているか
+        let z: number, y: number, carry: boolean;
+        if (u < 0.15) { z = zShip; y = yTop - 6 - Math.sin((u / 0.15) * Math.PI) * 26; carry = u > 0.075; }
+        else if (u < 0.35) { z = zShip + (zLand - zShip) * ease((u - 0.15) / 0.2); y = yTop - 6; carry = true; }
+        else if (u < 0.5) { z = zLand; y = yTop - 6 - Math.sin(((u - 0.35) / 0.15) * Math.PI) * (T.boomY - 12); carry = u < 0.425; }
+        else if (u < 0.7) { z = zLand + (zShip - zLand) * ease((u - 0.5) / 0.2); y = yTop - 6; carry = false; }
+        else { z = zShip; y = yTop - 6; carry = false; }
+        const ccol = palette[(ci + Math.floor(tm.t / P)) % palette.length];
+        // トロリー
+        const [tx, tz] = lotToWorld(b, cx, z);
+        v.set(tx, yTop + 1.3, tz);
+        this.mtx.compose(v, this.q, sc);
+        if (nt < 60) this.trolleys.setMatrixAt(nt++, this.mtx);
+        // ワイヤー 2 本
+        const len = Math.max(0.5, yTop - y);
+        for (const o of [-3, 3]) {
+          const [wx, wz] = lotToWorld(b, cx + o, z);
+          v.set(wx, yTop, wz);
+          this.mtx.compose(v, this.q, new THREE.Vector3(1, len, 1));
+          if (nc < 120) this.cables.setMatrixAt(nc++, this.mtx);
+        }
+        // 吊り具とコンテナ
+        if (carry && nb < 120) {
+          v.set(tx, y - 1.3, tz);
+          this.mtx.compose(v, this.q, sc);
+          this.boxes.setMatrixAt(nb, this.mtx);
+          this.boxes.setColorAt(nb++, col.setHex(ccol));
+        }
+        // コンテナ車：u 0.25 に入ってきて、クレーンの下で待ち、コンテナを積んで出ていく
+        if (u > 0.22 && u < 0.66 && nk < 60) {
+          let x: number;
+          if (u < 0.34) x = cx - 60 + 60 * ease((u - 0.22) / 0.12);
+          else if (u < 0.5) x = cx;
+          else x = cx + 70 * ease((u - 0.5) / 0.16);
+          const truckFront = x + 6;
+          const [kx, kz] = lotToWorld(b, truckFront, zLand);
+          v.set(kx, tm.base + 0.1, kz);
+          const qt = new THREE.Quaternion().setFromAxisAngle(this.up, -a + Math.PI / 2);
+          this.mtx.compose(v, qt, sc);
+          this.yardTrucks.setMatrixAt(nk++, this.mtx);
+          if (u > 0.425 && nb < 120) {
+            const [ox, oz] = lotToWorld(b, x, zLand);
+            v.set(ox, tm.base + 2.7, oz);
+            this.mtx.compose(v, this.q, sc);
+            this.boxes.setMatrixAt(nb, this.mtx);
+            this.boxes.setColorAt(nb++, col.setHex(ccol));
+          }
+        }
+      });
+    }
+    this.trolleys.count = nt; this.cables.count = nc; this.boxes.count = nb; this.yardTrucks.count = nk;
+    for (const m of [this.trolleys, this.cables, this.boxes, this.yardTrucks]) m.instanceMatrix.needsUpdate = true;
+    if (this.boxes.instanceColor) this.boxes.instanceColor.needsUpdate = true;
+  }
+
   update(dt: number) {
+    this.updateTerminals(dt);
     this.updateRampTrucks(dt);
     this.updateSteam(dt);
     this.updateShips(dt);

@@ -234,6 +234,7 @@ export class CityRenderer {
         this.lastRoadKey = key;
         this.roads.rebuild(g);
         this.rails.rebuild(g, this.stationCells());
+        this.cars.setTurnbacks(g);
         this.lights.rebuild(g);
         this.dirty.trees = true; // 街路樹
         this.stationsMesh.rebuild(g, this.buildingList);

@@ -163,6 +163,7 @@ export type Command =
   | { t: 'estop'; x: number; y: number }
   | { t: 'funding'; dept: Dept; value: number }
   | { t: 'facilityFund'; id: number; value: number }
+  | { t: 'rotate'; id: number }
   | { t: 'ordinance'; id: OrdinanceId; on: boolean }
   | { t: 'loan'; amount: number }
   | { t: 'repay'; id: number }
@@ -578,6 +579,16 @@ export class World {
       case 'funding': {
         this.services.funding[c.dept] = Math.max(0, Math.min(150, Math.round(c.value)));
         this.updateStats();
+        return { ok: true };
+      }
+      case 'rotate': {
+        // 見た目の向きだけを変える（正方形の敷地は 90 度ずつ、長方形は 180 度）。道路への出入りは向きに関係ない
+        const b = this.buildings.get(c.id);
+        if (!b) return { ok: false, msg: '建物が見つかりません' };
+        const order = [2, 0, 6, 4]; // 南 → 東 → 北 → 西
+        const k = Math.max(0, order.indexOf(b.face));
+        b.face = b.w === b.h ? order[(k + 1) % 4] : (b.face + 4) & 7;
+        this.buildingVersion++;
         return { ok: true };
       }
       case 'facilityFund': {
@@ -1437,7 +1448,7 @@ export class World {
       } else if (def.seaport) {
         if (body >= 0 && water.edge.has(body)) {
           for (const c of acc) (freightAt.get(c) ?? freightAt.set(c, []).get(c)!).push({ id: b.id, free: 1e9 });
-          seaportBoost += 0.25;
+          seaportBoost += 0.25 * (def.portScale ?? 1);
           b.note = '外洋につながっている';
         } else b.note = '<span class="neg">水域がマップの端までつながっていません</span>';
       } else if (def.freightRail) {
