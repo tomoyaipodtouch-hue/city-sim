@@ -195,7 +195,8 @@ export function createBuildingMaterial(): THREE.MeshLambertMaterial {
           vec3 glass = mix(vec3(0.13, 0.17, 0.23), vec3(0.32, 0.4, 0.5), r * 0.6);
           bool modern = pat > 6.5 && pat < 10.5;
           // 近代的なガラスは、建物の色（ガラスの色合い）を暗くしたもの。映り込みは光の計算のところで足す
-          if (modern) glass = vColor.rgb * (0.32 + 0.1 * r);
+          // 一枚もののガラス：マスごとの色のばらつきはつけない（モザイクに見えないように）
+          if (modern) glass = vColor.rgb * 0.36;
           // 空の映り込み（上の階ほど明るく、窓ごとに少し違う）
           float refl = (0.16 + 0.14 * r + 0.12 * smoothstep(0.0, 60.0, vWp.y)) * (1.0 - uNight);
           if (!modern) glass = mix(glass, vec3(0.6, 0.7, 0.82), refl * 0.6);
@@ -215,6 +216,8 @@ export function createBuildingMaterial(): THREE.MeshLambertMaterial {
           gTint = vColor.rgb;
           // ガラス1枚ごとに、映り込みの明るさを少し変える（板ガラスのわずかなゆがみ）
           gPane = h21(floor(vec2(uv.x / 1.5, uv.y / 3.7)) + floor(vWp.xz * 0.03));
+          // 近代的なガラスは一枚ものに見えるよう、ばらつきをごく小さくする
+          if (modern) gPane = 0.5 + (gPane - 0.5) * 0.12;
         }
         if (vNy < 0.5) {
           float ao = mix(0.68, 1.0, smoothstep(0.0, 5.0, vUvm.y));
@@ -236,8 +239,9 @@ export function createBuildingMaterial(): THREE.MeshLambertMaterial {
           vec3 Rw = normalize((vec4(reflect(-Vv, Nv), 0.0) * viewMatrix).xyz);
           vec3 skyc = Rw.y > 0.0 ? mix(uSkyHz, uSkyTop, pow(Rw.y, 0.6)) : mix(uSkyHz * 0.6, vec3(0.16, 0.17, 0.18), clamp(-Rw.y * 4.0, 0.0, 1.0));
           // 向かいのビルが映っているように、ところどころ暗くする
-          float city = h21(floor(vWp.xz * 0.02) + floor(vWp.y * 0.03));
-          skyc *= mix(1.0, 0.55 + 0.45 * city, smoothstep(0.35, 0.0, Rw.y));
+          // （ブロック状のむらにならないよう、なめらかに変える）
+          float city = 0.5 + 0.5 * sin(vWp.y * 0.045 + (vWp.x + vWp.z) * 0.013) * sin(vWp.y * 0.017 - vWp.x * 0.021 + 1.3);
+          skyc *= mix(1.0, 0.6 + 0.4 * city, smoothstep(0.35, 0.0, Rw.y));
           float sd = max(dot(Rw, uSunDir), 0.0);
           vec3 sun = uSunCol * (pow(sd, 400.0) * 7.0 + pow(sd, 24.0) * 0.35) * (1.0 - uNight);
           skyc = mix(skyc, uSkyTop, 0.3);
