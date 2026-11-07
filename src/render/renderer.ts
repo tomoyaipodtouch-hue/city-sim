@@ -212,9 +212,10 @@ export class CityRenderer {
 
   pick(clientX: number, clientY: number) {
     if (!this.grid) return null;
-    const r = this.canvas.getBoundingClientRect();
-    const nx = ((clientX - r.left) / r.width) * 2 - 1;
-    const ny = -((clientY - r.top) / r.height) * 2 + 1;
+    // 座標は #app の中の座標（画面を回していても、地図の左上が 0, 0）
+    const w = this.canvas.clientWidth || 1, h = this.canvas.clientHeight || 1;
+    const nx = (clientX / w) * 2 - 1;
+    const ny = -(clientY / h) * 2 + 1;
     const p = pickGround(this.rig.camera, nx, ny, this.grid);
     if (!p) return null;
     const n = this.grid.n;

@@ -2,6 +2,11 @@
 import * as THREE from 'three';
 import type { CityRenderer } from '../render/renderer';
 import type { ToolController, PreviewInfo } from './tools';
+import { toApp } from './orient';
+
+// 画面を回しているときは、#app の中の座標に直して使う
+const ax = (e: MouseEvent) => toApp(e.clientX, e.clientY)[0];
+const ay = (e: MouseEvent) => toApp(e.clientX, e.clientY)[1];
 
 interface Ptr {
   x: number;
@@ -47,19 +52,19 @@ export class Input {
 
   private down = (e: PointerEvent) => {
     this.canvas.setPointerCapture(e.pointerId);
-    this.ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t0: performance.now(), button: e.button });
+    this.ptrs.set(e.pointerId, { x: ax(e), y: ay(e), sx: ax(e), sy: ay(e), t0: performance.now(), button: e.button });
     this.hooks.onInteract();
     this.r.kick();
     if (this.ptrs.size === 1) {
       const mouseAlt = e.pointerType === 'mouse' && e.button !== 0;
       if (this.tools.isDragTool && !mouseAlt) {
-        const c = this.r.pick(e.clientX, e.clientY);
+        const c = this.r.pick(ax(e), ay(e));
         if (c) {
           this.mode = 'tool';
           this.lastCell = { x: c.x, y: c.y };
           const info = this.tools.begin(c.x, c.y);
           this.hooks.onDragUI(true);
-          this.hooks.onPreview(info, e.clientX, e.clientY, false);
+          this.hooks.onPreview(info, ax(e), ay(e), false);
           return;
         }
       }
@@ -87,18 +92,18 @@ export class Input {
   private move = (e: PointerEvent) => {
     const p = this.ptrs.get(e.pointerId);
     if (!p) return;
-    const dx = e.clientX - p.x, dy = e.clientY - p.y;
-    p.x = e.clientX;
-    p.y = e.clientY;
+    const dx = ax(e) - p.x, dy = ay(e) - p.y;
+    p.x = ax(e);
+    p.y = ay(e);
     this.r.kick();
     if (this.mode === 'tool') {
-      const over = this.hooks.isOverCancel(e.clientX, e.clientY);
-      const c = over ? null : this.r.pick(e.clientX, e.clientY);
+      const over = this.hooks.isOverCancel(ax(e), ay(e));
+      const c = over ? null : this.r.pick(ax(e), ay(e));
       if (c && (c.x !== this.lastCell.x || c.y !== this.lastCell.y)) {
         this.lastCell = { x: c.x, y: c.y };
         const info = this.tools.update(c.x, c.y);
-        this.hooks.onPreview(info, e.clientX, e.clientY, over);
-      } else this.hooks.onPreview(undefined, e.clientX, e.clientY, over);
+        this.hooks.onPreview(info, ax(e), ay(e), over);
+      } else this.hooks.onPreview(undefined, ax(e), ay(e), over);
       return;
     }
     if (this.mode === 'pan') {
@@ -158,7 +163,7 @@ export class Input {
     if (!p) return;
     if (this.mode === 'tool') {
       // キャンセル枠を隠す前に、枠の上で指を離したかを判定する
-      const cancelled = this.hooks.isOverCancel(e.clientX, e.clientY);
+      const cancelled = this.hooks.isOverCancel(ax(e), ay(e));
       this.hooks.onDragUI(false);
       this.hooks.onPreview(null, 0, 0, false);
       if (cancelled) {
@@ -169,10 +174,10 @@ export class Input {
       return;
     }
     if (this.mode === 'pan') {
-      const moved = Math.hypot(e.clientX - p.sx, e.clientY - p.sy);
+      const moved = Math.hypot(ax(e) - p.sx, ay(e) - p.sy);
       if (moved < 8 && performance.now() - p.t0 < 400) {
-        const c = this.r.pick(e.clientX, e.clientY);
-        if (c) this.hooks.onTap(c, e.clientX, e.clientY);
+        const c = this.r.pick(ax(e), ay(e));
+        if (c) this.hooks.onTap(c, ax(e), ay(e));
       }
       this.mode = 'idle';
       return;
@@ -196,7 +201,7 @@ export class Input {
 
   private wheel = (e: WheelEvent) => {
     e.preventDefault();
-    const anchor = this.r.pick(e.clientX, e.clientY)?.point || null;
+    const anchor = this.r.pick(ax(e), ay(e))?.point || null;
     this.r.rig.zoom(Math.exp(e.deltaY * 0.0015), anchor as THREE.Vector3 | null);
     this.r.kick();
   };

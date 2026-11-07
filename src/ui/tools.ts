@@ -177,7 +177,7 @@ export class ToolController {
     if (!band) {
       band = document.createElement('div');
       band.id = 'demo-band';
-      document.body.append(band);
+      document.getElementById('app')!.append(band);
     }
     band.classList.toggle('on', t === 'bulldoze');
   }

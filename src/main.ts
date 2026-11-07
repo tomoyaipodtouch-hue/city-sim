@@ -6,6 +6,7 @@ import { CityRenderer } from './render/renderer';
 import { ToolController } from './ui/tools';
 import { Hud, Settings } from './ui/hud';
 import { Input } from './ui/input';
+import { setOrientMode } from './ui/orient';
 import { exportFile, importFile, listSaves, readSave, writeSave } from './save';
 import type { SaveData } from './sim/world';
 
@@ -106,6 +107,7 @@ const hud: Hud = new Hud(game, renderer, tools, {
     bgmSettings.volume = (s.bgmVol ?? 50) / 100;
     bgm.applyVolume();
     renderer.rig.pitchOffset = s.camPitch ?? 0;
+    setOrientMode(s.orient ?? 'auto');
     renderer.kick();
     storeSettings(s);
   },

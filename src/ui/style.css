@@ -30,8 +30,9 @@ html, body {
   font-family: "M PLUS 1", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
   font-size: var(--fs-m); user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; overscroll-behavior: none;
 }
-#view { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100dvh; display: block; touch-action: none; }
-#ui { position: fixed; inset: 0; pointer-events: none; }
+#app { position: fixed; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; transform-origin: 0 0; }
+#view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+#ui { position: absolute; inset: 0; pointer-events: none; }
 #ui > * { pointer-events: auto; }
 .toolbar, .sub, .bar, .news, .info, .chips { -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); text-shadow: 0 1px 2px rgba(0,0,0,0.45); }
 button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
@@ -219,13 +220,6 @@ button:disabled { opacity: 0.38; cursor: default; }
 .form input[type=text] { width: 100%; height: 38px; border-radius: 9px; border: 1px solid var(--line); background: rgba(0,0,0,0.25); color: var(--fg); padding: 0 10px; font: inherit; font-size: var(--fs-l); user-select: text; -webkit-user-select: text; }
 .hint { font-size: var(--fs-s); color: var(--fg2); margin-top: 6px; }
 
-/* ---- 縦向きの警告 ---- */
-#rotate { display: none; position: fixed; inset: 0; background: #0f151c; z-index: 100; align-items: center; justify-content: center; text-align: center; }
-#rotate p { font-size: 18px; margin: 10px 0 4px; }
-#rotate small { color: var(--fg2); }
-.rotate-icon { font-size: 48px; color: var(--accent); }
-@media (orientation: portrait) and (max-width: 900px) { #rotate { display: flex; } }
-
 /* 小さい画面（横幅が狭い） */
 @media (max-width: 720px) {
   .stat .v { font-size: var(--fs-m); }
@@ -234,7 +228,7 @@ button:disabled { opacity: 0.38; cursor: default; }
 
 .tbl td, .sheet-b, .row { font-size: var(--fs-m); }
 /* 取り壊しモード：画面の上に、黄色と黒の斜めのしま */
-#demo-band { position: fixed; left: 0; right: 0; top: 0; height: calc(var(--st) + 7px); z-index: 30; pointer-events: none;
+#demo-band { position: absolute; left: 0; right: 0; top: 0; height: calc(var(--st) + 7px); z-index: 30; pointer-events: none;
   background: repeating-linear-gradient(-45deg, #f2c200 0 12px, #1a1a1a 12px 24px); box-shadow: 0 1px 4px rgba(0,0,0,0.4); display: none; }
 #demo-band.on { display: block; }
 
@@ -242,3 +236,37 @@ button:disabled { opacity: 0.38; cursor: default; }
 .sheet-b, .sheet-b * { font-size: var(--fs-m) !important; }
 /* 取り壊しのボタンは、選んだときに黄色 */
 .tbtn.demo.on { color: #f2c200; background: rgba(242, 194, 0, 0.18); border-left-color: #f2c200; }
+
+/* ---- 縦画面（スマホを縦に持つとき）：ツールは画面の下に横一列、その上にお金・日付などのバー（2段）とニュース ---- */
+html.portrait {
+  --tool: 54px; --bar: 84px;
+  --stack: calc(var(--tool) + var(--sb) + var(--bar) + var(--news));
+}
+html.portrait .toolbar {
+  top: auto; left: 0; right: 0; bottom: 0; width: auto; height: calc(var(--tool) + var(--sb));
+  padding: 0 calc(var(--sr) + 2px) var(--sb) calc(var(--sl) + 2px); flex-direction: row; border-right: 0; border-top: 1px solid var(--line);
+  overflow-x: auto; overflow-y: hidden;
+}
+html.portrait .tbtn { max-height: none; min-width: 0; flex: 1 1 0; border-left: 0; border-top: 3px solid transparent; margin: 0; font-size: 9.5px; letter-spacing: -0.04em; white-space: nowrap; }
+html.portrait .tbtn.on { border-top-color: var(--accent); }
+html.portrait .bar {
+  left: 0; bottom: calc(var(--tool) + var(--sb)); height: var(--bar); flex-wrap: wrap; align-content: center; row-gap: 2px;
+  padding: 2px calc(var(--sr) + 6px) 2px calc(var(--sl) + 6px);
+}
+html.portrait .bar > * { order: 4; }
+html.portrait .bar > .stat, html.portrait .bar > .sep { order: 0; height: 38px; }
+html.portrait .bar > .rci { order: 1; margin-left: auto; }
+html.portrait .bar > .grow { order: 2; flex: 0 0 100%; height: 0; }
+html.portrait .bar > .speed { order: 3; margin-right: auto; }
+html.portrait .news { left: 0; bottom: calc(var(--tool) + var(--sb) + var(--bar)); height: var(--news); padding: 0 calc(var(--sr) + 10px) 0 calc(var(--sl) + 10px); }
+html.portrait .sub {
+  left: 0; right: 0; top: auto; bottom: var(--stack); width: auto; max-width: none; max-height: 48%;
+  border-radius: 12px 12px 0 0; border-top: 1px solid var(--line); border-bottom: 0;
+}
+html.portrait .info { left: 8px; bottom: calc(var(--stack) + 8px); max-height: calc(100% - var(--stack) - var(--st) - 20px); }
+html.portrait .chips { bottom: calc(var(--stack) + 6px); max-width: calc(100vw - 12px); }
+html.portrait .restore { bottom: calc(var(--sb) + 8px); }
+html.portrait .sheet { left: 0; right: 0; }
+html.portrait .cols { grid-template-columns: 1fr; }
+html.portrait .title-in { grid-template-columns: 1fr; gap: 18px; }
+html.portrait .row { flex-wrap: wrap; }

@@ -288,7 +288,12 @@ export class CarLayer {
     const big = lines.filter((L) => L.cells.length >= 4 && !!st && L.cells.some((c) => st.has(c)));
     const sumR = big.reduce((a, L) => a + L.riders, 0) || 1;
     // 本数は乗る人の割合で分け、どの路線にも長さに応じて最低 1〜4 本は走らせる
-    let quotas = big.map((L) => Math.max(Math.min(4, 1 + Math.floor(L.cells.length / 25)), Math.round((f.target * L.riders) / sumR)));
+    // 線路の長さで走れる本数には限りがある（多すぎると前の列車に詰まる）。3両編成でおよそ 8 マスに 1 本
+    const per = Math.max(6, (2.3 * ((f.carsPer - 1) * f.spacing + 2 * f.halfLen)) / CELL);
+    let quotas = big.map((L) => {
+      const cap = Math.max(1, Math.floor(L.cells.length / per));
+      return Math.min(cap, Math.max(Math.min(4, 1 + Math.floor(L.cells.length / 25)), Math.round((f.target * L.riders) / sumR)));
+    });
     const sum = quotas.reduce((a, q) => a + q, 0);
     if (sum > f.max) quotas = quotas.map((q) => Math.max(1, Math.floor((q * f.max) / sum)));
     f.target = Math.min(f.max, quotas.reduce((a, q) => a + q, 0));

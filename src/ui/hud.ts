@@ -13,6 +13,7 @@ import type { MapStyle } from '../sim/terrain';
 import type { NewCityOpts } from '../sim/protocol';
 import { BRIDGE_STYLES } from '../render/bridgeStyles';
 import { platformCells } from '../sim/plan';
+import { OrientMode, toApp } from './orient';
 
 const ICONS: Record<string, string> = {
   road: '<path d="M8 21 10.5 3M16 21 13.5 3M12 6v2M12 11v2M12 16v2"/>',
@@ -61,6 +62,7 @@ export interface Settings {
   bgmVol: number; // 0..100
   dayNight: 'auto' | 'day' | 'night';
   camPitch: number; // カメラの角度のずれ（度）。マイナスで地面に近く（横から）、プラスで真上寄り
+  orient: OrientMode; // 縦持ちのときの表示（auto = 縦の配置、cw / ccw = 横ロックモード）
 }
 
 export interface HudActions {
@@ -102,7 +104,7 @@ export class Hud {
   private hidden = false;
   private barEls: Record<string, HTMLElement> = {};
   nowPlaying = '';
-  settings: Settings = { shadows: true, lowRes: false, cars: true, sound: true, fps: false, hq: false, bgm: true, bgmVol: 50, dayNight: 'auto', camPitch: 0 };
+  settings: Settings = { shadows: true, lowRes: false, cars: true, sound: true, fps: false, hq: false, bgm: true, bgmVol: 50, dayNight: 'auto', camPitch: 0, orient: 'auto' };
 
   constructor(private game: GameClient, private r: CityRenderer, private tools: ToolController, private act: HudActions) {
     this.root = document.getElementById('ui')!;
@@ -334,7 +336,10 @@ export class Hud {
 
   isOverCancel(x: number, y: number) {
     if (this.cancelZone.classList.contains('hidden')) return false;
-    const r = this.cancelZone.getBoundingClientRect();
+    // 画面を回していることがあるので、#app の中の座標に直して比べる
+    const b = this.cancelZone.getBoundingClientRect();
+    const [x0, y0] = toApp(b.left, b.top), [x1, y1] = toApp(b.right, b.bottom);
+    const r = { left: Math.min(x0, x1), right: Math.max(x0, x1), top: Math.min(y0, y1), bottom: Math.max(y0, y1) };
     return x >= r.left - 10 && x <= r.right + 10 && y >= r.top - 10 && y <= r.bottom + 14;
   }
 
@@ -865,6 +870,20 @@ export class Hud {
     }
     dn.append(seg);
     body.append(dn);
+    // 縦持ちのときの表示（横ロックモード）
+    const om = el('div', 'row', '<div><div>縦持ちのとき</div><div class="desc">「横ロック」にすると、スマホを縦向きに固定したままでも横画面で表示します。スマホを倒す向きを選んでください</div></div>');
+    const oseg = el('div', 'seg wrap');
+    for (const [v, label] of [['auto', '縦画面'], ['cw', '横ロック（左に倒す）'], ['ccw', '横ロック（右に倒す）']] as const) {
+      const b = el('button', (this.settings.orient ?? 'auto') === v ? 'on' : '', label);
+      b.onclick = () => {
+        this.settings.orient = v as OrientMode;
+        for (const c of oseg.children) c.classList.toggle('on', c === b);
+        this.applySettings();
+      };
+      oseg.append(b);
+    }
+    om.append(oseg);
+    body.append(om);
     // BGM の音量
     const bv = el('div', 'row', `<div><div>BGM の音量</div><div class="desc">静かなアンビエントの曲が流れます${this.nowPlaying ? `（再生中：${this.nowPlaying}）` : ''}。iPhone の消音スイッチがオンだと鳴りません</div></div>`);
     const vbox = el('div', 'jrow');
@@ -892,7 +911,7 @@ export class Hud {
     };
     cp.append(box);
     body.append(cp);
-    const items: [Exclude<keyof Settings, 'dayNight' | 'camPitch' | 'bgmVol'>, string, string][] = [
+    const items: [Exclude<keyof Settings, 'dayNight' | 'camPitch' | 'bgmVol' | 'orient'>, string, string][] = [
       ['hq', '高画質', '夜の窓や街灯の光のにじみ、色の調整、なめらかな輪郭。動作が重くなります'],
       ['shadows', '影', '建物や木の影を表示します。オフにすると動作が軽くなります'],
       ['lowRes', '解像度を下げる', '画面の細かさを下げて、動作を軽くします'],
