@@ -40,6 +40,9 @@ interface Car extends Cell {
   tb?: Turnback | null; // この先の折り返し（行き止まり）
   tbKey?: number; // tb を調べたときの to
   revPending?: boolean; // 行き止まりで止まっていて、このあと向きを変える
+  tbFor?: Turnback | null; // tbSide を決めた折り返し
+  tbSide?: 0 | 1; // 終点のどちらのホームに入るか（0 = 分岐器で渡った先、1 = 渡らずにそのまま）
+  tbDep?: Turnback | null; // 渡らずに入った終点から出ていくところ（出るときに分岐器で渡る）
 }
 
 // 走る場所：道路（車・トラック・バス）、歩道、線路（鉄道・高架鉄道・モノレール・地下鉄）
@@ -449,7 +452,18 @@ export class CarLayer {
     const d = c.d;
     for (let k = 0; k < 16; k++) {
       const i = y * n + x, tb = tbs.get(i);
-      if (tb && tb.ux * DX[d] + tb.uz * DY[d] > 0.5) { c.tb = tb; return tb; }
+      if (tb && tb.ux * DX[d] + tb.uz * DY[d] > 0.5) {
+        c.tb = tb;
+        // 空いているホームを選ぶ（ふだんは渡った先、そこがふさがっていればそのまま入る）。分岐器に着くまでは選び直す
+        const cx = ((c.to % n) + 0.5) * CELL, cz = (((c.to / n) | 0) + 0.5) * CELL;
+        if (c.tbFor !== tb || (tb.ex - cx) * tb.ux + (tb.ez - cz) * tb.uz > tb.d0 + CELL) {
+          c.tbFor = tb;
+          const used = [false, false];
+          for (const o of f.cars) if (o !== c && o.tbFor === tb && o.tbSide !== undefined) used[o.tbSide] = true;
+          c.tbSide = !used[0] ? 0 : !used[1] ? 1 : 0;
+        }
+        return tb;
+      }
       if (!(mask[i] & (1 << d))) break;
       x += DX[d]; y += DY[d];
       if (!g.inb(x, y)) break;
@@ -478,6 +492,9 @@ export class CarLayer {
     c.from = head.from; c.to = head.to; c.din = head.din; c.d = head.d; c.hA = head.hA;
     c.t = 1 - tf;
     c.hist = hist;
+    c.tbDep = c.tbSide === 1 ? c.tbFor ?? null : null;
+    c.tbFor = null;
+    c.tbSide = undefined;
     c.tbKey = -1;
     c.lastStop = -1;
   }
@@ -633,14 +650,14 @@ export class CarLayer {
               if (!st!.has(c.to) && c.lastStop !== c.from && c.t < 0.5 && c.t + adv >= 0.5) {
                 c.t = 0.5;
                 adv = 0;
-                c.stop = 8;
+                c.stop = 5;
                 c.lastStop = c.from;
               }
             }
             // 前の列車との間隔：先の 2 マスに別の列車がいたら、マスの手前で待つ（長く詰まったら進む）
             const n = this.grid!.n;
             const ahead2 = (() => { const x = (c.to % n) + DX[c.d], y = ((c.to / n) | 0) + DY[c.d]; return this.grid!.inb(x, y) ? y * n + x : -1; })();
-            const block = [c.to, ahead2].some((cell) => { if (cell < 0) return false; const o = occ!.get(CarLayer.occKey(cell, c.d)); return o && o !== c; });
+            const block = [c.to, ahead2].some((cell) => { if (cell < 0) return false; const o = occ!.get(CarLayer.occKey(cell, c.d)); return o && o !== c && !((o.revPending || (o.stop ?? 0) > 0) && o.tbFor && o.tbFor === c.tbFor && o.tbSide !== c.tbSide); });
             if (block && (c.wait ?? 0) < 25) {
               if (c.t + adv > 0.8) {
                 adv = Math.max(0, 0.8 - c.t);
@@ -687,7 +704,7 @@ export class CarLayer {
                 c.revPending = false;
                 continue;
               }
-              if (!c.revPending) { c.revPending = true; c.stop = 14; }
+              if (!c.revPending) { c.revPending = true; c.stop = c.lastStop === c.from ? 1.5 : 6; }
               c.t = 1;
               break;
             }
@@ -716,11 +733,18 @@ export class CarLayer {
           const laneAt = () => {
             // 島式の駅の前後では、線路が左右に広がる
             const base = isl ? lane + (ISLAND_GAP - lane) * islandSpread(isl, P.x, P.z) : lane;
-            if (!tb) return base;
-            const dist = (tb.ex - P.x) * tb.ux + (tb.ez - P.z) * tb.uz;
-            const u = Math.max(0, Math.min(1, (tb.d0 - dist) / (tb.d0 - tb.d1)));
+            // 渡らずに入るときは分岐器を通らない。渡らずに入った終点から出るときは、出ていく途中で渡る
+            const z = tb ? (c.tbSide === 1 ? null : tb) : c.tbDep;
+            if (!z) return base;
+            const dist = (z.ex - P.x) * z.ux + (z.ez - P.z) * z.uz;
+            const u = Math.max(0, Math.min(1, (z.d0 - dist) / (z.d0 - z.d1)));
             return base * (1 - 2 * u * u * (3 - 2 * u));
           };
+          if (c.tbDep) {
+            // 最後尾まで分岐器を渡り終えたら終わり
+            const z = c.tbDep, dist = (z.ex - P.x) * z.ux + (z.ez - P.z) * z.uz;
+            if (dist > z.d0 + f.carsPer * sp + 10) c.tbDep = null;
+          }
           for (let j = 0; j < nCar; j++) {
             this.placeBack(f, c, Math.max(0, j * sp - half));
             const l0 = laneAt();
