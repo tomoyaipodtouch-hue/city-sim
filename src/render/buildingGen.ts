@@ -1281,7 +1281,7 @@ function tower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, o
   const cz = pz1 - PD / 2 - (podium ? 0 : 0);
   const tiers = floors > 30 ? 3 : floors > 16 ? 2 : 1;
   let remaining = floors - podium;
-  const round = office && luxury && rng.next() < 0.2;
+  const round = office && luxury && rng.next() < 0.04;
   for (let t = 0; t < tiers; t++) {
     const fl = t === tiers - 1 ? remaining : Math.round(remaining * (0.55 + rng.next() * 0.15));
     remaining -= fl;
@@ -1483,24 +1483,23 @@ function highrise(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number
   // 近未来的な形（24 階以上の約 3 割）：楕円で上へ細くなる塔、しずく形の塔、ダイアグリッド（オフィスのみ）
   if (floors >= 24) {
     const r2 = rng.next();
-    if (r2 < 0.3) {
-      const pick = rng.next();
-      if (!office) return dropTower(mb, f, rng, tf, floors, false);
-      return pick < 0.5 ? dropTower(mb, f, rng, tf, floors, true) : diagridTower(mb, f, rng, tf, floors);
-    }
+    // 丸い形（しずく形）はまれに。オフィスはダイアグリッドが中心
+    if (office && r2 < 0.25) return rng.next() < 0.15 ? dropTower(mb, f, rng, tf, floors, true) : diagridTower(mb, f, rng, tf, floors);
+    if (!office && r2 < 0.04) return dropTower(mb, f, rng, tf, floors, false);
   }
   if (!office) {
     // 香港のような細長い十字形の集合住宅
     if (floors >= 22 && r < 0.35) return crossTowers(mb, f, rng, tf, floors);
     if (floors >= 20 && r < 0.6) return chamferTower(mb, f, rng, tf, floors, false);
-    if (floors >= 28 && luxury && r < 0.75) return rng.next() < 0.5 ? roundTower(mb, f, rng, tf, floors, false) : steppedTower(mb, f, rng, tf, floors, false);
+    if (floors >= 28 && luxury && r < 0.75) return rng.next() < 0.1 ? roundTower(mb, f, rng, tf, floors, false) : steppedTower(mb, f, rng, tf, floors, false);
     return tower(mb, f, rng, tf, floors, office, luxury);
   }
   if (floors >= 12 && officePat === PAT.fullglass && r < 0.6) return glassTower(mb, f, rng, tf, floors);
   if (floors < 24 && r < 0.65) return tower(mb, f, rng, tf, floors, office, luxury);
   // ほぼガラスだけの外壁を選んだビルは、半分以上をガラスの塔にする
   if (officePat === PAT.fullglass && r < 0.7) return glassTower(mb, f, rng, tf, floors);
-  const designs = [twistedTower, taperedTower, steppedTower, roundTower, wedgeTower, twinTowers, tower, chamferTower, chamferTower, glassTower];
+  // 四角が基本。丸い塔（円筒・先細りの八角形）はまれ
+  const designs = [twistedTower, steppedTower, steppedTower, wedgeTower, twinTowers, tower, tower, chamferTower, chamferTower, chamferTower, glassTower, glassTower, diagridTower, diagridTower, ...(rng.next() < 0.3 ? [taperedTower, roundTower] : [])];
   let k = Math.floor(rng.next() * designs.length);
   if (designs[k] === twinTowers && !(f.W >= 40 && floors >= 30)) k = (k + 1) % designs.length;
   if (designs[k] === tower && floors >= 45) k = 0;
@@ -2508,10 +2507,49 @@ function rrect(cx: number, cz: number, w: number, d: number, r: number, n = 6): 
   return out;
 }
 const MW = C(0xf3f4f5), MW2 = C(0xe2e5e8), MGL = C(0x5f8fb8);
-// 角の丸い白い棟：ガラスの帯（横長の窓）と、上に少し張り出す屋根のふち
-function whiteBlock(mb: MeshBuilder, cx: number, cz: number, w: number, d: number, h: number, r: number, pat: number = PAT.ribbon, col = MW) {
-  mb.prism(rrect(cx, cz, w, d, r), 0, h, col, pat, MW2);
-  mb.prism(rrect(cx, cz, w + 0.8, d + 0.8, r + 0.4), h, h + 0.6, MW, PAT.none, MW2);
+// ---- 四角を基本に、凹凸で影を作る部品 ----
+// 白い棟：1階は奥まったガラスと柱、上の階は外壁の模様、屋上は張り出したスラブと低い手すり、屋上の機械
+interface MBOpt { pat?: number; wall?: THREE.Color; glassBase?: boolean; overhang?: number; fins?: boolean; roofKit?: boolean; band?: THREE.Color }
+function mBlock(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, h: number, o: MBOpt = {}) {
+  const wall = o.wall ?? MW, pat = o.pat ?? PAT.ribbon, ov = o.overhang ?? 1.0;
+  const gH = o.glassBase === false ? 0 : Math.min(4.5, h * 0.45);
+  if (gH > 0) {
+    // 1階：1m 奥まったガラスと、外側の柱
+    mb.box(x0 + 1, 0, z0 + 1, x1 - 1, gH, z1 - 1, MGL, PAT.fullglass, MW2);
+    const step = 6;
+    for (let x = x0 + 0.4; x <= x1 - 0.39; x += Math.max(3, (x1 - x0 - 0.8) / Math.max(1, Math.round((x1 - x0) / step)))) {
+      mb.box(x - 0.3, 0, z1 - 0.7, x + 0.3, gH, z1 - 0.1, wall);
+      mb.box(x - 0.3, 0, z0 + 0.1, x + 0.3, gH, z0 + 0.7, wall);
+    }
+    mb.box(x0, gH, z0, x1, gH + 0.6, z1, wall, PAT.none, wall); // 2階の床の帯
+  }
+  mb.box(x0, gH + 0.6, z0, x1, h, z1, wall, pat, MW2);
+  if (o.band) mb.box(x0 - 0.06, h - 1.6, z0 - 0.06, x1 + 0.06, h - 1.0, z1 + 0.06, o.band, PAT.lit, o.band);
+  // 縦のひれ（正面）
+  if (o.fins) for (let x = x0 + 1.2; x < x1 - 0.6; x += 1.8) mb.box(x - 0.12, gH + 0.6, z1, x + 0.12, h, z1 + 0.8, wall);
+  // 張り出した屋根のスラブ（厚み）と、手すり
+  mb.box(x0 - ov, h, z0 - ov, x1 + ov, h + 0.7, z1 + ov, wall, PAT.none, MW2);
+  mb.box(x0 - ov, h + 0.7, z1 + ov - 0.15, x1 + ov, h + 1.6, z1 + ov, C(0x9cc9d4));
+  if (o.roofKit !== false && x1 - x0 > 10 && z1 - z0 > 8) {
+    const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+    mb.box(cx - 4, h + 0.7, cz - 2.5, cx + 2, h + 3, cz + 2.5, MW2, PAT.industrial, C(0xc9cdd2));
+    for (const dx of [-7, 5]) if (cx + dx > x0 + 1 && cx + dx + 2 < x1 - 1) mb.box(cx + dx, h + 0.7, cz - 1, cx + dx + 2.2, h + 1.9, cz + 0.4, C(0xb9bfc5));
+  }
+}
+// ひさし（薄い板と細い柱）
+function canopy(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number) {
+  mb.box(x0, y, z0, x1, y + 0.45, z1, MW, PAT.none, MW2);
+  for (const x of [x0 + 0.5, x1 - 0.5]) mb.box(x - 0.15, 0, z1 - 0.65, x + 0.15, y, z1 - 0.35, MW2);
+}
+// 駐車場（白線）
+function parking(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number) {
+  mb.ground(x0, z0, x1, z1, 0.1, PALETTE.asphalt);
+  for (let x = x0 + 1; x < x1 - 1; x += 2.6) mb.ground(x, z0 + 0.5, x + 0.12, z0 + 5, 0.12, PALETTE.white);
+}
+// 植え込み（低い箱と木）
+function planter(mb: MeshBuilder, tf: TF, x0: number, z0: number, x1: number, z1: number) {
+  mb.box(x0, 0, z0, x1, 0.5, z1, C(0xc9c5bc), PAT.none, PALETTE.hedge);
+  tf((x0 + x1) / 2, (z0 + z1) / 2, 0.7);
 }
 // 夜に光る看板（色のまま光る）
 const litSign = (mb: MeshBuilder, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, c: THREE.Color) => mb.box(x0, y0, z0, x1, y1, z1, c, PAT.lit, c);
@@ -2521,166 +2559,168 @@ function redCross(mb: MeshBuilder, x: number, y: number, z: number, s: number) {
   litSign(mb, x - s * 0.5, y - s * 0.17, z, x + s * 0.5, y + s * 0.17, z + 0.3, red);
   litSign(mb, x - s * 0.17, y - s * 0.5, z, x + s * 0.17, y + s * 0.5, z + 0.3, red);
 }
+const civicStart = (mb: MeshBuilder) => { mb.flatRoofMat = MAT.none; };
 
-// 病院：低層部（外来）の上に、角の丸いガラスの病棟タワー。屋上ヘリポート、夜に光る赤十字、曲線の車寄せ
+// 病院：横長の低層部（外来）と、その上の四角い病棟（縦のひれ、上に光る帯）。屋上ヘリポート、車寄せのひさし、駐車場
 function modernHospital(mb: MeshBuilder, f: LotFrame, tf: TF) {
+  civicStart(mb);
   const hw = f.W / 2, hd = f.D / 2;
-  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.07, PALETTE.lawn2);
-  mb.ground(-hw + 2, hd * 0.25, hw - 2, hd - 2, 0.09, PALETTE.pavement);
-  const pw = f.W - 8, pd = f.D * 0.55, pz = -hd * 0.1;
-  whiteBlock(mb, 0, pz, pw, pd, 9, 6);
-  const tw = pw * 0.7, td = Math.min(pd * 0.6, 20);
-  mb.prism(rrect(0, pz - 2, tw, td, td / 2), 9.6, 42, MGL, PAT.curtain, MW2);
-  for (let y = 15; y < 42; y += 9) mb.prism(rrect(0, pz - 2, tw + 0.6, td + 0.6, td / 2 + 0.3), y, y + 0.7, MW, PAT.none, MW);
-  mb.prism(rrect(0, pz - 2, tw + 0.8, td + 0.8, td / 2 + 0.4), 42, 43.2, MW, PAT.none, MW2);
-  helipad(mb, 0, pz - 2, 43.4, Math.min(td * 0.42, 8));
-  redCross(mb, tw * 0.25, 36, pz - 2 + td / 2 + 0.1, 6);
-  // 曲線の車寄せ（薄い円盤の屋根と細い柱）
-  const cz2 = pz + pd / 2 + 5;
-  mb.cylinder(0, cz2, 5, 5.6, 9, 32, MW, MW2);
-  for (const a of [0.4, 1.2, 1.9, 2.7]) mb.cylinder(Math.cos(a) * 7, cz2 + Math.sin(a) * 5, 0, 5, 0.25, 8, MW2);
-  mb.box(-7, 0, pz + pd / 2, 7, 4.5, pz + pd / 2 + 0.6, MGL, PAT.fullglass, MW);
-  for (const x of [-hw + 4, hw - 4]) tf(x, hd - 3, 0.9);
+  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.07, PALETTE.pavement);
+  const pz0 = -hd + 3, pz1 = hd * 0.3;
+  mBlock(mb, -hw + 3, pz0, hw - 3, pz1, 10, { pat: PAT.ribbon });
+  // 病棟（低層部の上に、少しずらして）
+  const tx0 = -hw + 5, tx1 = hw * 0.35, tz0 = pz0 + 2, tz1 = pz0 + 16;
+  mb.box(tx0, 10.7, tz0, tx1, 40, tz1, MW, PAT.curtain, MW2);
+  for (let x = tx0 + 1; x < tx1 - 0.5; x += 2) mb.box(x - 0.15, 10.7, tz1, x + 0.15, 40, tz1 + 0.9, MW);
+  mb.box(tx0 - 0.8, 40, tz0 - 0.8, tx1 + 0.8, 41, tz1 + 0.8, MW, PAT.none, MW2);
+  litSign(mb, tx0 - 0.82, 39.2, tz1 + 0.78, tx1 + 0.82, 39.8, tz1 + 0.84, C(0xbfe0ff));
+  helipad(mb, (tx0 + tx1) / 2, (tz0 + tz1) / 2, 41.2, Math.min(7, (tz1 - tz0) * 0.42));
+  redCross(mb, tx1 - 3.5, 34, tz1 + 0.9, 5);
+  // 車寄せ（正面）と駐車場
+  canopy(mb, -9, pz1, 9, pz1 + 7, 5);
+  mb.ground(-hw + 2, pz1, hw - 2, pz1 + 8, 0.09, PALETTE.asphalt);
+  parking(mb, -hw + 2, pz1 + 9, hw - 2, hd - 2);
+  planter(mb, tf, -hw + 2, pz1 + 0.5, -hw + 6, pz1 + 3);
+  planter(mb, tf, hw - 6, pz1 + 0.5, hw - 2, pz1 + 3);
 }
 
-// クリニック：白い曲線の低層棟（2階）と、ガラスの入口、赤十字
+// クリニック：2階建ての白い棟（ガラスの1階）、入口のひさし、赤十字、駐車場
 function modernClinic(mb: MeshBuilder, f: LotFrame, tf: TF) {
+  civicStart(mb);
   const hw = f.W / 2, hd = f.D / 2;
   mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.07, PALETTE.lawn2);
-  mb.ground(-4, 4, 4, hd - 0.5, 0.09, PALETTE.pavement);
-  whiteBlock(mb, 0, -2, f.W - 7, f.D - 12, 8, 8);
-  mb.prism(rrect(0, (f.D - 12) / 2 - 2, 9, 4, 1.8), 0, 4.5, MGL, PAT.fullglass, MW);
-  redCross(mb, 0, 6.4, (f.D - 12) / 2 - 1.6, 2.8);
-  tf(-hw + 3, hd - 3, 0.8);
-  tf(hw - 3, hd - 3, 0.8);
+  const z1 = hd * 0.2;
+  mBlock(mb, -hw + 3, -hd + 3, hw - 3, z1, 8.5, { pat: PAT.ribbon });
+  canopy(mb, -4, z1, 4, z1 + 3.5, 4);
+  redCross(mb, hw - 6, 6.8, z1 + 0.05, 2.6);
+  parking(mb, -hw + 2, z1 + 4.5, hw - 2, hd - 1);
+  planter(mb, tf, -hw + 2, z1 + 0.5, -hw + 5, z1 + 3);
 }
 
-// 学校：白い低層棟（教室）に、木のルーバーと屋上の太陽光パネル。弓なりの屋根の体育館と、校庭
+// 学校：横長の教室棟（ガラスの1階、ベランダの手すりの帯、木のルーバー）、屋上の太陽光パネル、かまぼこ屋根の体育館、校庭
 function modernSchool(mb: MeshBuilder, f: LotFrame, tf: TF, high: boolean) {
+  civicStart(mb);
   const hw = f.W / 2, hd = f.D / 2;
   const wood = C(0xb88a5a);
   mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.07, PALETTE.lawn2);
-  // 校庭（奥）と、トラック
-  const yz1 = -hd + (high ? f.D * 0.42 : f.D * 0.45);
+  const yz1 = -hd + f.D * (high ? 0.42 : 0.45);
   mb.ground(-hw + 2, -hd + 2, hw - 2, yz1, 0.09, C(0xc9a77a));
   if (high) {
     mb.ground(-hw + 5, -hd + 5, hw - 5, yz1 - 3, 0.1, C(0xb5523b));
     mb.ground(-hw + 8, -hd + 8, hw - 8, yz1 - 6, 0.11, PALETTE.lawn);
   }
-  // 教室棟（正面、道路側）
-  const cw = f.W * 0.62, cd = 12, cz = hd - 4 - cd / 2, ch = high ? 13 : 9.5;
-  whiteBlock(mb, -hw + 3 + cw / 2, cz, cw, cd, ch, 3);
-  for (let x = -hw + 4; x < -hw + 2 + cw; x += 1.6) mb.box(x, 0.5, cz + cd / 2 + 0.1, x + 0.35, ch - 0.6, cz + cd / 2 + 0.8, wood);
-  // 屋上の太陽光パネル（少し傾けて並べる）
-  for (let x = -hw + 5; x < -hw + cw - 1; x += 4.2) mb.quad([x, ch + 0.8, cz + 3], [x + 3.6, ch + 0.8, cz + 3], [x + 3.6, ch + 2.2, cz - 2], [x, ch + 2.2, cz - 2], C(0x22355a));
-  // 体育館（弓なりの屋根）
-  const gx0 = -hw + 5 + cw, gx1 = hw - 3, gz0 = yz1 + 2, gz1 = hd - 4;
+  const cw = f.W * 0.62, cz1 = hd - 4, cz0 = cz1 - 11, ch = high ? 14 : 10.5;
+  const cx0 = -hw + 3, cx1 = cx0 + cw;
+  mBlock(mb, cx0, cz0, cx1, cz1, ch, { pat: PAT.ribbon, roofKit: false });
+  // ベランダの手すり（各階のガラスの帯）と、端の木のルーバー
+  for (let y = 4.5 + 3.2; y < ch - 0.5; y += 3.2) mb.box(cx0, y - 0.1, cz1, cx1, y + 1.0, cz1 + 1.2, C(0x9cc9d4));
+  for (let x = cx1 - 7; x < cx1 - 0.3; x += 0.9) mb.box(x, 0.5, cz1 + 0.2, x + 0.3, ch, cz1 + 1.3, wood);
+  for (let x = cx0 + 1; x < cx1 - 8; x += 4.2) mb.quad([x, ch + 0.8, cz0 + 9], [x + 3.6, ch + 0.8, cz0 + 9], [x + 3.6, ch + 2.0, cz0 + 4], [x, ch + 2.0, cz0 + 4], C(0x22355a));
+  const gx0 = cx1 + 2, gx1 = hw - 3, gz0 = yz1 + 2, gz1 = hd - 4;
   if (gx1 - gx0 > 8) {
     mb.box(gx0, 0, gz0, gx1, 7, gz1, MW, PAT.ribbon, MW2);
-    archRoof(mb, gx0, gz0, gx1, gz1, 7, 4, MW2, false);
+    archRoof(mb, gx0 - 0.5, gz0 - 0.5, gx1 + 0.5, gz1 + 0.5, 7, 4, C(0xc9cdd2), false);
   }
   tf(-hw + 2, hd - 1.5, 0.8);
   tf(hw - 2, -hd + 3, 0.9);
 }
 
-// 大学：芝生のキャンパス。曲線のガラスの図書館棟（楕円）、白い研究棟、木と小道
+// 大学：中庭を囲む四角い研究棟と、片持ちで張り出すガラスの図書館棟
 function modernCollege(mb: MeshBuilder, f: LotFrame, tf: TF) {
+  civicStart(mb);
   const hw = f.W / 2, hd = f.D / 2;
   mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.07, PALETTE.lawn);
   mb.ground(-2, -hd + 2, 2, hd - 0.5, 0.09, PALETTE.pavement);
   mb.ground(-hw + 2, -2, hw - 2, 2, 0.09, PALETTE.pavement);
-  // 図書館棟：楕円のガラスの塔と、白い屋根の円盤
-  const ell: P2[] = [];
-  for (let k = 0; k < 40; k++) { const a = (k / 40) * Math.PI * 2; ell.push([hw * 0.45 + Math.cos(a) * 11, hd * 0.4 + Math.sin(a) * 8]); }
-  mb.prism(ell, 0, 18, MGL, PAT.curtain, MW2);
-  mb.prism(ell.map(([x, z]) => [hw * 0.45 + (x - hw * 0.45) * 1.08, hd * 0.4 + (z - hd * 0.4) * 1.08] as P2), 18, 19.2, MW, PAT.none, MW2);
-  // 研究棟：L 字に並ぶ白い棟
-  whiteBlock(mb, -hw * 0.45, -hd * 0.45, f.W * 0.38, 14, 16, 4);
-  whiteBlock(mb, -hw * 0.45, hd * 0.42, f.W * 0.36, 12, 12, 4);
-  whiteBlock(mb, hw * 0.45, -hd * 0.45, f.W * 0.34, 14, 14, 7, PAT.curtain, MGL);
-  for (let k = 0; k < 10; k++) tf(-hw + 4 + (k % 5) * (f.W - 8) / 4, k < 5 ? -4.5 : 4.5, 0.9);
+  mBlock(mb, -hw + 3, -hd + 3, -4, -5, 16, { pat: PAT.ribbon, fins: true });
+  mBlock(mb, 4, -hd + 3, hw - 3, -5, 13, { pat: PAT.curtain });
+  mBlock(mb, -hw + 3, 5, -4, hd - 3, 12, { pat: PAT.ribbon });
+  // 図書館棟：細い柱の上に、ガラスの箱が張り出す
+  const lx0 = 4, lx1 = hw - 3, lz0 = 5, lz1 = hd - 6;
+  mb.box(lx0 + 4, 0, lz0 + 3, lx1 - 4, 5, lz1 - 3, MGL, PAT.fullglass, MW2);
+  mb.box(lx0 - 2, 5, lz0, lx1, 15, lz1 + 3, MGL, PAT.curtain, MW2);
+  mb.box(lx0 - 2.3, 15, lz0 - 0.3, lx1 + 0.3, 15.8, lz1 + 3.3, MW, PAT.none, MW2);
+  for (const [x, z] of [[lx0, lz1 + 2], [lx1 - 2, lz1 + 2]]) mb.box(x - 0.3, 0, z - 0.3, x + 0.3, 5, z + 0.3, MW);
+  for (let k = 0; k < 8; k++) tf(-hw + 5 + (k % 4) * (f.W - 10) / 3, k < 4 ? -3.5 : 3.5, 0.9);
 }
 
-// 図書館：ガラスの閲覧室の上に、波打つ白い屋根
+// 図書館：ガラスの閲覧室の上に、張り出した波の屋根（細い柱で支える）
 function modernLibrary(mb: MeshBuilder, f: LotFrame, tf: TF) {
+  civicStart(mb);
   const hw = f.W / 2, hd = f.D / 2;
   mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.07, PALETTE.lawn2);
-  const x0 = -hw + 3, x1 = hw - 3, z0 = -hd + 4, z1 = hd - 5, h = 8;
+  mb.ground(-hw + 2, hd - 6, hw - 2, hd - 1, 0.09, PALETTE.pavement);
+  const x0 = -hw + 4, x1 = hw - 4, z0 = -hd + 4, z1 = hd - 7, h = 8;
   mb.box(x0, 0, z0, x1, h, z1, MGL, PAT.fullglass, MW2);
-  // 波の屋根（x の向きに2つの波）。頂点ごとの法線でなめらかに
-  const N = 24, amp = 1.8, waves = 2;
-  const yAt = (u: number) => h + 1 + amp * (1 - Math.cos(u * Math.PI * 2 * waves)) / 2;
-  const nAt = (u: number): [number, number, number] => { const sl = (amp * Math.PI * waves * Math.sin(u * Math.PI * 2 * waves)) / (x1 - x0 + 4); const l = Math.hypot(sl, 1); return [-sl / l, 1 / l, 0]; };
+  for (let x = x0; x <= x1; x += (x1 - x0) / 5) mb.box(x - 0.12, 0, z1, x + 0.12, h, z1 + 0.2, MW);
+  const N = 24, amp = 1.6, waves = 2, ax0 = x0 - 2.5, ax1 = x1 + 2.5;
+  const yAt = (u: number) => h + 0.8 + amp * (1 - Math.cos(u * Math.PI * 2 * waves)) / 2;
+  const nAt = (u: number): [number, number, number] => { const sl = (amp * Math.PI * waves * Math.sin(u * Math.PI * 2 * waves)) / (ax1 - ax0); const l = Math.hypot(sl, 1); return [-sl / l, 1 / l, 0]; };
   for (let k = 0; k < N; k++) {
-    const u0 = k / N, u1 = (k + 1) / N, a0 = x0 - 2 + (x1 - x0 + 4) * u0, a1 = x0 - 2 + (x1 - x0 + 4) * u1;
-    mb.quadN([a0, yAt(u0), z1 + 2], [a1, yAt(u1), z1 + 2], [a1, yAt(u1), z0 - 2], [a0, yAt(u0), z0 - 2], nAt(u0), nAt(u1), nAt(u1), nAt(u0), MW);
-    mb.quadN([a0, yAt(u0) - 0.5, z0 - 2], [a1, yAt(u1) - 0.5, z0 - 2], [a1, yAt(u1) - 0.5, z1 + 2], [a0, yAt(u0) - 0.5, z1 + 2], [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, -1, 0], MW2);
+    const u0 = k / N, u1 = (k + 1) / N, a0 = ax0 + (ax1 - ax0) * u0, a1 = ax0 + (ax1 - ax0) * u1;
+    mb.quadN([a0, yAt(u0), z1 + 3], [a1, yAt(u1), z1 + 3], [a1, yAt(u1), z0 - 2], [a0, yAt(u0), z0 - 2], nAt(u0), nAt(u1), nAt(u1), nAt(u0), MW);
+    mb.quadN([a0, yAt(u0) - 0.6, z0 - 2], [a1, yAt(u1) - 0.6, z0 - 2], [a1, yAt(u1) - 0.6, z1 + 3], [a0, yAt(u0) - 0.6, z1 + 3], [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, -1, 0], MW2);
+    // 屋根のふち（正面と背面の厚み）
+    mb.quad([a0, yAt(u0) - 0.6, z1 + 3], [a1, yAt(u1) - 0.6, z1 + 3], [a1, yAt(u1), z1 + 3], [a0, yAt(u0), z1 + 3], MW);
   }
-  for (const x of [x0 + 1, x1 - 1]) mb.cylinder(x, z1 + 1.5, 0, h + 1, 0.25, 10, MW2);
-  tf(-hw + 2, hd - 2, 0.8);
-  tf(hw - 2, hd - 2, 0.8);
+  for (const x of [x0 - 1.5, (x0 + x1) / 2, x1 + 1.5]) mb.box(x - 0.15, 0, z1 + 2.2, x + 0.15, h + 0.8, z1 + 2.5, MW2);
+  planter(mb, tf, -hw + 2, hd - 5, -hw + 5, hd - 2);
+  planter(mb, tf, hw - 5, hd - 5, hw - 2, hd - 2);
 }
 
-// 博物館：白い曲面の建物。上が斜めに切れ、ガラスのスリットが走る。前に水盤
+// 博物館：ずらして積んだ白い箱（片持ちで張り出す上の箱）、ガラスのスリット、前に水盤
 function modernMuseum(mb: MeshBuilder, f: LotFrame, tf: TF) {
+  civicStart(mb);
   const hw = f.W / 2, hd = f.D / 2;
   mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.07, PALETTE.pavement);
-  const ell: P2[] = [];
-  const R1 = hw - 5, R2 = hd * 0.55;
-  for (let k = 0; k < 48; k++) { const a = (k / 48) * Math.PI * 2; ell.push([Math.cos(a) * R1, -4 + Math.sin(a) * R2]); }
-  const topY = ell.map(([x]) => 12 + (x / R1) * 7);
-  mb.prism(ell, 0, 19, MW, PAT.none, MW2, undefined, topY);
-  // 斜めのガラスのスリット
-  const sl = ell.map(([x, z]) => [x * 1.003, z * 1.003 - 0.01] as P2);
-  mb.prism(sl, 4.5, 6, MGL, PAT.fullglass, null, undefined, sl.map(([x]) => 6 + (x / R1) * 4));
-  // 入口（ガラス）と水盤
-  mb.box(-7, 0, R2 - 4.5, 7, 5, R2 - 1.5, MGL, PAT.fullglass, MW);
-  mb.ground(-hw + 4, R2, hw - 4, hd - 3, 0.12, PALETTE.water);
+  mb.box(-hw + 4, 0, -hd + 4, hw - 10, 9, hd * 0.25, MW, PAT.none, MW2);
+  mb.box(-hw + 4, 4, hd * 0.25 - 0.1, hw - 10, 5.2, hd * 0.25 + 0.1, MGL, PAT.fullglass, MGL);
+  mb.box(-hw + 10, 9, -hd + 2, hw - 3, 17, hd * 0.25 - 6, MW, PAT.none, MW2);
+  mb.box(-hw + 10, 12.4, hd * 0.25 - 6.1, hw - 3, 13.4, hd * 0.25 - 5.9, MGL, PAT.fullglass, MGL);
+  mb.box(-6, 0, hd * 0.25, 6, 5, hd * 0.25 + 4, MGL, PAT.fullglass, MW);
+  mb.box(-8, 5, hd * 0.25, 8, 5.5, hd * 0.25 + 6, MW, PAT.none, MW2);
+  mb.ground(-hw + 4, hd * 0.25 + 7, hw - 4, hd - 3, 0.12, PALETTE.water);
   tf(-hw + 2.5, hd - 1.5, 0.9);
   tf(hw - 2.5, hd - 1.5, 0.9);
 }
 
-// 警察：白とガラスの棟に青い帯。夜は青い帯と看板が光る。大きい署はガラスの塔つき
+// 警察：白い棟、ガラスの1階、青い帯（夜に光る）。大きい署は奥にもう1棟と駐車場
 function modernPolice(mb: MeshBuilder, f: LotFrame, tf: TF, big: boolean) {
+  civicStart(mb);
   const hw = f.W / 2, hd = f.D / 2;
   const blue = C(0x1f6fd0);
   mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.08, PALETTE.pavement);
   if (!big) {
-    whiteBlock(mb, 0, -1, f.W - 4, f.D - 6, 5, 2.5);
-    mb.box(-3, 0, (f.D - 6) / 2 - 1, 3, 3.6, (f.D - 6) / 2 - 0.6, MGL, PAT.fullglass, MW);
-    litSign(mb, -(f.W - 4) / 2, 4.2, (f.D - 6) / 2 - 0.9, (f.W - 4) / 2, 4.7, (f.D - 6) / 2 - 0.6, blue);
+    mBlock(mb, -hw + 2.5, -hd + 2.5, hw - 2.5, hd - 4, 5.5, { pat: PAT.none, band: blue, roofKit: false, overhang: 0.8 });
     return;
   }
-  whiteBlock(mb, -hw * 0.25, -2, f.W * 0.65, f.D - 10, 10, 5);
-  mb.prism(rrect(hw * 0.55, -4, f.W * 0.28, f.D * 0.45, 4), 0, 22, MGL, PAT.curtain, MW2);
-  litSign(mb, -hw * 0.25 - f.W * 0.32, 8.6, (f.D - 10) / 2 - 1.8, -hw * 0.25 + f.W * 0.32, 9.3, (f.D - 10) / 2 - 1.5, blue);
-  mb.box(-hw * 0.25 - 5, 0, (f.D - 10) / 2 - 2, -hw * 0.25 + 5, 4.5, (f.D - 10) / 2 - 1.5, MGL, PAT.fullglass, MW);
+  mBlock(mb, -hw + 3, -hd + 3, hw * 0.4, hd - 6, 12, { pat: PAT.ribbon, band: blue });
+  mBlock(mb, hw * 0.4 + 2, -hd + 3, hw - 3, -1, 8, { pat: PAT.ribbon, band: blue });
+  parking(mb, hw * 0.4 + 2, 0, hw - 2, hd - 2);
+  canopy(mb, -6, hd - 6, 2, hd - 2.5, 4);
   tf(-hw + 2, hd - 1.5, 0.8);
 }
 
-// 消防：白い棟に赤い帯、ガラスの車庫扉（赤い枠）、訓練塔
+// 消防：白い棟に赤い帯、赤い枠のガラスの車庫扉、訓練塔
 function modernFire(mb: MeshBuilder, f: LotFrame, tf: TF, big: boolean) {
+  civicStart(mb);
   const hw = f.W / 2, hd = f.D / 2;
   const red = C(0xd32f2f);
   mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.08, PALETTE.concrete);
-  const bw = f.W - (big ? 14 : 6), bd = f.D * (big ? 0.55 : 0.6), bz = hd - 9 - bd / 2, bh = big ? 11 : 8;
-  const bx = big ? -5 : 0;
-  whiteBlock(mb, bx, bz, bw, bd, bh, 3);
-  litSign(mb, bx - bw / 2, bh - 1.6, bz + bd / 2 + 0.05, bx + bw / 2, bh - 0.9, bz + bd / 2 + 0.4, red);
-  // 車庫扉（ガラス、赤い枠）
-  const doors = big ? 4 : 2, dw = (bw - 4) / doors;
+  const bx0 = -hw + 3, bx1 = big ? hw - 11 : hw - 3, bz0 = -hd + 3, bz1 = hd - 9, bh = big ? 11 : 8;
+  mBlock(mb, bx0, bz0, bx1, bz1, bh, { pat: PAT.ribbon, glassBase: false, band: red, roofKit: big });
+  const doors = big ? 3 : 2, dw = (bx1 - bx0 - 2) / doors;
   for (let k = 0; k < doors; k++) {
-    const x0 = bx - bw / 2 + 2 + k * dw + 0.6, x1 = x0 + dw - 1.2;
-    mb.box(x0, 0, bz + bd / 2, x1, 5, bz + bd / 2 + 0.25, MGL, PAT.fullglass, MW);
-    mb.box(x0 - 0.3, 0, bz + bd / 2 + 0.2, x0, 5.3, bz + bd / 2 + 0.45, red);
-    mb.box(x1, 0, bz + bd / 2 + 0.2, x1 + 0.3, 5.3, bz + bd / 2 + 0.45, red);
-    mb.box(x0 - 0.3, 5, bz + bd / 2 + 0.2, x1 + 0.3, 5.3, bz + bd / 2 + 0.45, red);
+    const x0 = bx0 + 1 + k * dw + 0.5, x1 = x0 + dw - 1;
+    mb.box(x0, 0, bz1, x1, 5, bz1 + 0.15, MGL, PAT.fullglass, MW);
+    mb.box(x0 - 0.3, 0, bz1 + 0.1, x0, 5.3, bz1 + 0.4, red);
+    mb.box(x1, 0, bz1 + 0.1, x1 + 0.3, 5.3, bz1 + 0.4, red);
+    mb.box(x0 - 0.3, 5, bz1 + 0.1, x1 + 0.3, 5.3, bz1 + 0.4, red);
   }
-  mb.ground(bx - bw / 2, bz + bd / 2, bx + bw / 2, hd - 0.5, 0.1, PALETTE.asphalt);
-  // 訓練塔（白に赤い帯）
+  mb.ground(bx0, bz1, bx1, hd - 0.5, 0.1, PALETTE.asphalt);
   const tx = big ? hw - 6 : hw - 4, tz = -hd + 5, th = big ? 22 : 15;
   mb.box(tx - 2.5, 0, tz - 2.5, tx + 2.5, th, tz + 2.5, MW, PAT.ribbon, MW2);
-  mb.box(tx - 2.6, th - 3, tz - 2.6, tx + 2.6, th - 2, tz + 2.6, red);
+  mb.box(tx - 2.7, th - 3, tz - 2.7, tx + 2.7, th - 2, tz + 2.7, red);
   tf(-hw + 2, -hd + 2, 0.8);
 }
 
