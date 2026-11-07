@@ -7,7 +7,7 @@ import type { Building } from '../sim/world';
 import { Buf, ROAD_LIFT } from './roadLayer';
 import { estopGroup } from '../sim/plan';
 import { addBridgeStructures } from './bridgeStyles';
-import { findTurnbacks } from './turnback';
+import { findTurnbacks, Island, islandSpread, ISLAND_GAP } from './turnback';
 
 const COL = {
   ballast: new THREE.Color(0x8a8378),
@@ -106,9 +106,37 @@ export class RailLayer {
   }
 
   // stationCells：駅のホームがあるマス（防音壁を開ける）
-  rebuild(g: Grid, stationCells: Set<number> = new Set()) {
+  rebuild(g: Grid, stationCells: Set<number> = new Set(), islands: Island[] = []) {
     const n = g.n, N = n * n;
     const B = new Buf(), U = new Buf(), G = new Buf();
+    // 点ごとに横のずれと幅が変わる帯（島式の駅の前後で線路が広がるところ）
+    const stripF = (buf: Buf, pts: P[], offF: (p: P) => number, wF: (p: P) => number, dy: number, c: THREE.Color) => {
+      for (let k = 0; k + 1 < pts.length; k++) {
+        const a = pts[k], b = pts[k + 1];
+        const dx = b.x - a.x, dz = b.z - a.z, l = Math.hypot(dx, dz) || 1;
+        const px = -dz / l, pz = dx / l;
+        const oa = offF(a), ob = offF(b), wa = wF(a) / 2, wb = wF(b) / 2;
+        const i0 = buf.v(a.x + px * (oa - wa), a.h + dy, a.z + pz * (oa - wa), c), i1 = buf.v(a.x + px * (oa + wa), a.h + dy, a.z + pz * (oa + wa), c);
+        const i2 = buf.v(b.x + px * (ob + wb), b.h + dy, b.z + pz * (ob + wb), c), i3 = buf.v(b.x + px * (ob - wb), b.h + dy, b.z + pz * (ob - wb), c);
+        buf.tri(i0, i1, i2);
+        buf.tri(i0, i2, i3);
+      }
+    };
+    const sidesF = (pts: P[], halfF: (p: P) => number, y0: number, y1: number, c: THREE.Color, buf: Buf = B) => {
+      for (let k = 0; k + 1 < pts.length; k++) {
+        const a = pts[k], b = pts[k + 1];
+        const dx = b.x - a.x, dz = b.z - a.z, l = Math.hypot(dx, dz) || 1;
+        const px = -dz / l, pz = dx / l, ha = halfF(a), hb = halfF(b);
+        for (const s of [-1, 1]) buf.wall(a.x + px * s * ha, a.z + pz * s * ha, a.h + y0, a.h + y1, b.x + px * s * hb, b.z + pz * s * hb, b.h + y0, b.h + y1, c);
+      }
+    };
+    const fine = (pts: P[]): P[] => {
+      const out: P[] = [];
+      for (let k = 0; k + 1 < pts.length; k++) for (let j = 0; j < 6; j++) { const t = j / 6, a = pts[k], b = pts[k + 1]; out.push({ x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t, h: a.h + (b.h - a.h) * t }); }
+      out.push(pts[pts.length - 1]);
+      return out;
+    };
+    const sp = (p: P) => (islands.length ? islandSpread(islands, p.x, p.z) : 0);
     // 向きのついた箱（中心 cx, cz、u = 線路の向き）
     const obox = (cx: number, cz: number, ux: number, uz: number, a0: number, a1: number, o0: number, o1: number, y0: number, y1: number, c: THREE.Color) => {
       const px = -uz, pz = ux;
@@ -213,6 +241,23 @@ export class RailLayer {
               strip(B, pts, o - 0.72, 0.14, 0.3, COL.steel);
               strip(B, pts, o + 0.72, 0.14, 0.3, COL.steel);
             }
+          } else if (kind === 'erail' && islands.length && (sp(pts[0]) > 0 || sp(pts[pts.length - 1]) > 0 || sp({ x: cx, z: cz, h: ch }) > 0)) {
+            // 島式の駅の前後：線路が左右に広がる（床版も広げる）
+            const fp = fine(pts), W = ISLAND_GAP - T;
+            const half = (p: P) => 4.8 + W * sp(p);
+            stripF(B, fp, () => 0, (p) => 2 * half(p), 0, COL.deck);
+            sidesF(fp, half, -1.4, 0.6, COL.concrete);
+            for (const sg of [-1, 1]) {
+              const off = (p: P) => sg * (T + W * sp(p));
+              stripF(B, fp, off, () => 2.5, 0.18, COL.slab);
+              stripF(B, fp, (p) => off(p) - 0.72, () => 0.16, 0.36, COL.steel);
+              stripF(B, fp, (p) => off(p) + 0.72, () => 0.16, 0.36, COL.steel);
+              stripF(B, fp, off, () => 0.07, 6.0, COL.wire);
+            }
+            if (!stationCells.has(i)) {
+              sidesF(fp, (p) => half(p) - 0.05, 0.6, 2.6, COL.barrierGlass, G);
+              sidesF(fp, (p) => half(p) - 0.05, 2.6, 2.8, COL.barrierFrame);
+            }
           } else if (kind === 'erail') {
             // 床版（厚みのある側面）
             strip(B, pts, 0, 9.6, 0, COL.deck);
@@ -242,6 +287,7 @@ export class RailLayer {
           }
         }
         if (kind === 'erail') {
+          const spc = sp({ x: cx, z: cz, h: ch }), wid = (ISLAND_GAP - TRACK_GAP) * spc;
           // 線路の向き（まっすぐつながる向きを優先）
           let d = -1;
           for (let k = 0; k < 4; k++) if (m & (1 << k) && m & (1 << (k + 4))) { d = k; break; }
@@ -251,16 +297,16 @@ export class RailLayer {
           if (ch - ground > 2 && !(g.bstyle[i] && g.isWater(x, y))) {
             // ラーメン高架橋：左右2本の柱と横の梁。下が道路なら、柱は歩道の外側に
             const wide = g.road[i] !== 0;
-            const co = wide ? 6.9 : 3.3, bh = ch - 1.4;
+            const co = wide || spc > 0 ? 6.9 + (ISLAND_GAP - TRACK_GAP) * spc : 3.3, bh = ch - 1.4;
             for (const s of [-1, 1]) obox(cx, cz, ux, uz, -0.55, 0.55, s * co - 0.55, s * co + 0.55, ground - 0.5, bh, COL.concrete);
             obox(cx, cz, ux, uz, -0.6, 0.6, -co - 0.6, co + 0.6, bh - 1.1, bh, COL.concrete);
           }
-          // 架線柱（2マスおきの門型）
-          if ((x + y) % 2 === 0) {
-            const top = ch + 6.6;
-            for (const s of [-1, 1]) obox(cx, cz, ux, uz, -0.18, 0.18, s * 5.15 - 0.18, s * 5.15 + 0.18, ch + 0.6, top, COL.pole);
-            obox(cx, cz, ux, uz, -0.14, 0.14, -5.3, 5.3, top - 0.35, top, COL.pole);
-            for (const o of [-TRACK_GAP, TRACK_GAP]) obox(cx, cz, ux, uz, -0.05, 0.05, o - 0.05, o + 0.05, ch + 6.0, top - 0.35, COL.wire);
+          // 架線柱（2マスおきの門型）。駅の大屋根の下には立てない
+          if ((x + y) % 2 === 0 && !stationCells.has(i)) {
+            const top = ch + 6.6, ph = 5.15 + wid;
+            for (const s of [-1, 1]) obox(cx, cz, ux, uz, -0.18, 0.18, s * ph - 0.18, s * ph + 0.18, ch + 0.6, top, COL.pole);
+            obox(cx, cz, ux, uz, -0.14, 0.14, -ph - 0.15, ph + 0.15, top - 0.35, top, COL.pole);
+            for (const o of [-TRACK_GAP - wid, TRACK_GAP + wid]) obox(cx, cz, ux, uz, -0.05, 0.05, o - 0.05, o + 0.05, ch + 6.0, top - 0.35, COL.wire);
           }
         }
         if (kind === 'mono' && ch - ground > 2) {
@@ -322,27 +368,36 @@ const PC = {
 
 export class StationLayer {
   mesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true }));
+  // 夜だけ見える照明（屋根の下の灯り、看板、駅舎のガラスの明かり）
+  lights = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ vertexColors: true }));
   constructor() {
     this.mesh.castShadow = true;
     this.mesh.receiveShadow = true;
+    this.mesh.add(this.lights);
+    this.lights.visible = false;
   }
 
   rebuild(g: Grid, list: Building[]) {
-    const B = new Buf();
+    const B = new Buf(), LB = new Buf();
     const n = g.n;
     // 向きのついた箱：中心 (cx, cz)、u = 線路の向き、p = 横の向き。a0..a1 は u 方向、o0..o1 は p 方向
-    const obox = (cx: number, cz: number, ux: number, uz: number, a0: number, a1: number, o0: number, o1: number, y0: number, y1: number, c: THREE.Color) => {
+    const oboxB = (buf: Buf, cx: number, cz: number, ux: number, uz: number, a0: number, a1: number, o0: number, o1: number, y0: number, y1: number, c: THREE.Color) => {
       const px = -uz, pz = ux;
       const P = (a: number, o: number) => [cx + ux * a + px * o, cz + uz * a + pz * o];
       const q = [P(a0, o0), P(a1, o0), P(a1, o1), P(a0, o1)];
       for (let k = 0; k < 4; k++) {
         const [x0, z0] = q[k], [x1, z1] = q[(k + 1) % 4];
-        B.wall(x0, z0, y0, y1, x1, z1, y0, y1, c);
+        buf.wall(x0, z0, y0, y1, x1, z1, y0, y1, c);
       }
-      const t = q.map(([x, z]) => B.v(x, y1, z, c));
-      B.tri(t[0], t[1], t[2]);
-      B.tri(t[0], t[2], t[3]);
+      const t = q.map(([x, z]) => buf.v(x, y1, z, c));
+      buf.tri(t[0], t[1], t[2]);
+      buf.tri(t[0], t[2], t[3]);
+      // 下の面（屋根の裏など、下から見えるとき）
+      const bt = q.map(([x, z]) => buf.v(x, y0, z, c, 0, -1, 0));
+      buf.I.push(bt[0], bt[2], bt[1], bt[0], bt[3], bt[2]);
     };
+    const obox = (cx: number, cz: number, ux: number, uz: number, a0: number, a1: number, o0: number, o1: number, y0: number, y1: number, c: THREE.Color) => oboxB(B, cx, cz, ux, uz, a0, a1, o0, o1, y0, y1, c);
+    const light = (cx: number, cz: number, ux: number, uz: number, a0: number, a1: number, o0: number, o1: number, y0: number, y1: number, c: THREE.Color) => oboxB(LB, cx, cz, ux, uz, a0, a1, o0, o1, y0, y1, c);
     // 駅：敷地のある駅（まわりの線路にホーム）と、線路の上だけの高架駅
     const groups: { kind: LineKind; cells: number[]; bx: number; bz: number; trackOnly: boolean }[] = [];
     for (const b of list) {
@@ -388,7 +443,67 @@ export class StationLayer {
         const ground = Math.max(g.cellH(c % n, (c / n) | 0), WATER_LEVEL);
         const top = H + 1.1;
         const elevated = H - ground > 2;
-        for (const s of [-1, 1]) {
+        if (kind === 'erail') {
+          // ---- 高架鉄道の駅：相対式か島式のホーム、線路ごと覆う弓なりの大屋根、ホームドア、看板、ベンチ ----
+          const island = g.pstyle[c] === 1;
+          const T = TRACK_GAP, TI = 5.8;
+          const pf: [number, number][] = island ? [[-4.1, 4.1]] : [[-7.2, -3.75], [3.75, 7.2]];
+          for (const [o0, o1] of pf) {
+            obox(cx, cz, ux, uz, -half, half, o0, o1, elevated ? top - 0.6 : ground - 0.5, top, PC.slab);
+            // 点字ブロック（線路側のふち）
+            for (const [e0, e1] of island ? [[-3.8, -3.5], [3.5, 3.8]] : o0 < 0 ? [[-4.35, -4.05]] : [[4.05, 4.35]]) obox(cx, cz, ux, uz, -half, half, e0, e1, top, top + 0.03, PC.edge);
+          }
+          // ホームドア（腰の高さの白い壁と、暗いガラスの扉）
+          const doorO = island ? [-3.95, 3.95] : [-3.9, 3.9];
+          for (const o of doorO) for (let a = -half; a < half - 0.1; a += 4) {
+            obox(cx, cz, ux, uz, a, a + 2.3, o - 0.08, o + 0.08, top, top + 1.3, PC.hallWall);
+            obox(cx, cz, ux, uz, a + 2.3, Math.min(half, a + 4), o - 0.05, o + 0.05, top, top + 1.2, PC.hallGlass);
+          }
+          // 外側の風よけのガラス（相対式）
+          if (!island) for (const o of [-7.25, 7.25]) obox(cx, cz, ux, uz, -half, half, o - 0.06, o + 0.06, top, top + 2.6, PC.glass);
+          // 大屋根：線路とホームをまとめて覆う弓なりの屋根（真ん中は天窓の帯）
+          const R = 8.6, base = top + 5.6, rise = 2.2, NS = 20;
+          {
+            // なめらかな曲面（点ごとの法線）。上の面、裏の面、両端のふち（夜は光る帯）
+            const px = -uz, pz = ux, a0 = -half - 0.05, a1 = half + 0.05;
+            const yAt = (o: number) => base + rise * (1 - (o / R) ** 2);
+            const nAt = (o: number): [number, number, number] => { const sl = (2 * rise * o) / (R * R), l = Math.hypot(sl, 1); return [(px * sl) / l, 1 / l, (pz * sl) / l]; };
+            const V = (a: number, o: number, y: number) => [cx + ux * a + px * o, y, cz + uz * a + pz * o] as const;
+            for (let k = 0; k < NS; k++) {
+              const o0 = -R + (2 * R * k) / NS, o1 = o0 + (2 * R) / NS;
+              const col = k === NS / 2 - 1 || k === NS / 2 ? PC.glass : PC.hallWall;
+              const n0 = nAt(o0), n1 = nAt(o1);
+              const q = [V(a0, o0, yAt(o0)), V(a1, o0, yAt(o0)), V(a1, o1, yAt(o1)), V(a0, o1, yAt(o1))];
+              const ids = q.map((v, j) => B.v(v[0], v[1], v[2], col, ...(j < 2 ? n0 : n1)));
+              B.I.push(ids[0], ids[2], ids[1], ids[0], ids[3], ids[2]);
+              const ub = q.map((v) => B.v(v[0], v[1] - 0.35, v[2], PC.hallWall, 0, -1, 0));
+              B.I.push(ub[0], ub[1], ub[2], ub[0], ub[2], ub[3]);
+            }
+            for (const o of [-R, R]) {
+              const [x0, , z0] = V(a0, o, 0), [x1, , z1] = V(a1, o, 0), y = yAt(o);
+              B.wall(x0, z0, y - 0.6, y, x1, z1, y - 0.6, y, PC.hallWall);
+              LB.wall(x0 + px * Math.sign(o) * 0.02, z0 + pz * Math.sign(o) * 0.02, y - 0.5, y - 0.3, x1 + px * Math.sign(o) * 0.02, z1 + pz * Math.sign(o) * 0.02, y - 0.5, y - 0.3, new THREE.Color(0xbfe0ff));
+            }
+          }
+          // 柱：相対式は外側、島式はホームの真ん中に
+          for (const a of [-half * 0.5, half * 0.5]) for (const o of island ? [0] : [-7.6, 7.6]) obox(cx, cz, ux, uz, a - 0.25, a + 0.25, o - 0.25, o + 0.25, top, base + rise * (1 - (o / R) ** 2), PC.post);
+          // 屋根の下の灯り（夜）と、ベンチ
+          for (const [o0, o1] of pf) {
+            const om = (o0 + o1) / 2;
+            light(cx, cz, ux, uz, -half * 0.9, half * 0.9, om - 0.25, om + 0.25, base - 0.4, base - 0.25, new THREE.Color(0xfff3d0));
+            obox(cx, cz, ux, uz, -1, 1, om - 0.3, om + 0.3, top, top + 0.45, new THREE.Color(0x8a6a4a));
+          }
+          // 駅名標と発車標（駅のいちばん真ん中のマス）
+          if (c === bridgeCell) for (const [o0, o1] of pf) {
+            const om = (o0 + o1) / 2;
+            obox(cx, cz, ux, uz, -2, 2, om - 0.08, om + 0.08, top + 2.2, top + 3.0, PC.hallWall);
+            obox(cx, cz, ux, uz, -2, 2, om - 0.1, om + 0.1, top + 2.2, top + 2.4, PC.hallBand);
+            obox(cx, cz, ux, uz, 3, 5.6, om - 0.15, om + 0.15, top + 3.0, top + 3.7, new THREE.Color(0x1c1f22));
+            light(cx, cz, ux, uz, 3.1, 5.5, om - 0.18, om + 0.18, top + 3.1, top + 3.6, new THREE.Color(0xffb84a));
+          }
+          void T; void TI;
+        }
+        if (kind !== 'erail') for (const s of [-1, 1]) {
           const o0 = s * 3.75, o1 = s * 6.7;
           const lo = Math.min(o0, o1), hi = Math.max(o0, o1);
           obox(cx, cz, ux, uz, -half, half, lo, hi, elevated ? top - 0.5 : ground - 0.5, top, PC.slab);
@@ -402,10 +517,11 @@ export class StationLayer {
         }
         if (elevated && trackOnly && g.road[c]) {
           // 道路の上の駅：高架下は道路のまま。ホームの外側に、歩道へ降りる階段の塔と、柱だけ
-          for (const a of [-half * 0.7, half * 0.7]) for (const s of [-1, 1]) obox(cx, cz, ux, uz, a - 0.4, a + 0.4, s * 5.6 - 0.4, s * 5.6 + 0.4, ground, top - 0.5, PC.hallWall);
+          for (const a of [-half * 0.7, half * 0.7]) for (const s of [-1, 1]) obox(cx, cz, ux, uz, a - 0.4, a + 0.4, s * 6.9 - 0.4, s * 6.9 + 0.4, ground, top - 0.6, PC.hallWall);
           if (c === bridgeCell) {
             for (const s of [-1, 1]) {
-              const o0 = s * 6.7, o1 = s * 9.3;
+              const o0 = s * 7.4, o1 = s * 10;
+              light(cx, cz, ux, uz, -3.2, 3.2, Math.min(o0, o1) + 0.05, Math.max(o0, o1) - 0.05, ground + 0.4, ground + 2.9, new THREE.Color(0xffe9c0));
               obox(cx, cz, ux, uz, -3.5, 3.5, Math.min(o0, o1), Math.max(o0, o1), ground, top + 0.2, PC.hallWall);
               obox(cx, cz, ux, uz, -3.3, 3.3, Math.min(o0, o1) + 0.1, Math.max(o0, o1) - 0.1, ground + 0.3, ground + 3.0, PC.hallGlass);
               obox(cx, cz, ux, uz, -3.6, 3.6, Math.min(o0, o1) - 0.1, Math.max(o0, o1) + 0.1, top + 0.2, top + 0.6, PC.hallBand);
@@ -420,6 +536,8 @@ export class StationLayer {
           obox(cx, cz, ux, uz, -half, half, -3.7, 3.7, ground + 3.8, H - 1.3, PC.hallWall);
           for (const s of [-1, 1]) obox(cx, cz, ux, uz, -half, half, Math.min(s * 3.7, s * 6.7), Math.max(s * 3.7, s * 6.7), ground + 3.8, hallTop, PC.hallWall);
           obox(cx, cz, ux, uz, -half, half, -6.75, 6.75, ground + 4.4, ground + 4.9, PC.hallBand);
+          // 夜：駅舎のガラスの明かり
+          light(cx, cz, ux, uz, -half * 0.98, half * 0.98, -6.46, 6.46, ground + 0.6, ground + 3.6, new THREE.Color(0xffe9c0));
           // 1階の柱（ガラスの区切り）
           for (const a of [-half * 0.66, 0, half * 0.66]) for (const s of [-1, 1]) obox(cx, cz, ux, uz, a - 0.25, a + 0.25, s * 6.45 - 0.2, s * 6.45 + 0.2, ground + 0.4, ground + 3.8, PC.hallWall);
           // 入口のひさし（駅前広場の側）
@@ -428,6 +546,7 @@ export class StationLayer {
             const o0 = side * 6.7, o1 = side * 9.6;
             obox(cx, cz, ux, uz, -4, 4, Math.min(o0, o1), Math.max(o0, o1), ground + 3.6, ground + 3.9, PC.roof);
             obox(cx, cz, ux, uz, -3.2, 3.2, side * 6.72 - 0.05, side * 6.72 + 0.05, ground + 4.9, ground + 6.0, PC.hallBand);
+            light(cx, cz, ux, uz, -3.0, 3.0, side * 6.82 - 0.05, side * 6.82 + 0.05, ground + 5.0, ground + 5.9, new THREE.Color(0x4fb3ff)); // 駅名の看板
           }
         }
         if (c === bridgeCell && !elevated) {
@@ -441,5 +560,7 @@ export class StationLayer {
     }
     this.mesh.geometry.dispose();
     this.mesh.geometry = B.geometry();
+    this.lights.geometry.dispose();
+    this.lights.geometry = LB.geometry();
   }
 }

@@ -8,7 +8,7 @@ import type { Building } from '../sim/world';
 import { RailLayer, TRACK_GAP } from './railLayer';
 import { isUrbanHighway, urbanTurnOk } from '../sim/traffic';
 import { ROAD_LIFT } from './roadLayer';
-import { findTurnbacks, Turnback } from './turnback';
+import { findTurnbacks, Turnback, Island, islandSpread, ISLAND_GAP } from './turnback';
 import { boxTruck, cityBus, garbageTruck, trainCar, TRAIN_SPEC, TrainKind, hatchback, minivan, pickup, sedan, suv, tractor, trailerBox, trailerTank, vc } from './vehicles';
 
 const MAX_CARS = 1500;
@@ -361,6 +361,8 @@ export class CarLayer {
   private busStopBuildings = 0;
   // 線路の行き止まり（折り返し）。線路が変わったときに呼ぶ
   private turnbacks = new Map<string, Map<number, Turnback>>();
+  private islands: Island[] = [];
+  setIslands(islands: Island[]) { this.islands = islands; }
   setTurnbacks(g: Grid) {
     for (const k of ['rail', 'erail', 'mono', 'sub'] as const) this.turnbacks.set(k, findTurnbacks(g, k));
     for (const f of this.lineFleets) for (const c of f.cars) c.tbKey = -1;
@@ -640,11 +642,14 @@ export class CarLayer {
           const nCar = f.carsPer, sp = f.spacing, half = f.halfLen * 0.7;
           // 折り返しの手前の X 字の分岐器では、反対側の線路へ渡る
           const tb = this.endAhead(f, c);
+          const isl = f.track === 'erail' && this.islands.length ? this.islands : null;
           const laneAt = () => {
-            if (!tb) return lane;
+            // 島式の駅の前後では、線路が左右に広がる
+            const base = isl ? lane + (ISLAND_GAP - lane) * islandSpread(isl, P.x, P.z) : lane;
+            if (!tb) return base;
             const dist = (tb.ex - P.x) * tb.ux + (tb.ez - P.z) * tb.uz;
             const u = Math.max(0, Math.min(1, (tb.d0 - dist) / (tb.d0 - tb.d1)));
-            return lane * (1 - 2 * u * u * (3 - 2 * u));
+            return base * (1 - 2 * u * u * (3 - 2 * u));
           };
           for (let j = 0; j < nCar; j++) {
             this.placeBack(f, c, Math.max(0, j * sp - half));

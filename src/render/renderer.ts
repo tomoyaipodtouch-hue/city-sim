@@ -18,6 +18,7 @@ import { SkyDome } from './sky';
 import { updateAO } from './ao';
 import { PostFX } from './post';
 import { shared } from './materials';
+import { findIslands } from './turnback';
 
 export interface Quality {
   shadows: boolean;
@@ -233,8 +234,10 @@ export class CityRenderer {
       if (key !== this.lastRoadKey || heights) {
         this.lastRoadKey = key;
         this.roads.rebuild(g);
-        this.rails.rebuild(g, this.stationCells());
+        const isl = findIslands(g, this.buildingList);
+        this.rails.rebuild(g, this.stationCells(), isl);
         this.cars.setTurnbacks(g);
+        this.cars.setIslands(isl);
         this.lights.rebuild(g);
         this.dirty.trees = true; // 街路樹
         this.stationsMesh.rebuild(g, this.buildingList);
@@ -244,7 +247,7 @@ export class CityRenderer {
       // 駅が増えたり減ったりしたら、防音壁を開け直す
       const sc = this.stationCells();
       const sig = [...sc].sort((a, b) => a - b).join(',');
-      if (sig !== this.lastStationSig) { this.lastStationSig = sig; this.rails.rebuild(g, sc); }
+      if (sig !== this.lastStationSig) { this.lastStationSig = sig; const isl = findIslands(g, this.buildingList); this.rails.rebuild(g, sc, isl); this.cars.setIslands(isl); }
       if (this.buildings.update(g, this.buildingList, heights)) this.dirty.trees = true;
       updateAO(g, this.buildingList);
       this.lights.setBeacons(this.buildings.allBeacons());
@@ -278,7 +281,7 @@ export class CityRenderer {
     const N = g.n * g.n;
     for (let i = 0; i < N; i++) {
       if (!(g.road[i] | g.up[i] | g.pline[i] | g.rail[i] | g.erail[i] | g.mono[i] | g.sub[i] | g.bstop[i])) continue;
-      mix(g.rail[i] | (g.erail[i] << 8) | (g.mono[i] << 16) | (g.sub[i] << 24)); mix(g.bstop[i]); mix(g.bstyle[i]); mix(g.estn[i]);
+      mix(g.rail[i] | (g.erail[i] << 8) | (g.mono[i] << 16) | (g.sub[i] << 24)); mix(g.bstop[i]); mix(g.bstyle[i]); mix(g.estn[i]); mix(g.pstyle[i]);
       mix(i); mix(g.road[i]); mix(g.conn[i]); mix(g.up[i]); mix(g.conn1[i]); mix(g.pline[i]); mix(Math.round(g.upH[i] * 4)); mix(Math.round(g.deck[i] * 4)); mix(Math.round(g.lift[i] * 4));
     }
     if (this.roads.jctl.length) for (let i = 0; i < N; i++) if (this.roads.jctl[i]) { mix(i); mix(this.roads.jctl[i]); }
@@ -398,6 +401,7 @@ export class CityRenderer {
     if (day > 0.02) su.uSunDir.value.set(-Math.cos(az), Math.max(-0.05, elev), 0.45 - Math.sin(az) * 0.25).normalize();
     this.renderer.toneMappingExposure = 1.15 - 0.1 * night;
     shared.uNight.value = smooth(0.25, 0.85, night);
+    this.stationsMesh.lights.visible = shared.uNight.value > 0.3;
     // ガラスに映る空と太陽
     shared.uSunDir.value.copy(this.sunDir);
     shared.uSunCol.value.copy(sunCol).multiplyScalar(day);

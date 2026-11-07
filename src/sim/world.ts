@@ -8,7 +8,7 @@ import {
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
 import {
-  applyCloverleaf, applyDiamond, applyTerrain, applyURamp, linkURampMiddles, linkUrbanEnds, planTrees, planEStop, estopGroup, estopRoads, planURamp, snapRoadEnds, planTerrain, TerrainOp, applyRamp, applyTransitLine, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
+  applyCloverleaf, applyDiamond, applyTerrain, applyURamp, linkURampMiddles, linkUrbanEnds, planTrees, planEStop, estopGroup, estopRoads, platformCells, planURamp, snapRoadEnds, planTerrain, TerrainOp, applyRamp, applyTransitLine, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
 } from './plan';
 import { CELL } from './constants';
 import { ADVISORS, Advice, computeRating, Loan, LOAN_AMOUNTS, loanRate, makeAdvice, MAX_LOANS, newLoan, ordinanceCost, ordinanceEffects, OrdinanceEffects, OrdinanceId, ORDINANCES, payLoan, rewardUnlocked, REWARD_REQ } from './governance';
@@ -164,6 +164,7 @@ export type Command =
   | { t: 'funding'; dept: Dept; value: number }
   | { t: 'facilityFund'; id: number; value: number }
   | { t: 'rotate'; id: number }
+  | { t: 'platformStyle'; cell: number; style: number }
   | { t: 'ordinance'; id: OrdinanceId; on: boolean }
   | { t: 'loan'; amount: number }
   | { t: 'repay'; id: number }
@@ -579,6 +580,13 @@ export class World {
       case 'funding': {
         this.services.funding[c.dept] = Math.max(0, Math.min(150, Math.round(c.value)));
         this.updateStats();
+        return { ok: true };
+      }
+      case 'platformStyle': {
+        const cells = platformCells(g, c.cell, [...this.buildings.values()]);
+        if (!cells.length) return { ok: false, msg: '駅が見つかりません' };
+        for (const i of cells) g.pstyle[i] = c.style ? 1 : 0;
+        this.gridVersion++;
         return { ok: true };
       }
       case 'rotate': {

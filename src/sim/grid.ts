@@ -9,7 +9,7 @@
 import { CELL, DX, DY, WATER_LEVEL, opp } from './constants';
 
 // 同期・保存の対象になる配列の名前
-export const GRID_U8 = ['road', 'conn', 'flow', 'pline', 'zone', 'zden', 'tree', 'up', 'conn1', 'flow1', 'ictl', 'isplit', 'iflags', 'rail', 'erail', 'mono', 'sub', 'bstop', 'bstyle', 'estn'] as const;
+export const GRID_U8 = ['road', 'conn', 'flow', 'pline', 'zone', 'zden', 'tree', 'up', 'conn1', 'flow1', 'ictl', 'isplit', 'iflags', 'rail', 'erail', 'mono', 'sub', 'bstop', 'bstyle', 'estn', 'pstyle'] as const;
 export const GRID_F32 = ['deck', 'upH', 'lift'] as const;
 export const GRID_I32 = ['bldg'] as const;
 export type GridU8Key = (typeof GRID_U8)[number];
@@ -54,7 +54,8 @@ export class Grid {
   mono: Uint8Array; // モノレール
   sub: Uint8Array; // 地下鉄
   bstop: Uint8Array; // 道路に重ねて置いたバス停（1 = あり）
-  estn: Uint8Array; // 高架鉄道の線路の上だけの駅（ホームのマス = 1）
+  estn: Uint8Array;
+  pstyle: Uint8Array; // 高架鉄道の駅のホームの形（0 = 相対式、1 = 島式） // 高架鉄道の線路の上だけの駅（ホームのマス = 1）
   bstyle: Uint8Array; // 橋の形（0 = 桁橋、1 = 吊り橋、2 = 斜張橋、3 = トラス橋、4 = アーチ橋、5 = ラーメン橋）
   zone: Uint8Array; // ゾーンの種類
   zden: Uint8Array; // ゾーンの密度
@@ -77,6 +78,7 @@ export class Grid {
     this.ictl = new Uint8Array(c);
     this.bstyle = new Uint8Array(c);
     this.estn = new Uint8Array(c);
+    this.pstyle = new Uint8Array(c);
     this.isplit = new Uint8Array(c).fill(50);
     this.iflags = new Uint8Array(c);
     this.pline = new Uint8Array(c);

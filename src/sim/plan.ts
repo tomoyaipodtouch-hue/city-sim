@@ -1819,3 +1819,19 @@ export function planEStop(g: Grid, x: number, y: number): EStopPlan {
   }
   return fail('高架鉄道のまっすぐな区間（4マス）に置いてください', last);
 }
+
+// 高架鉄道の駅のホームのマス（線路の上だけの駅か、敷地のある高架駅のまわり）。駅でなければ空
+export function platformCells(g: Grid, cell: number, list: { type: string; x: number; y: number; w: number; h: number }[]): number[] {
+  const n = g.n;
+  if (!g.erail[cell]) return [];
+  if (g.estn[cell]) return estopGroup(g, cell).filter((c) => g.erail[c]);
+  const x = cell % n, y = (cell / n) | 0;
+  for (const b of list) {
+    if (b.type !== 'el_station') continue;
+    if (x < b.x - 1 || x > b.x + b.w || y < b.y - 1 || y > b.y + b.h) continue;
+    const out: number[] = [];
+    for (let yy = b.y - 1; yy <= b.y + b.h; yy++) for (let xx = b.x - 1; xx <= b.x + b.w; xx++) if (g.inb(xx, yy) && g.erail[g.idx(xx, yy)]) out.push(g.idx(xx, yy));
+    return out;
+  }
+  return [];
+}

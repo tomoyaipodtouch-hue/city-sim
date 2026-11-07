@@ -12,6 +12,7 @@ import type { SaveMeta } from '../save';
 import type { MapStyle } from '../sim/terrain';
 import type { NewCityOpts } from '../sim/protocol';
 import { BRIDGE_STYLES } from '../render/bridgeStyles';
+import { platformCells } from '../sim/plan';
 
 const ICONS: Record<string, string> = {
   road: '<path d="M8 21 10.5 3M16 21 13.5 3M12 6v2M12 11v2M12 16v2"/>',
@@ -484,6 +485,26 @@ export class Hud {
     }
     // 交差点の設定（地上の一般道で、3方向以上につながっている場所）
     this.junctionOpen = false;
+    // 高架鉄道の駅のホームの形
+    if (g.erail[i] && platformCells(g, i, [...this.game.buildings.values()]).length) {
+      const box = el('div', 'jpanel');
+      box.append(el('h5', '', 'ホームの形'));
+      const seg = el('div', 'seg');
+      ['相対式', '島式'].forEach((name, k) => {
+        const b = el('button', g.pstyle[i] === k ? 'on' : '', name);
+        b.onclick = () => {
+          sfx.click();
+          seg.querySelectorAll('button').forEach((x) => x.classList.remove('on'));
+          b.classList.add('on');
+          void this.game.exec({ t: 'platformStyle', cell: i, style: k });
+        };
+        seg.append(b);
+      });
+      box.append(seg);
+      box.append(el('p', 'muted', '島式は、駅の前後で線路が左右に広がり、線路の間に広いホームができます。'));
+      this.info.append(box);
+      this.junctionOpen = true;
+    }
     if ((g.road[i] && g.deck[i] > 0) || (g.erail[i] && g.isWater(c.x, c.y))) {
       this.junctionOpen = true;
       this.info.append(this.bridgePanel(i));
