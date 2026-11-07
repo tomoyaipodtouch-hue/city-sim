@@ -6,7 +6,8 @@ import { CIVIC, CivicId } from '../sim/defs';
 import type { Building } from '../sim/world';
 import { labelWater } from '../sim/plan';
 import { MeshBuilder } from './builder';
-import { airportLayout, bigNuclearScale, boat, containerShip, COOLING_TOWERS, INCIN_RAMP, plane, TERMINAL, terminalCranes } from './buildingGen';
+import { createBuildingMaterial } from './materials';
+import { airportLayout, bigContainerShip, bigNuclearScale, boat, containerShip, tugBoat, COOLING_TOWERS, INCIN_RAMP, plane, TERMINAL, terminalCranes } from './buildingGen';
 import { garbageTruck, tractor, vc } from './vehicles';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
@@ -26,10 +27,14 @@ interface Ship {
   acc: Float32Array; // 先頭からの距離
   berth: [number, number, number]; // 岸壁での位置と向き
   big?: boolean; // 大型コンテナターミナルの大きな船
+  variant?: number; // 船体の色の種類
+  sea?: [number, number]; // 岸壁から沖への向き（単位ベクトル）
+  slideFrom?: [number, number]; // 横にスライドしはじめる沖の点
   t: number; // 周期の中の時刻（秒）
   hd: number; // 今の向き
 }
 const SHIP_LEN = 110, SHIP_SPEED = 9, DOCK_SECS = 70, AWAY_SECS = 50;
+const BIG_LEN = 200, BIG_BEAM = 30, SLIDE_IN = 50, SLIDE_OUT = 38, BIG_DOCK = 110;
 interface Runway {
   x: number;
   z: number;
@@ -67,6 +72,10 @@ export class PropsLayer {
   private ships: Ship[] = [];
   private shipMesh: THREE.InstancedMesh;
   private bigShipMesh!: THREE.InstancedMesh;
+  private bigShipMeshes!: THREE.InstancedMesh[];
+  private tugs!: THREE.InstancedMesh;
+  private ropes!: THREE.InstancedMesh;
+  private wakes!: THREE.InstancedMesh;
   private trolleys!: THREE.InstancedMesh;
   private cables!: THREE.InstancedMesh;
   private boxes!: THREE.InstancedMesh;
@@ -92,14 +101,26 @@ export class PropsLayer {
     ];
     this.planes = new THREE.InstancedMesh(geo((mb) => plane(mb, 0, 0, 1)), mat, 20);
     this.shipMesh = new THREE.InstancedMesh(geo((mb) => containerShip(mb, SHIP_LEN, 7)), mat, 40);
-    this.bigShipMesh = new THREE.InstancedMesh(geo((mb) => containerShip(mb, 230, 11)), mat, 20);
+    // 大きなコンテナ船：船体の色ちがいを 4 種類
+    // 窓・夜の灯りが出るように、建物と同じマテリアル
+    const bmat = createBuildingMaterial();
+    this.bigShipMeshes = [0x1d2f4f, 0x1f4a35, 0x23466e, 0x6b1f22].map((c, i) => new THREE.InstancedMesh(geo((mb) => bigContainerShip(mb, BIG_LEN, BIG_BEAM, new THREE.Color(c), 31 + i * 7)), bmat, 8));
+    this.bigShipMesh = this.bigShipMeshes[0];
+    this.tugs = new THREE.InstancedMesh(geo((mb) => tugBoat(mb)), bmat, 40);
+    this.ropes = new THREE.InstancedMesh(new THREE.BoxGeometry(0.18, 0.18, 1).translate(0, 0, 0.5), new THREE.MeshLambertMaterial({ color: 0xd9d2b8 }), 80);
+    // 航跡：船尾から後ろへ広がる白い三角（だんだん薄く）
+    const wg = new THREE.BufferGeometry();
+    wg.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, -1, 0, -1, 1, 0, -1, -0.15, 0, 0, 0.15, 0, 0, 0, 0, -1], 3));
+    wg.setAttribute('color', new THREE.Float32BufferAttribute([1, 1, 1, 0.55, 0.62, 0.66, 0.55, 0.62, 0.66, 1, 1, 1, 1, 1, 1, 0.55, 0.62, 0.66], 3));
+    wg.setIndex([0, 2, 1]);
+    this.wakes = new THREE.InstancedMesh(wg, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide }), 20);
     // ガントリークレーンのトロリー、吊り具とワイヤー、運ぶコンテナ、コンテナ車
     this.trolleys = new THREE.InstancedMesh(new THREE.BoxGeometry(5, 2.6, 6), new THREE.MeshLambertMaterial({ color: 0xf2f3f4 }), 60);
     this.cables = new THREE.InstancedMesh(new THREE.BoxGeometry(0.12, 1, 0.12).translate(0, -0.5, 0), new THREE.MeshLambertMaterial({ color: 0x30343a }), 120);
     this.boxes = new THREE.InstancedMesh(new THREE.BoxGeometry(12.2, 2.6, 2.5), new THREE.MeshLambertMaterial({ color: 0xffffff }), 120);
     const chassis = vc(new THREE.BoxGeometry(2.4, 0.4, 12.6).translate(0, 1.15, -7.6), 0x2a2d31);
     this.yardTrucks = new THREE.InstancedMesh(mergeGeometries([tractor(), chassis])!, mat, 60);
-    for (const m of [this.bigShipMesh, this.trolleys, this.cables, this.boxes, this.yardTrucks]) {
+    for (const m of [...this.bigShipMeshes, this.tugs, this.ropes, this.wakes, this.trolleys, this.cables, this.boxes, this.yardTrucks]) {
       m.count = 0;
       m.castShadow = true;
       m.frustumCulled = false;
@@ -268,13 +289,24 @@ export class PropsLayer {
     const [W, D] = lotDepth(b);
     const big = b.type === 'seaport_l';
     const [bx, bz] = lotToWorld(b, 0, -D / 2 - (big ? 22 : 13));
-    const [ax, az] = lotToWorld(b, 0, -D / 2 - (big ? 110 : 55));
+    const [ax, az] = lotToWorld(b, 0, -D / 2 - (big ? 22 + 70 : 55));
     const acx = Math.floor(ax / CELL), acy = Math.floor(az / CELL);
     if (g.inb(acx, acy) && water.label[acy * n + acx] === body && clear(acy * n + acx, keep[keep.length - 2] ?? keep[0])) {
       pts.pop();
       pts.push([ax, az]);
     }
     void W;
+    // 大きな船：岸壁と平行に、少し手前から沖の点へ入ってくる（そこから横にスライドして接岸する）
+    let slideFrom: [number, number] | undefined;
+    if (big) {
+      const [px2, pz2] = pts[pts.length - 1];
+      const [qx, qz] = lotToWorld(b, 300, -D / 2 - 92);
+      const qcx = Math.floor(qx / CELL), qcy = Math.floor(qz / CELL);
+      if (Math.hypot(px2 - ax, pz2 - az) < 1) {
+        if (g.inb(qcx, qcy) && water.label[qcy * n + qcx] === body) pts.splice(pts.length - 1, 0, [qx, qz]);
+        slideFrom = [ax, az];
+      }
+    }
     const [fx, fz] = lotToWorld(b, 1, 0), [f0x, f0z] = lotToWorld(b, 0, 0);
     const berthHd = Math.atan2(-(fx - f0x), -(fz - f0z)); // 敷地の -x 向き（到着した向きのまま）
     const px = new Float32Array(pts.length), pz = new Float32Array(pts.length), acc = new Float32Array(pts.length);
@@ -287,7 +319,8 @@ export class PropsLayer {
     const cycle = (2 * L) / SHIP_SPEED + DOCK_SECS + AWAY_SECS + 40;
     for (let k = 0; k < count; k++) {
       const prevShip = old.find((s) => s.berth[0] === bx && s.berth[1] === bz && old.indexOf(s) % 2 === k % 2);
-      this.ships.push({ px, pz, acc, berth: [bx, bz, berthHd], t: prevShip?.t ?? (k * cycle) / 2 + Math.random() * 20, hd: prevShip?.hd ?? 0, big });
+      const [sx0, sz0] = lotToWorld(b, 0, -1), [sx1, sz1] = lotToWorld(b, 0, 0);
+      this.ships.push({ px, pz, acc, berth: [bx, bz, berthHd], t: prevShip?.t ?? (k * cycle) / 2 + Math.random() * 20, hd: prevShip?.hd ?? 0, big, variant: prevShip?.variant ?? Math.floor(Math.random() * 4), sea: [sx0 - sx1, sz0 - sz1], slideFrom });
     }
   }
 
@@ -301,9 +334,85 @@ export class PropsLayer {
     return [s.px[k - 1] + dx * u, s.pz[k - 1] + dz * u, Math.atan2(dx, dz)];
   }
 
+  // 大きな船の接岸：岸壁と平行に沖の点まで来て止まり、タグボート 2 隻に押されて真横にスライドして接岸する。
+  // 停泊中は係留ロープを張り、出港はタグボートに引かれて横に離れてから、向きを変えて外洋へ
+  private updateBigShip(s: Ship, dt: number, cnt: { big: number[]; tug: number; rope: number; wake: number }) {
+    const L = s.acc[s.acc.length - 1], run = L / SHIP_SPEED;
+    // 入港は、最後の 300m を半分の速さで（そのぶん時間がかかる）
+    const slowLen = Math.min(300, L), t1 = (L - slowLen) / SHIP_SPEED, runIn = t1 + slowLen / (SHIP_SPEED * 0.5);
+    const cycle = runIn + run + SLIDE_IN + BIG_DOCK + SLIDE_OUT + AWAY_SECS;
+    s.t = (s.t + dt) % cycle;
+    let t = s.t, x: number, z: number, hd: number, moving = false;
+    let tugGap = -1; // タグボートと船のすき間（-1 = 出ていない）
+    const [sfx, sfz] = s.slideFrom!, [bx, bz, bh] = s.berth, sea = s.sea!;
+    const ease = (u: number) => u * u * (3 - 2 * u);
+    if (t < runIn) {
+      const d = t < t1 ? t * SHIP_SPEED : L - slowLen + (t - t1) * SHIP_SPEED * 0.5;
+      [x, z, hd] = this.along(s, Math.min(L, d));
+      moving = true;
+      if (t > runIn - 30) tugGap = 4 + (runIn - t) * 1.5;
+    } else if ((t -= runIn) < SLIDE_IN) {
+      const u = ease(t / SLIDE_IN);
+      x = sfx + (bx - sfx) * u; z = sfz + (bz - sfz) * u; hd = bh;
+      tugGap = 0.5;
+    } else if ((t -= SLIDE_IN) < BIG_DOCK) {
+      x = bx; z = bz; hd = bh;
+      if (t < 20) tugGap = 0.5 + t * 2;
+      else if (t > BIG_DOCK - 20) tugGap = 0.5 + (BIG_DOCK - t) * 2;
+      // 係留ロープ（船首・船尾・2 本のスプリング）
+      const fx = Math.sin(hd), fz = Math.cos(hd);
+      const toQuay = 19, half = BIG_BEAM / 2;
+      for (const [sa, qa] of [[0.44, 0.58], [-0.44, -0.58], [0.2, 0.02], [-0.2, -0.02]]) {
+        const p = new THREE.Vector3(x + fx * sa * BIG_LEN - sea[0] * half, 9.5, z + fz * sa * BIG_LEN - sea[1] * half);
+        const q = new THREE.Vector3(x + fx * qa * BIG_LEN - sea[0] * toQuay, 0.8, z + fz * qa * BIG_LEN - sea[1] * toQuay);
+        const dir = q.clone().sub(p), len = dir.length();
+        this.mtx.compose(p, new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir.normalize()), new THREE.Vector3(1, 1, len));
+        if (cnt.rope < 80) this.ropes.setMatrixAt(cnt.rope++, this.mtx);
+      }
+    } else if ((t -= BIG_DOCK) < SLIDE_OUT) {
+      const u = ease(t / SLIDE_OUT);
+      x = bx + (sfx - bx) * u; z = bz + (sfz - bz) * u; hd = bh;
+      tugGap = 0.5;
+    } else if ((t -= SLIDE_OUT) < run) {
+      [x, z, hd] = this.along(s, L - t * SHIP_SPEED);
+      hd += Math.PI;
+      moving = true;
+      if (t < 30) tugGap = 4 + t * 1.5;
+    } else return;
+    // 向きはゆっくり変える
+    let dh = hd - s.hd;
+    dh = Math.atan2(Math.sin(dh), Math.cos(dh));
+    s.hd += dh * Math.min(1, dt * 0.35);
+    if (dt === 0 && s.hd === 0) s.hd = hd;
+    const fx = Math.sin(s.hd), fz = Math.cos(s.hd);
+    this.q.setFromAxisAngle(this.up, s.hd);
+    this.mtx.compose(new THREE.Vector3(x, 0, z), this.q, new THREE.Vector3(1, 1, 1));
+    const vi = s.variant ?? 0;
+    if (cnt.big[vi] < 8) this.bigShipMeshes[vi].setMatrixAt(cnt.big[vi]++, this.mtx);
+    // タグボート：船の沖側に 2 隻、船の方を向いて押す
+    if (tugGap >= 0) {
+      const th = Math.atan2(-sea[0], -sea[1]);
+      for (const a of [0.28, -0.28]) {
+        const off = BIG_BEAM / 2 + 8.5 + tugGap;
+        const tx = x + fx * a * BIG_LEN + sea[0] * off, tz = z + fz * a * BIG_LEN + sea[1] * off;
+        this.q.setFromAxisAngle(this.up, th + Math.sin(this.steamT * 0.7 + a * 10) * 0.04);
+        this.mtx.compose(new THREE.Vector3(tx, 0, tz), this.q, new THREE.Vector3(1, 1, 1));
+        if (cnt.tug < 40) this.tugs.setMatrixAt(cnt.tug++, this.mtx);
+      }
+    }
+    // 航跡（走っているとき、船尾から後ろへ）
+    if (moving && cnt.wake < 20) {
+      this.q.setFromAxisAngle(this.up, s.hd);
+      this.mtx.compose(new THREE.Vector3(x - fx * BIG_LEN * 0.5, 0.25, z - fz * BIG_LEN * 0.5), this.q, new THREE.Vector3(BIG_BEAM * 0.9, 1, 170));
+      this.wakes.setMatrixAt(cnt.wake++, this.mtx);
+    }
+  }
+
   private updateShips(dt: number) {
     let k = 0, kb = 0;
+    const cnt = { big: [0, 0, 0, 0], tug: 0, rope: 0, wake: 0 };
     for (const s of this.ships) {
+      if (s.big && s.slideFrom) { this.updateBigShip(s, dt, cnt); continue; }
       const L = s.acc[s.acc.length - 1], run = L / SHIP_SPEED, fin = 20; // fin = 岸壁に寄せる時間
       const cycle = 2 * run + 2 * fin + DOCK_SECS + AWAY_SECS;
       s.t = (s.t + dt) % cycle;
@@ -335,8 +444,9 @@ export class PropsLayer {
     }
     this.shipMesh.count = k;
     this.shipMesh.instanceMatrix.needsUpdate = true;
-    this.bigShipMesh.count = kb;
-    this.bigShipMesh.instanceMatrix.needsUpdate = true;
+    this.bigShipMeshes.forEach((m, i) => { m.count = i === 0 ? Math.max(kb, cnt.big[0]) : cnt.big[i]; m.instanceMatrix.needsUpdate = true; });
+    this.tugs.count = cnt.tug; this.ropes.count = cnt.rope; this.wakes.count = cnt.wake;
+    for (const m of [this.tugs, this.ropes, this.wakes]) m.instanceMatrix.needsUpdate = true;
   }
 
   private updateSteam(dt: number) {

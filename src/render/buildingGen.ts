@@ -2737,6 +2737,89 @@ function modernFire(mb: MeshBuilder, f: LotFrame, tf: TF, big: boolean) {
   tf(-hw + 2, -hd + 2, 0.8);
 }
 
+// ================= 大型コンテナ船（船首が +z、喫水線が y = 0）=================
+// hull = 会社カラー。船体は先がとがった形、喫水線の下は赤、境目に黒い帯。甲板には区画ごとにコンテナとラッシングブリッジ、
+// 後ろ寄りに白い居住区（窓）と張り出した操舵室、帯の入った煙突。夜は航海灯（左舷 赤・右舷 緑）と甲板の照明
+export function bigContainerShip(mb: MeshBuilder, L: number, B: number, hull: THREE.Color, seed: number) {
+  const rng = new Rng(seed);
+  const deckY = 9, botY = -12;
+  const red = C(0x9a2a22), black = C(0x1c1f22), deckC = C(0x55595e), white = C(0xf2f3f1), grey = C(0x9aa1a7);
+  const N = 40;
+  // 船の幅（半分）：船尾は少しだけ細く、船首の 2 割でとがる
+  const half = (u: number) => {
+    if (u < 0.04) return (B / 2) * (0.86 + 0.14 * (u / 0.04));
+    if (u > 0.8) { const t = (u - 0.8) / 0.2; return (B / 2) * Math.max(0.02, Math.sqrt(1 - t * t * t)); }
+    return B / 2;
+  };
+  const zAt = (u: number) => -L / 2 + u * L;
+  // 側面：3 つの色の帯（赤・黒・会社カラー）。船首は上へ少し反る
+  const bands: [number, number, THREE.Color][] = [[botY, 1.4, red], [1.4, 2.6, black], [2.6, deckY, hull]];
+  for (let i = 0; i < N; i++) {
+    const u0 = i / N, u1 = (i + 1) / N, z0 = zAt(u0), z1 = zAt(u1), w0 = half(u0), w1 = half(u1);
+    const sheer = (u: number) => (u > 0.85 ? ((u - 0.85) / 0.15) * 2.5 : 0);
+    for (const [ya, yb, col] of bands) {
+      const yb0 = yb === deckY ? deckY + sheer(u0) : yb, yb1 = yb === deckY ? deckY + sheer(u1) : yb;
+      for (const sd of [-1, 1]) {
+        // 外向きの法線：(sd, 0, -sd·w')
+        const wp = (w1 - w0) / (z1 - z0), l = Math.hypot(1, wp), n: [number, number, number] = [sd / l, 0, (-sd * wp) / l];
+        const A: [number, number, number] = [sd * w0, ya, z0], Bp: [number, number, number] = [sd * w1, ya, z1], Cp: [number, number, number] = [sd * w1, yb1, z1], Dp: [number, number, number] = [sd * w0, yb0, z0];
+        if (sd > 0) mb.quadN(Bp, A, Dp, Cp, n, n, n, n, col); else mb.quadN(A, Bp, Cp, Dp, n, n, n, n, col);
+      }
+    }
+    // 甲板
+    const s0 = deckY + (u0 > 0.85 ? ((u0 - 0.85) / 0.15) * 2.5 : 0), s1 = deckY + (u1 > 0.85 ? ((u1 - 0.85) / 0.15) * 2.5 : 0);
+    mb.quad([-w0, s0, z0], [-w1, s1, z1], [w1, s1, z1], [w0, s0, z0], deckC);
+  }
+  // 船尾の平らな面（トランサム）
+  for (const [ya, yb, col] of bands) mb.quad([half(0), ya, -L / 2], [-half(0), ya, -L / 2], [-half(0), yb, -L / 2], [half(0), yb, -L / 2], col);
+  // 船首楼の波よけ（白）
+  const zf = zAt(0.84);
+  mb.box(-half(0.84) + 0.5, deckY + 1.5, zf - 1, half(0.84) - 0.5, deckY + 5, zf, white);
+  // 居住区（後ろ寄り）と操舵室、マスト、煙突
+  const za = zAt(0.16);
+  mb.box(-B / 2 + 4, deckY, za - 8, B / 2 - 4, deckY + 26, za + 6, white, PAT.apartment, white);
+  mb.box(-B / 2 - 2, deckY + 26, za - 4, B / 2 + 2, deckY + 29, za + 6, white, PAT.none, white);
+  mb.box(-B / 2 + 3, deckY + 26.4, za + 6, B / 2 - 3, deckY + 28.6, za + 6.3, C(0x2a3440), PAT.fullglass);
+  mb.box(-0.4, deckY + 29, za, 0.4, deckY + 38, za + 0.8, grey);
+  mb.box(-0.6, deckY + 38, za - 0.2, 0.6, deckY + 39, za + 1, C(0xfffbe8), PAT.glow); // マストの白い灯り
+  litBox(mb, B / 2 + 1.4, deckY + 27, za + 5, 0.6, C(0xff3030)); // 左舷（船首から見て左 = +x）は赤
+  litBox(mb, -B / 2 - 1.4, deckY + 27, za + 5, 0.6, C(0x30ff60)); // 右舷は緑
+  const zfun = za - 14;
+  mb.box(-4.5, deckY, zfun - 4, 4.5, deckY + 34, zfun + 4, hull);
+  mb.box(-4.6, deckY + 26, zfun - 4.1, 4.6, deckY + 29, zfun + 4.1, white);
+  mb.box(-4.6, deckY + 34, zfun - 4.1, 4.6, deckY + 35, zfun + 4.1, black);
+  // コンテナ：区画（40 フィート = 12.2m）ごとに、ハッチの上に積む。区画の間にラッシングブリッジ
+  const cols = [0xc0392b, 0x2e6da4, 0xd9a400, 0x4c7a3b, 0x8a9097, 0xd35400, 0xe8e8e8, 0x1f6f8b, 0x7a3e9d, 0x8b5a2b].map((h) => new THREE.Color(h));
+  const bayL = 12.6, gap = 1.6;
+  const zStart = za + 10, zEnd = zf - 6;
+  for (let z = zStart; z + bayL <= zEnd; z += bayL + gap) {
+    const u = (z + bayL / 2 + L / 2) / L, w = Math.min(half(u), half((z + bayL + L / 2) / L)) - 1.2;
+    const rows = Math.max(2, Math.floor((2 * w) / 2.5));
+    const x0 = -(rows * 2.5) / 2;
+    mb.box(x0 - 0.3, deckY, z, -x0 + 0.3, deckY + 1.2, z + bayL, grey); // ハッチ
+    for (let r = 0; r < rows; r++) {
+      const tiers = 3 + rng.int(4) - (r === 0 || r === rows - 1 ? 1 : 0);
+      for (let t = 0; t < tiers; t++) mb.box(x0 + r * 2.5 + 0.05, deckY + 1.2 + t * 2.6, z + 0.1, x0 + (r + 1) * 2.5 - 0.05, deckY + 1.2 + t * 2.6 + 2.5, z + bayL - 0.1, rng.pick(cols));
+    }
+    // ラッシングブリッジ（区画の後ろ側）と、甲板の照明
+    const zb = z - gap / 2;
+    for (const x of [x0, 0, -x0]) mb.box(x - 0.2, deckY, zb - 0.2, x + 0.2, deckY + 8, zb + 0.2, grey);
+    mb.box(x0, deckY + 7.6, zb - 0.3, -x0, deckY + 8, zb + 0.3, grey);
+    mb.box(-0.4, deckY + 8, zb - 0.3, 0.4, deckY + 8.5, zb + 0.3, C(0xfff3d0), PAT.glow);
+  }
+}
+const litBox = (mb: MeshBuilder, x: number, y: number, z: number, r: number, c: THREE.Color) => mb.box(x - r, y - r, z - r, x + r, y + r, z + r, c, PAT.glow, c);
+
+// タグボート（船首が +z）：赤い船体、白い操舵室、黒い防舷材
+export function tugBoat(mb: MeshBuilder) {
+  const red = C(0xc0392b), white = C(0xf2f3f1), black = C(0x1c1f22);
+  mb.prism([[-3.2, -6], [3.2, -6], [3.4, 4], [0, 8], [-3.4, 4]], -1.5, 2.2, red, PAT.none, C(0x55595e));
+  mb.prism([[-3.5, -6.3], [3.5, -6.3], [3.7, 4.2], [0, 8.4], [-3.7, 4.2]], 1.2, 2.0, black, PAT.none, black);
+  mb.box(-2, 2.2, -1.5, 2, 5.5, 3, white, PAT.apartment, white);
+  mb.box(-1.6, 5.5, 0, 1.6, 7, 2.6, white, PAT.none, white);
+  mb.box(-0.6, 5.5, -3.5, 0.6, 9, -2.5, C(0xd9a400));
+}
+
 // ================= 大型コンテナターミナル =================
 // 敷地の奥（-z）が岸壁。長い方向（x）に沿って岸壁があり、ガントリークレーンが並ぶ。
 // クレーンの位置と高さは propsLayer（トロリーの動き）でも使う
