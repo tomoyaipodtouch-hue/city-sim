@@ -696,15 +696,14 @@ export class TreeLayer {
   private heroR = 0;
   private heroDirty = true;
   private fwd = new THREE.Vector3();
-  // 高画質（画面を一度別の場所に描いてから仕上げる）のときは、近くの木を広い範囲でくわしくし、葉の影も作る
-  private hq = false;
+  // 高画質のときは、近くの木を広い範囲でくわしくし、葉の影も作る（CityRenderer.setQuality が設定する）
+  hq = false;
   private heroHq = false;
-  private grab = (r: THREE.WebGLRenderer, _s: THREE.Scene, cam: THREE.Camera) => {
+  private grab = (_r: THREE.WebGLRenderer, _s: THREE.Scene, cam: THREE.Camera) => {
     const c = cam as THREE.PerspectiveCamera;
     // 水面の映り込みなどのカメラは使わない（地面より上の、ふつうの画角のカメラだけ）
     if (!c.isPerspectiveCamera || c.fov > 80 || c.position.y <= 0) return;
     this.cam = c;
-    this.hq = r.getRenderTarget() !== null;
   };
 
   constructor() {
