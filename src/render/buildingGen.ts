@@ -2742,7 +2742,8 @@ function modernFire(mb: MeshBuilder, f: LotFrame, tf: TF, big: boolean) {
 // クレーンの位置と高さは propsLayer（トロリーの動き）でも使う
 export const TERMINAL = { boomY: 46, apron: 40, seaRail: 6, landRail: 36, boomOut: 52 };
 export function terminalCranes(W: number): number[] {
-  const n = Math.max(3, Math.min(6, Math.floor(W / 36)));
+  // 実際のターミナルのように、クレーンどうしは 50m 以上あける（この大きさで 3 基）
+  const n = Math.max(2, Math.min(3, Math.floor(W / 64)));
   const out: number[] = [];
   for (let k = 0; k < n; k++) out.push(-W / 2 + 22 + ((W - 44) * (k + 0.5)) / n);
   return out;
