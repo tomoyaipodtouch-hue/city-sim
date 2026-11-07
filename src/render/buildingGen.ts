@@ -1480,6 +1480,15 @@ function chamferTower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: nu
 function highrise(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, office: boolean, luxury: boolean) {
   const r = rng.next();
   const big = Math.min(f.W, f.D) >= 30;
+  // 近未来的な形（24 階以上の約 3 割）：楕円で上へ細くなる塔、しずく形の塔、ダイアグリッド（オフィスのみ）
+  if (floors >= 24) {
+    const r2 = rng.next();
+    if (r2 < 0.3) {
+      const pick = rng.next();
+      if (!office) return pick < 0.5 ? bulletTower(mb, f, rng, tf, floors, false) : dropTower(mb, f, rng, tf, floors, false);
+      return pick < 0.34 ? bulletTower(mb, f, rng, tf, floors, true) : pick < 0.67 ? dropTower(mb, f, rng, tf, floors, true) : diagridTower(mb, f, rng, tf, floors);
+    }
+  }
   if (!office) {
     // 香港のような細長い十字形の集合住宅
     if (floors >= 22 && r < 0.35) return crossTowers(mb, f, rng, tf, floors);
@@ -1497,6 +1506,110 @@ function highrise(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number
   if (designs[k] === tower && floors >= 45) k = 0;
   if (!big && designs[k] === twinTowers) k = 1;
   designs[k](mb, f, rng, tf, floors, office, luxury);
+}
+
+// ---- 近未来的な高層ビル ----
+// 楕円で上へなめらかに細くなり、頭が丸い塔（弾丸のような形）
+function bulletTower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, office: boolean) {
+  const glass = office ? rng.pick(GLASS) : rng.pick(TOWER_WALL);
+  const p = podiumBase(mb, f, rng, tf, MW, floors);
+  const fh = office ? 3.8 : 3.1, H = floors * fh;
+  const Rx = Math.min(22, p.size * 0.42), Rz = Rx * (0.62 + rng.next() * 0.2);
+  const ell = (k: number): P2[] => { const o: P2[] = []; for (let i = 0; i < 40; i++) { const a = (i / 40) * Math.PI * 2; o.push([p.cx + Math.cos(a) * Rx * k, p.cz + Math.sin(a) * Rz * k]); } return o; };
+  // 胴：上へいくほど細く（下 1.0 → 上 0.78）、頭：丸く閉じる
+  const pat = office ? officePat === PAT.office ? PAT.curtain : officePat : resPat;
+  const segs = 10;
+  for (let k = 0; k < segs; k++) {
+    const t0 = k / segs, t1 = (k + 1) / segs;
+    const s0 = 1 - 0.22 * t0 * t0, s1 = 1 - 0.22 * t1 * t1;
+    mb.prism(ell(s0), p.y + H * 0.85 * t0, p.y + H * 0.85 * t1, glass, pat, null, ell(s1));
+  }
+  const capY = p.y + H * 0.85, cap = H * 0.15 + Rz * 0.4;
+  const rings = 8;
+  for (let k = 0; k < rings; k++) {
+    const a0 = (k / rings) * Math.PI / 2, a1 = ((k + 1) / rings) * Math.PI / 2;
+    const s0 = 0.78 * Math.cos(a0), s1 = Math.max(0.02, 0.78 * Math.cos(a1));
+    mb.prism(ell(s0), capY + Math.sin(a0) * cap, capY + Math.sin(a1) * cap, glass, k < 3 ? pat : PAT.fullglass, k === rings - 1 ? MW2 : null, ell(s1));
+  }
+  // 頂部の光るリング
+  mb.prism(ell(0.79), capY - 0.4, capY + 0.4, C(0xdfe6ee), PAT.glow, null, ell(0.79));
+}
+
+// しずく形の塔：片側がとがった平面で、上へいくほど少しずつねじれる
+function dropTower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, office: boolean) {
+  const glass = office ? rng.pick(GLASS) : rng.pick(TOWER_WALL);
+  const p = podiumBase(mb, f, rng, tf, MW, floors);
+  const fh = office ? 3.8 : 3.1, H = floors * fh;
+  const R = Math.min(15, p.size * 0.3), tip = R * 1.9;
+  const twist = (0.5 + rng.next() * 0.5) * (rng.next() < 0.5 ? 1 : -1);
+  // 円と、とがった先をなめらかにつなぐ（凸な形）
+  const shape = (rot: number, k: number): P2[] => {
+    const o: P2[] = [];
+    const ta = Math.acos(R / tip); // 接線の角度
+    for (let i = 0; i <= 32; i++) {
+      const a = ta + (i / 32) * (Math.PI * 2 - 2 * ta);
+      o.push([Math.cos(a) * R, Math.sin(a) * R]);
+    }
+    o.push([tip, 0]);
+    return o.map(([x, z]) => { const c = Math.cos(rot), s = Math.sin(rot); return [p.cx - tip * 0.25 * k + (x * c - z * s) * k, p.cz + (x * s + z * c) * k] as P2; });
+  };
+  const pat = office ? officePat === PAT.office ? PAT.curtain : officePat : resPat;
+  const segs = 12;
+  for (let k = 0; k < segs; k++) {
+    const t0 = k / segs, t1 = (k + 1) / segs;
+    mb.prism(shape(twist * t0, 1 - 0.12 * t0), p.y + H * t0, p.y + H * t1, glass, pat, k === segs - 1 ? MW2 : null, shape(twist * t1, 1 - 0.12 * t1));
+  }
+  // 頂部：とがった先が上へのびる細いアンテナ
+  mb.prism(shape(twist, 0.88).map(([x, z]) => [x, z] as P2), p.y + H, p.y + H + 0.6, C(0xdfe6ee), PAT.glow, MW2);
+  spire(mb, p.cx, p.cz, p.y + H, 14 + rng.next() * 16);
+}
+
+// ダイアグリッド：角の丸い四角のガラスの塔に、外側の斜め格子の骨組み（白い太い格子か、シルバーの細い格子）
+function diagridTower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number) {
+  const glass = rng.pick(GLASS);
+  const p = podiumBase(mb, f, rng, tf, MW, floors);
+  const H = floors * 3.8;
+  const w = Math.min(34, p.size * 0.62), d = Math.min(30, p.size * 0.55);
+  const thick = rng.next() < 0.5;
+  const col = thick ? MW : C(0xb8bfc6), bw = thick ? 1.1 : 0.45;
+  mb.prism(rrect(p.cx, p.cz, w, d, 3), p.y, p.y + H, glass, PAT.fullglass, MW2);
+  // 斜め格子：各面に、45 度の帯を X 字に交差させる（面の少し外側）
+  const M = thick ? 16 : 11; // 格子のひとこまの高さ
+  const faces: [number, number, number, number, number, number][] = [
+    [p.cx - w / 2 + 3, p.cz + d / 2 + 0.25, p.cx + w / 2 - 3, p.cz + d / 2 + 0.25, 0, 1],
+    [p.cx + w / 2 - 3, p.cz - d / 2 - 0.25, p.cx - w / 2 + 3, p.cz - d / 2 - 0.25, 0, -1],
+    [p.cx + w / 2 + 0.25, p.cz + d / 2 - 3, p.cx + w / 2 + 0.25, p.cz - d / 2 + 3, 1, 0],
+    [p.cx - w / 2 - 0.25, p.cz - d / 2 + 3, p.cx - w / 2 - 0.25, p.cz + d / 2 - 3, -1, 0],
+  ];
+  for (const [ax, az, bx, bz, nx, nz] of faces) {
+    const L = Math.hypot(bx - ax, bz - az), ux = (bx - ax) / L, uz = (bz - az) / L;
+    const n = Math.max(2, Math.round(L / M));
+    const cw = L / n; // ひとこまの幅
+    const P = (u: number, y: number): [number, number, number] => [ax + ux * u + nx * 0.05, y, az + uz * u + nz * 0.05];
+    const strut = (u0: number, y0: number, u1: number, y1: number) => {
+      // 斜めの帯（幅 bw）を、面に沿った細い四角形で描く
+      const dl = Math.hypot(u1 - u0, y1 - y0), pu = (-(y1 - y0) / dl) * bw / 2, py = ((u1 - u0) / dl) * bw / 2;
+      const a = P(u0 - pu, y0 - py), b = P(u1 - pu, y1 - py), c = P(u1 + pu, y1 + py), e = P(u0 + pu, y0 + py);
+      // 面の外向き（nx, nz）に表が向くように、頂点の順番を選ぶ
+      const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], e2 = [e[0] - a[0], e[1] - a[1], e[2] - a[2]];
+      const cxn = e1[1] * e2[2] - e1[2] * e2[1], czn = e1[0] * e2[1] - e1[1] * e2[0];
+      const nn: [number, number, number] = [nx, 0, nz];
+      if (cxn * nx + czn * nz > 0) mb.quadN(a, b, c, e, nn, nn, nn, nn, col);
+      else mb.quadN(a, e, c, b, nn, nn, nn, nn, col);
+    };
+    for (let y = p.y; y < p.y + H - 0.1; y += M) {
+      const y1 = Math.min(p.y + H, y + M);
+      for (let i = 0; i < n; i++) {
+        const u0 = i * cw, u1 = (i + 1) * cw;
+        strut(u0, y, u1, y1);
+        strut(u1, y, u0, y1);
+      }
+      // 節（横の帯）
+      mb.box(Math.min(ax, bx) - (nx ? 0.15 : 0), y1 - bw / 2, Math.min(az, bz) - (nz ? 0.15 : 0), Math.max(ax, bx) + (nx ? 0.15 : 0), y1 + bw / 2, Math.max(az, bz) + (nz ? 0.15 : 0), col);
+    }
+  }
+  glassParapet(mb, p.cx - w / 2 + 1, p.cz - d / 2 + 1, p.cx + w / 2 - 1, p.cz + d / 2 - 1, p.y + H, glass, 3);
+  if (floors >= 30) helipad(mb, p.cx, p.cz, p.y + H + 0.4, Math.min(w, d) * 0.3);
 }
 
 // 低層部（店舗やロビー）。上の塔の中心を返す
