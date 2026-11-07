@@ -545,19 +545,18 @@ function treeMaterial(lod: number, conifer: boolean, cards = false) {
         '#include <color_fragment>',
         `#include <color_fragment>
         ${
-          lod < 2
-            ? `// 葉の房（大きい房と細かい葉）。針葉樹は細かめ
+          cards
+            ? `// 葉の板：明るさは絵の葉ごとの明るさで決める（3D の模様は使わず軽くする）
+        float lf = clamp((sampledDiffuseColor.r - 0.5) * 2.0, 0.0, 1.0);
+        vec3 lg = vec3(0.0);
+        float bk = 0.5;`
+            : lod < 2
+            ? `// 葉の房の模様。針葉樹は細かめ
         vec3 lp = vLeafP * ${conifer ? '1.6' : '1.0'};
         vec4 n1 = texture(uLeafTex, lp * 0.19);
-        ${
-          lod === 0
-            ? `vec4 n2 = texture(uLeafTex, lp * vec3(0.52, 0.46, 0.52) + 0.31);
-        float lf = n1.a * 0.62 + n2.a * 0.38;
-        vec3 lg = (n1.rgb - 0.5) * 0.75 + (n2.rgb - 0.5) * 0.4;`
-            : `// ふつうの距離では細かい葉は見えないので、大きい房だけ
+        // 細かい葉は近くでは葉の板で表し、ふつうの距離では見えないので、大きい房の模様だけ使う
         float lf = n1.a;
-        vec3 lg = (n1.rgb - 0.5) * 0.9;`
-        }
+        vec3 lg = (n1.rgb - 0.5) * 0.9;
         // 樹皮は縦のすじ
         float bk = 0.5;
         if (vLeaf < 0.5) bk = texture(uLeafTex, vLeafP * vec3(1.6, 0.18, 1.6)).a;`
@@ -566,7 +565,7 @@ function treeMaterial(lod: number, conifer: boolean, cards = false) {
         // 房のすき間は奥が見えて暗い。日が当たる房は少し黄色っぽく
         float gap = mix(0.5, 1.0, smoothstep(0.1, 0.38, lf));
         vec3 leafC = (0.58 + 0.72 * lf) * gap * mix(vec3(0.93, 0.97, 1.08), vec3(1.06, 1.03, 0.9), lf);
-        diffuseColor.rgb *= mix(vec3(0.75 + 0.5 * bk), leafC, vLeaf)${lod === 2 && conifer ? ' * 1.3' : ''};
+        diffuseColor.rgb *= mix(vec3(0.75 + 0.5 * bk), leafC, vLeaf)${lod === 2 ? (conifer ? ' * 1.3' : ' * 1.12') : ''};
         gSun = mix(1.0, 0.4 + 1.2 * lf, vLeaf);`,
       )
       .replace(
@@ -641,7 +640,7 @@ const SHAPE: V3[][] = [
 const hex = (h: number) => new THREE.Color(h);
 // 夏の緑（少しずつ違う）、赤むらさきの葉（ベニバスモモ）、黄緑の葉（ニセアカシア 'フリーシア'）
 const GREENS = [0x557a2c, 0x5f8434, 0x4a6e2a, 0x6a8c38, 0x587d36, 0x748f3a, 0x4f7034, 0x678a3c, 0x5c7a2e, 0x4b7330].map(hex);
-const COPPER = [0x6a4440, 0x5e3f48].map(hex);
+const COPPER = [0x5c4440, 0x52404a].map(hex);
 const GOLDEN = [0x8e9e44, 0x99a24c].map(hex);
 const DARKS = [0x2f5532, 0x37603a, 0x2c4e34, 0x3a6036, 0x30583f, 0x42673a].map(hex);
 
@@ -658,7 +657,7 @@ function pickSpecies(kind: number, src: number, h: number, h2: number): Pick {
     acc += w[k];
     if (h < acc) { shape = k; break; }
   }
-  const cp = src === 0 ? 0.02 : src === 1 ? 0.07 : 0.08, gd = src === 0 ? 0.03 : src === 1 ? 0.05 : 0.04;
+  const cp = src === 0 ? 0.015 : src === 1 ? 0.035 : 0.06, gd = src === 0 ? 0.03 : src === 1 ? 0.045 : 0.04;
   const color = h2 < cp ? COPPER[Math.floor((h2 / cp) * COPPER.length)] : h2 < cp + gd ? GOLDEN[Math.floor(((h2 - cp) / gd) * GOLDEN.length)] : GREENS[Math.floor(((h2 - cp - gd) / (1 - cp - gd)) * GREENS.length) % GREENS.length];
   return { shape, color };
 }
@@ -737,6 +736,8 @@ export class TreeLayer {
       cards.castShadow = false;
       cards.receiveShadow = true;
       cards.customDepthMaterial = treeDepthMaterial(k === 1, false, true);
+      // 板を先に描くと、その奥の芯の面は色の計算をせずに済む
+      cards.renderOrder = -1;
       this.group.add(cards);
       return cards;
     });
@@ -789,7 +790,7 @@ export class TreeLayer {
     const fwd = this.fwd.set(0, 0, -1).applyQuaternion(cam.quaternion);
     const tx = cam.position.x + fwd.x * dist, tz = cam.position.z + fwd.z * dist;
     const cx = tx + (cam.position.x - tx) * 0.25, cz = tz + (cam.position.z - tz) * 0.25;
-    const R = hq ? Math.min(170, Math.max(60, dist * 1.3 + 25)) : Math.min(120, Math.max(50, dist * 1.0 + 18));
+    const R = hq ? Math.min(170, Math.max(60, dist * 1.3 + 25)) : Math.min(100, Math.max(45, dist * 0.85 + 12));
     const moved = Math.hypot(cx - this.heroAt.x, cz - this.heroAt.z);
     if (!this.heroDirty && moved < R * 0.12 && Math.abs(R - this.heroR) < R * 0.1) return;
     this.heroDirty = false;
