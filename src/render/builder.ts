@@ -244,7 +244,9 @@ export class MeshBuilder {
       const yi = ty ? ty[i] : y1, yj = ty ? ty[j] : y1;
       if (n >= 12) {
         // 角の多い柱（丸い塔）は、中心から外向きの法線でなめらかに見せる
-        const nI = (k: number): [number, number, number] => { const dx = b[k][0] - cx, dz = b[k][1] - cz, l = Math.hypot(dx, dz) || 1; return [dx / l, 0, dz / l]; };
+        // 頂点の法線 = となりの2つの辺の外向きの法線の平均（角の丸い四角でも、まっすぐな壁は平らに見える）
+        const en = (k: number): [number, number] => { const k2 = (k + 1) % n, ex = b[k2][0] - b[k][0], ez = b[k2][1] - b[k][1], l = Math.hypot(ex, ez) || 1; return [ez / l, -ex / l]; };
+        const nI = (k: number): [number, number, number] => { const [ax, az] = en((k + n - 1) % n), [bx2, bz2] = en(k); let x = ax + bx2, z = az + bz2; const l = Math.hypot(x, z) || 1; x /= l; z /= l; const dx = b[k][0] - cx, dz = b[k][1] - cz; if (x * dx + z * dz < 0) { x = -x; z = -z; } return [x, 0, z]; };
         this.quadN([b[i][0], y0, b[i][1]], [b[j][0], y0, b[j][1]], [t[j][0], yj, t[j][1]], [t[i][0], yi, t[i][1]], nI(i), nI(j), nI(j), nI(i), wall, pat, len, Math.max(yi, yj) - y0, u, 0);
       } else this.quad([b[i][0], y0, b[i][1]], [b[j][0], y0, b[j][1]], [t[j][0], yj, t[j][1]], [t[i][0], yi, t[i][1]], wall, pat, len, Math.max(yi, yj) - y0, u, 0);
       u += len;
