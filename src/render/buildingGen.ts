@@ -2446,71 +2446,298 @@ function recycling(mb: MeshBuilder, f: LotFrame, rng: Rng) {
   for (let k = 0; k < 4; k++) mb.box(f.W / 2 - 10, 0, -f.D / 2 + 3 + k * 6, f.W / 2 - 4, 2.4, -f.D / 2 + 7.5 + k * 6, rng.pick([BLUE, GREEN, PALETTE.accent[3]]));
 }
 
-// ハイテク産業：低層のガラスの研究所と、緑の多い敷地
+// ハイテク産業：敷地の大きさで種類を変える（どれも白・ガラス・四角が基本）
+//  ・小さい敷地（1×2・2×1）：縦のフィンの研究棟
+//  ・2×2：縦のフィンの研究棟、またはデータセンター
+//  ・3×2・2×3：研究キャンパス（2棟を渡り廊下でつなぎ、間は緑の中庭）、またはデータセンター
+//  ・3×3 以上：半導体工場（白い大きな棟、屋上の設備、事務棟、設備棟、ガスのタンク）、または波打つ大屋根のテック本社
 function hightech(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
-  // 研究所 7 割、データセンター 3 割
-  if (rng.next() < 0.3) return dataCenter(mb, f, rng, tf, den);
-  return researchLab(mb, f, rng, tf, den);
+  const cells = Math.round((f.W * f.D) / (CELL * CELL));
+  const r = rng.next();
+  if (cells <= 2) return finLabLot(mb, f, rng, tf, den);
+  if (cells <= 4) return r < 0.6 ? finLabLot(mb, f, rng, tf, den) : dataCenter(mb, f, rng, tf, den);
+  if (cells <= 6) return r < 0.55 ? labCampus(mb, f, rng, tf, den) : dataCenter(mb, f, rng, tf, den);
+  return r < 0.65 ? semiFab(mb, f, rng, tf, den) : techHQ(mb, f, rng, tf);
 }
 
-// 研究所：ゆるく弧を描く横長のガラス棟（2〜3階）。屋上は緑と太陽光パネル、弧の内側は中庭
-function researchLab(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
+const IH = {
+  glass: C(0x46647f), deepGlass: C(0x3a5570), panel: [C(0xdedcd5), C(0xcfccc3), C(0xe8e6e0), C(0xc3c0b7)],
+  solar: C(0x22385a), silver: [C(0xa9b6c4), C(0xb6c2cf), C(0x9eacbb)], blue: C(0x4fb3ff), red: C(0xff3b30),
+  fence: C(0x8d949b), tank: C(0xeef0f2), cars: [0xf2f2f2, 0x2b2b2b, 0x9a1d1d, 0x1d3f8a, 0x8a8f96, 0xd8d8d8, 0x3b5d3a, 0x101820, 0xb8bcc0].map(C),
+};
+
+// 駐車場：白線の区画と、止まっている車（7割ほど）。区画は手前（+z）向きと奥向きの2列
+function ihParking(mb: MeshBuilder, rng: Rng, x0: number, z0: number, x1: number, z1: number) {
+  mb.ground(x0, z0, x1, z1, 0.1, PALETTE.asphalt);
+  const rows: [number, number][] = z1 - z0 >= 15 ? [[z0 + 0.4, z0 + 5.4], [z1 - 5.4, z1 - 0.4]] : [[z0 + 0.4, z0 + 5.4]];
+  for (const [ra, rb] of rows)
+    for (let x = x0 + 1; x + 2.5 < x1 - 0.5; x += 2.6) {
+      mb.ground(x, ra, x + 0.12, rb, 0.12, PALETTE.white);
+      if (rng.next() < 0.7) {
+        const cx = x + 1.3, cz = (ra + rb) / 2, col = IH.cars[Math.floor(rng.next() * IH.cars.length)];
+        mb.box(cx - 0.85, 0.25, cz - 2.1, cx + 0.85, 1.0, cz + 2.1, col);
+        mb.box(cx - 0.75, 1.0, cz - 1.0, cx + 0.75, 1.45, cz + 1.1, C(0x2a3440), PAT.none, col);
+      }
+    }
+}
+
+// 縦のフィンの研究棟：1階は奥まったガラス、上の階は濃いガラスの壁の前に、深さがなめらかに変わる白い縦のフィン（4面）
+function finLab(mb: MeshBuilder, rng: Rng, x0: number, z0: number, x1: number, z1: number, h: number) {
+  const gH = 4.2, y0 = gH + 0.5;
+  mb.box(x0 + 1, 0, z0 + 1, x1 - 1, gH, z1 - 1, MGL, PAT.fullglass, MW2);
+  mb.box(x0, gH, z0, x1, y0, z1, MW, PAT.none, MW);
+  mb.box(x0 + 0.3, y0, z0 + 0.3, x1 - 0.3, h, z1 - 0.3, IH.glass, PAT.curtain, MW2);
+  const ph = rng.next() * 6, S = 1.3, T = 0.13;
+  const depth = (t: number) => 0.35 + 1.1 * (0.5 + 0.5 * Math.sin(t * 0.21 + ph));
+  const W = x1 - x0, D = z1 - z0;
+  for (let x = x0 + 0.8; x < x1 - 0.5; x += S) {
+    const t = x - x0;
+    mb.box(x - T, y0, z1 - 0.3, x + T, h, z1 - 0.3 + depth(t), MW);
+    mb.box(x - T, y0, z0 + 0.3 - depth(2 * W + D - t), x + T, h, z0 + 0.3, MW);
+  }
+  for (let z = z0 + 0.8; z < z1 - 0.5; z += S) {
+    const t = z - z0;
+    mb.box(x1 - 0.3, y0, z - T, x1 - 0.3 + depth(W + D - t), h, z + T, MW);
+    mb.box(x0 + 0.3 - depth(2 * W + D + t), y0, z - T, x0 + 0.3, h, z + T, MW);
+  }
+  // 屋根のスラブ（張り出し）と、屋上の太陽光パネル、機械室
+  mb.box(x0 - 0.8, h, z0 - 0.8, x1 + 0.8, h + 0.8, z1 + 0.8, MW, PAT.none, MW2);
+  for (let z = z0 + 1.5; z < z1 - 2; z += 2.6) mb.box(x0 + 1.5, h + 0.8, z, x1 - 1.5, h + 1.25, z + 1.6, IH.solar, PAT.none, IH.solar);
+  if (W > 14 && D > 12) mb.box((x0 + x1) / 2 - 3, h + 0.8, (z0 + z1) / 2 - 2, (x0 + x1) / 2 + 3, h + 3, (z0 + z1) / 2 + 2, MW2, PAT.industrial, C(0xc9cdd2));
+}
+
+// 入口のひさしと、光る社名サイン
+function ihEntrance(mb: MeshBuilder, cx: number, z: number, accent: THREE.Color) {
+  mb.box(cx - 5, 3.6, z - 0.5, cx + 5, 4.1, z + 3.5, MW, PAT.none, MW2);
+  for (const x of [cx - 4.6, cx + 4.6]) mb.box(x - 0.12, 0, z + 3.0, x + 0.12, 3.6, z + 3.3, MW2);
+  litSign(mb, cx - 3, 4.15, z + 3.3, cx + 3, 4.75, z + 3.45, accent);
+}
+
+const IH_ACCENT = [C(0x4fb3ff), C(0x35d0ba), C(0xf2f4f7), C(0x7c9cff)];
+
+// 縦のフィンの研究棟だけの敷地（小さい敷地・2×2）
+function finLabLot(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
   const hw = f.W / 2, hd = f.D / 2;
   mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.07, PALETTE.lawn2);
-  const glass = rng.pick([C(0x5f8fb8), C(0x6aa3a0), C(0x8fa8c0), C(0x4f7fae)]);
-  const h = 8 + den * 3.5, depth = Math.min(12, f.D * 0.3);
-  // 弧：中心は奥（-z）の外、半径は敷地の幅から決める
-  const span = f.W - 6, R = span * 0.9, cz = -hd - R * 0.55 + f.D * 0.55;
-  const a0 = -Math.asin(Math.min(0.95, span / 2 / R)), a1 = -a0;
-  const N = 20;
-  const ring = (r: number): P2[] => { const o: P2[] = []; for (let i = 0; i <= N; i++) { const a = a0 + ((a1 - a0) * i) / N; o.push([Math.sin(a) * r, cz + Math.cos(a) * r]); } return o; };
-  const outer = ring(R), inner = ring(R - depth);
-  // 弧の帯を小さな四角柱に分けて立てる（どれも凸）
-  for (let i = 0; i < N; i++) {
-    const poly: P2[] = [outer[i], outer[i + 1], inner[i + 1], inner[i]];
-    mb.prism(poly, 0, h, glass, PAT.curtain, null);
-    // 屋上：緑と、ふち
-    mb.prism(poly, h, h + 0.5, MW, PAT.none, i % 3 === 1 ? C(0x1d3557) : C(0x6f9a4c));
-  }
-  // 中庭（弧の内側）：芝生と小道と池
-  mb.ground(-span / 2 + 4, -hd + 2, span / 2 - 4, inner[N >> 1][1] - 2, 0.09, PALETTE.lawn);
-  mb.ground(-1.2, -hd + 2, 1.2, inner[N >> 1][1] - 2, 0.1, PALETTE.pavement);
-  mb.ground(-span * 0.25, -hd + 3, -span * 0.25 + 8, -hd + 7, 0.12, PALETTE.water);
-  // 入口（正面、弧の外側の真ん中）
-  const [ex, ez] = outer[N >> 1];
-  mb.prism(rrect(ex, ez + 1.5, 10, 4, 1.8), 0, h + 1, MGL, PAT.fullglass, MW);
-  mb.ground(-hw + 1, hd - 4, hw - 1, hd - 0.5, 0.1, PALETTE.asphalt);
-  for (let k = 0; k < 6; k++) tf(-span / 2 + 6 + (k * (span - 12)) / 5, -hd + 2.5 + (k % 2) * 2, 0.8 + rng.next() * 0.4);
+  const small = f.W < 20 || f.D < 20;
+  const park = small ? 0 : 10;
+  const x0 = -hw + 2.5, x1 = hw - 2.5, z0 = -hd + 2.5, z1 = hd - 3 - park;
+  const h = 11 + den * 3.5 + Math.floor(rng.next() * 2) * 3.5;
+  finLab(mb, rng, x0, z0, x1, z1, h);
+  ihEntrance(mb, 0, z1 + 0.8, rng.pick(IH_ACCENT));
+  if (park) ihParking(mb, rng, -hw + 1.5, hd - park, hw - 1.5, hd - 0.6);
+  else mb.ground(-3, z1 + 1, 3, hd - 0.3, 0.1, PALETTE.pavement);
+  for (const x of [-hw + 1.2, hw - 1.2]) tf(x, (z0 + z1) / 2, 0.8 + rng.next() * 0.3);
 }
 
-// データセンター：窓の少ない白い箱。夜に青く光る細い帯、屋上の冷却ファンの列、横に非常用発電機と燃料タンク
+// 研究キャンパス：2棟の研究棟を、2階の高さのガラスの渡り廊下でつなぐ。間は芝生と小道と水盤の中庭
+function labCampus(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
+  const hw = f.W / 2, hd = f.D / 2;
+  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.07, PALETTE.lawn2);
+  ihParking(mb, rng, -hw + 1.5, hd - 10, hw - 1.5, hd - 0.6);
+  const zb = hd - 12, h1 = 11 + den * 3.5, h2 = h1 + 3.5 * (1 + Math.floor(rng.next() * 2));
+  const gap = 10;
+  let A: [number, number, number, number], B: [number, number, number, number];
+  if (f.W >= f.D) {
+    const mid = rng.next() * 4 - 2;
+    A = [-hw + 2.5, -hd + 2.5, mid - gap / 2, zb];
+    B = [mid + gap / 2, -hd + 2.5, hw - 2.5, zb];
+  } else {
+    const mid = (zb - hd) / 2 + rng.next() * 4 - 2;
+    A = [-hw + 2.5, -hd + 2.5, hw - 2.5, mid - gap / 2];
+    B = [-hw + 2.5, mid + gap / 2, hw - 2.5, zb];
+  }
+  finLab(mb, rng, A[0], A[1], A[2], A[3], h2);
+  // もう1棟は、白い横長の窓の帯の研究棟（形を変えて単調にしない）
+  mBlock(mb, B[0], B[1], B[2], B[3], h1, { pat: PAT.ribbon, overhang: 1.2, band: rng.pick(IH_ACCENT) });
+  // 中庭：芝生、小道、水盤、木
+  const alongX = f.W >= f.D;
+  const c0 = alongX ? A[2] : A[3], c1 = alongX ? B[0] : B[1];
+  if (alongX) {
+    mb.ground(c0 + 0.5, -hd + 2.5, c1 - 0.5, zb, 0.09, PALETTE.lawn);
+    mb.ground((c0 + c1) / 2 - 1.2, -hd + 2.5, (c0 + c1) / 2 + 1.2, hd - 10, 0.1, PALETTE.pavement);
+    mb.ground(c0 + 1.2, -hd + 5, (c0 + c1) / 2 - 1.8, -hd + 12, 0.11, PALETTE.water);
+    for (let z = -hd + 15; z < zb - 2; z += 7) tf(c1 - 2.2, z, 0.7 + rng.next() * 0.3);
+  } else {
+    mb.ground(-hw + 2.5, c0 + 0.5, hw - 2.5, c1 - 0.5, 0.09, PALETTE.lawn);
+    mb.ground(-1.2, c0 + 0.5, 1.2, hd - 10, 0.1, PALETTE.pavement);
+    mb.ground(-hw + 5, c0 + 1.2, -3, (c0 + c1) / 2 + 1, 0.11, PALETTE.water);
+    for (let x = 4; x < hw - 3; x += 6) tf(x, (c0 + c1) / 2, 0.7 + rng.next() * 0.3);
+  }
+  // ガラスの渡り廊下（2〜3階の高さ）
+  const by0 = 5.5, by1 = 9;
+  if (alongX) {
+    const z = (-hd + 2.5 + zb) / 2;
+    mb.box(c0 - 0.2, by0, z - 2.2, c1 + 0.2, by1, z + 2.2, MGL, PAT.fullglass, MW);
+    mb.box(c0 - 0.2, by0 - 0.5, z - 2.4, c1 + 0.2, by0, z + 2.4, MW, PAT.none, MW);
+  } else {
+    mb.box(-2.2, by0, c0 - 0.2, 2.2, by1, c1 + 0.2, MGL, PAT.fullglass, MW);
+    mb.box(-2.4, by0 - 0.5, c0 - 0.2, 2.4, by0, c1 + 0.2, MW, PAT.none, MW);
+  }
+  ihEntrance(mb, alongX ? (B[0] + B[2]) / 2 : 0, zb + 0.3, rng.pick(IH_ACCENT));
+}
+
+// データセンター：ランダムな濃淡と出っ張りのコンクリートパネルの壁。正面に飛び出したガラスの入口。
+// パネルのすき間の一部は夜に青く光る。屋上の冷却ファン、横の設備ヤード（チラー、発電機、目隠しの柵）
 function dataCenter(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
   const hw = f.W / 2, hd = f.D / 2;
   mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.08, PALETTE.concrete);
-  const h = 10 + den * 3;
-  const x0 = -hw + 4, x1 = hw - 12, z0 = -hd + 4, z1 = hd - 8;
-  mb.prism(rrect((x0 + x1) / 2, (z0 + z1) / 2, x1 - x0, z1 - z0, 2), 0, h, MW, PAT.none, C(0xd5d9dd));
-  // 光る帯（2本）
-  const blue = C(0x4fb3ff);
-  for (const y of [h * 0.35, h * 0.7]) mb.prism(rrect((x0 + x1) / 2, (z0 + z1) / 2, x1 - x0 + 0.2, z1 - z0 + 0.2, 2.1), y, y + 0.35, blue, PAT.lit, null);
-  // 入口（ガラス）
-  mb.box(-4, 0, z1, 4, 4, z1 + 0.4, MGL, PAT.fullglass, MW);
-  // 屋上の冷却ファンの列
+  const h = 11 + den * 3;
+  const yard = f.W >= 40 ? 13 : 0;
+  const x0 = -hw + 3, x1 = hw - 3 - yard, z0 = -hd + 3, z1 = hd - (f.D >= 40 ? 13 : 9);
+  // 中の箱と屋上
+  mb.box(x0 + 0.4, 0, z0 + 0.4, x1 - 0.4, h, z1 - 0.4, C(0xb9b6ad), PAT.none, C(0xd5d9dd));
+  // パネル（幅 3.2m、高さいっぱい）
+  const PW = 3.2;
+  const panelFace = (ax: number, az: number, bx: number, bz: number, nx: number, nz: number) => {
+    const L = Math.hypot(bx - ax, bz - az), n = Math.max(1, Math.round(L / PW)), tx = (bx - ax) / L, tz = (bz - az) / L;
+    for (let k = 0; k < n; k++) {
+      const s0 = (k / n) * L + 0.05, s1 = ((k + 1) / n) * L - 0.05;
+      const out = [0, 0.15, 0.3][Math.floor(rng.next() * 3)], col = IH.panel[Math.floor(rng.next() * IH.panel.length)];
+      const px0 = ax + tx * s0, pz0 = az + tz * s0, px1 = ax + tx * s1, pz1 = az + tz * s1;
+      const ox = nx * out, oz = nz * out;
+      mb.box(Math.min(px0, px1 + ox), 0, Math.min(pz0, pz1 + oz), Math.max(px0, px1 + ox), h, Math.max(pz0, pz1 + oz), col, PAT.none, C(0xd5d9dd));
+      // パネルのすき間の青い光の筋（ところどころ）
+      if (k % 4 === 2) {
+        const gx = ax + tx * (s1 + 0.05), gz = az + tz * (s1 + 0.05);
+        litSign(mb, gx - 0.06 + nx * 0.05, 1.2, gz - 0.06 + nz * 0.05, gx + 0.06 + nx * 0.1, h - 1.2, gz + 0.06 + nz * 0.1, IH.blue);
+      }
+    }
+  };
+  panelFace(x0, z1, x1, z1, 0, 1);
+  panelFace(x0, z0, x1, z0, 0, -1);
+  panelFace(x1, z0, x1, z1, 1, 0);
+  panelFace(x0, z0, x0, z1, -1, 0);
+  mb.box(x0 - 0.1, h, z0 - 0.1, x1 + 0.1, h + 0.6, z1 + 0.1, C(0xd9d7d0), PAT.none, C(0xd5d9dd));
+  // ガラスの入口（正面に飛び出す）
+  const ex = (x0 + x1) / 2;
+  mb.box(ex - 5, 0, z1, ex + 5, 6.5, z1 + 3.5, MGL, PAT.fullglass, MW);
+  mb.box(ex - 5.4, 6.5, z1 - 0.2, ex + 5.4, 7.1, z1 + 3.9, MW, PAT.none, MW2);
+  litSign(mb, ex - 3, 5.2, z1 + 3.5, ex + 3, 5.8, z1 + 3.65, IH.blue);
+  // 屋上の冷却ファン
   const dark = C(0x3c434b);
-  for (let x = x0 + 3; x < x1 - 3; x += 5) for (let z = z0 + 3; z < z1 - 3; z += 5) {
-    mb.box(x - 2, h, z - 2, x + 2, h + 1.6, z + 2, C(0xb9bfc5));
-    mb.cylinder(x, z, h + 1.6, h + 1.7, 1.6, 16, dark, dark);
+  for (let x = x0 + 4; x < x1 - 3; x += 5.5) for (let z = z0 + 4; z < z1 - 3; z += 5.5) {
+    mb.box(x - 2, h + 0.6, z - 2, x + 2, h + 2, z + 2, C(0xb9bfc5));
+    mb.cylinder(x, z, h + 2, h + 2.1, 1.5, 16, dark, dark);
   }
-  // 非常用発電機（箱）と、細長い燃料タンク
-  for (let k = 0; k < 3; k++) mb.box(x1 + 2, 0, z0 + 2 + k * 7, hw - 2, 3.4, z0 + 7 + k * 7, C(0xd6d9dc), PAT.industrial, C(0x9aa1a7));
-  for (const x of [x1 + 3, hw - 4]) {
-    mb.cylinder(x, z1 - 2, 0.6, 2.8, 1.1, 14, MW, MW);
-    mb.box(x - 1.1, 0, z1 - 7, x + 1.1, 0.6, z1 + 3, C(0x9aa1a7));
+  // 設備ヤード（右側）：チラーの列、非常用発電機（コンテナ）、目隠しの柵
+  if (yard) {
+    const yx0 = x1 + 2, yx1 = hw - 2;
+    for (let z = z0 + 1; z < z1 - 6; z += 7) {
+      mb.box(yx0, 0, z, yx0 + 4.5, 2.6, z + 6, C(0xd6d9dc), PAT.industrial, C(0xc9cdd2));
+      for (const dz of [1.5, 4.5]) mb.cylinder(yx0 + 2.25, z + dz, 2.6, 2.7, 1.1, 14, dark, dark);
+      mb.box(yx1 - 3.2, 0, z + 0.5, yx1, 3, z + 5.5, MW, PAT.industrial, C(0x9aa1a7));
+      mb.box(yx1 - 1, 3, z + 4, yx1 - 0.4, 4.6, z + 4.6, dark);
+    }
+    mb.box(yx0 - 0.6, 0, z1 - 0.2, yx1 + 0.4, 3.4, z1, IH.fence, PAT.industrial);
   }
-  mb.ground(-hw + 1, hd - 4, hw - 1, hd - 0.5, 0.1, PALETTE.asphalt);
-  tf(-hw + 2, hd - 5, 0.8);
-  tf(hw - 2, hd - 5, 0.8);
-  void rng;
+  if (f.D >= 40) ihParking(mb, rng, -hw + 1.5, hd - 10.5, hw - 1.5, hd - 0.6);
+  else mb.ground(-hw + 1, hd - 4, hw - 1, hd - 0.5, 0.1, PALETTE.asphalt);
+  tf(-hw + 1.5, z1 - 2, 0.8);
+  tf(-hw + 1.5, z0 + 3, 0.8);
+}
+
+// 半導体工場：窓のない白い大きな工場棟（横の細い溝、上に青い光の帯）。屋上に空調機の列と四角い排気ダクト、
+// 正面にガラスの事務棟（縦のフィン）と渡り廊下、横に設備棟（屋上の冷却塔）、ガスのタンクの柵の囲い。夜は屋上の角に赤い航空灯
+function semiFab(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
+  const hw = f.W / 2, hd = f.D / 2;
+  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.08, PALETTE.concrete);
+  const cub = 12; // 設備棟の幅
+  const fx0 = -hw + 3, fx1 = hw - 3 - cub - 2, fz0 = -hd + 3, fz1 = hd - 27;
+  const h = 20 + den * 3;
+  // 工場棟
+  mb.box(fx0, 0, fz0, fx1, h, fz1, MW, PAT.none, C(0xd5d9dd));
+  for (let y = 3.5; y < h - 2; y += 3.2) mb.box(fx0 - 0.05, y, fz0 - 0.05, fx1 + 0.05, y + 0.12, fz1 + 0.05, C(0xd9dde1));
+  litSign(mb, fx0 - 0.1, h - 2.2, fz0 - 0.1, fx1 + 0.1, h - 1.6, fz1 + 0.1, IH.blue);
+  mb.box(fx0 - 0.2, h, fz0 - 0.2, fx1 + 0.2, h + 0.8, fz1 + 0.2, MW2, PAT.none, C(0xd5d9dd));
+  // 屋上：空調機の列と、四角い排気ダクト、長いダクト
+  const ry = h + 0.8;
+  for (let z = fz0 + 3; z < fz1 - 5; z += 7)
+    for (let x = fx0 + 3; x < fx1 - 7; x += 9) mb.box(x, ry, z, x + 6.5, ry + 2.6, z + 3.4, C(0xc3c8ce), PAT.industrial, C(0xb4bac1));
+  mb.box(fx0 + 2, ry, fz1 - 4, fx1 - 2, ry + 1.6, fz1 - 2.4, C(0xa9b0b8));
+  for (let x = fx0 + 5; x < fx1 - 3; x += 8) {
+    mb.box(x - 0.7, ry, fz1 - 3.9, x + 0.7, ry + 5.5, fz1 - 2.5, C(0xe1e4e7));
+    mb.box(x - 0.85, ry + 5.5, fz1 - 4.05, x + 0.85, ry + 5.9, fz1 - 2.35, C(0x8d949b));
+  }
+  // 航空灯（屋上の四隅、夜に赤く光る）
+  for (const [x, z] of [[fx0, fz0], [fx1, fz0], [fx0, fz1], [fx1, fz1]]) litSign(mb, x - 0.3, ry, z - 0.3, x + 0.3, ry + 0.6, z + 0.3, IH.red);
+  // 設備棟（右）：屋上に冷却塔の列
+  const ux0 = hw - 3 - cub, ux1 = hw - 3, uh = 9;
+  mb.box(ux0, 0, fz0, ux1, uh, fz1, MW2, PAT.industrial, C(0xc9cdd2));
+  const dark = C(0x3c434b);
+  for (let z = fz0 + 2; z < fz1 - 4; z += 5.5) {
+    mb.box(ux0 + 1.5, uh, z, ux1 - 1.5, uh + 2.6, z + 4.5, C(0xd6d9dc), PAT.industrial, C(0xc9cdd2));
+    mb.cylinder((ux0 + ux1) / 2, z + 2.25, uh + 2.6, uh + 3.3, 1.8, 16, dark, dark);
+  }
+  // 工場棟と設備棟をつなぐ配管ラック
+  for (const y of [6, 7.4]) mb.box(fx1, y, fz1 - 6, ux0, y + 0.8, fz1 - 4.5, C(0x9aa1a7));
+  // 正面：事務棟（縦のフィン）と渡り廊下
+  const ox1 = -hw + 3 + Math.min(30, f.W * 0.45);
+  const oz0 = fz1 + 6, oz1 = hd - 13;
+  finLab(mb, rng, -hw + 3, oz0, ox1, oz1, 15 + den * 3.5);
+  mb.box(-hw + 3 + (ox1 + hw - 3) / 2 - 2.2, 6, fz1 - 0.2, -hw + 3 + (ox1 + hw - 3) / 2 + 2.2, 9.5, oz0 + 0.2, MGL, PAT.fullglass, MW);
+  ihEntrance(mb, (-hw + 3 + ox1) / 2, oz1 + 0.6, rng.pick(IH_ACCENT));
+  // ガスのタンク（柵の囲い）
+  const gx0 = ox1 + 4, gx1 = hw - 3;
+  if (gx1 - gx0 > 8) {
+    mb.ground(gx0, oz0, gx1, oz1, 0.1, PALETTE.pavement);
+    for (let x = gx0 + 2.5; x < gx1 - 2; x += 4.5) {
+      mb.cylinder(x, (oz0 + oz1) / 2 - 1.5, 0, 8.5, 1.4, 16, IH.tank, IH.tank);
+      mb.box(x - 0.2, 0, (oz0 + oz1) / 2 + 1, x + 0.2, 4, (oz0 + oz1) / 2 + 1.4, IH.fence);
+    }
+    for (const [a, b, c, d] of [[gx0, oz0, gx1, oz0 + 0.12], [gx0, oz1 - 0.12, gx1, oz1], [gx0, oz0, gx0 + 0.12, oz1], [gx1 - 0.12, oz0, gx1, oz1]])
+      mb.box(a, 0, b, c, 2.4, d, IH.fence, PAT.industrial);
+  }
+  // 駐車場と並木
+  ihParking(mb, rng, -hw + 1.5, hd - 11, hw - 1.5, hd - 0.6);
+  for (let x = -hw + 4; x < hw - 3; x += 9) tf(x, hd - 12, 0.75 + rng.next() * 0.3);
+}
+
+// テック本社：ガラスの低層棟の上に、波打つテントのような大屋根（銀色の太陽光パネル、少しずつ色の違ううろこ模様）。
+// 屋根のふちは白い帯、まわりは芝生と池、正面に駐車場
+function techHQ(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
+  const hw = f.W / 2, hd = f.D / 2;
+  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.07, PALETTE.lawn2);
+  const x0 = -hw + 5, x1 = hw - 5, z0 = -hd + 5, z1 = hd - 15;
+  const H = 8; // ガラスの壁の高さ（2階建て）
+  // ガラスの壁（1m 奥まる）と白い柱
+  mb.box(x0 + 1, 0, z0 + 1, x1 - 1, H, z1 - 1, MGL, PAT.fullglass, MW2);
+  mb.box(x0 + 1, 3.8, z0 + 1, x1 - 1, 4.3, z1 - 1, MW, PAT.none, MW);
+  // 屋根：ベイ（約16m）ごとに、まん中が持ち上がったテント形の曲面
+  const nx = Math.max(2, Math.round((x1 - x0) / 15)), nz = Math.max(2, Math.round((z1 - z0) / 15));
+  const bw = (x1 - x0) / nx, bd = (z1 - z0) / nz, rise = 5, N = 8;
+  const hAt = (x: number, z: number) => {
+    const u = ((x - x0) / bw) % 1, v = ((z - z0) / bd) % 1;
+    const b = Math.sin(Math.PI * Math.min(1, Math.max(0, u))) * Math.sin(Math.PI * Math.min(1, Math.max(0, v)));
+    return H + 0.6 + rise * Math.pow(b, 0.75);
+  };
+  const nAt = (x: number, z: number): [number, number, number] => {
+    const e = 0.25, dx = (hAt(x + e, z) - hAt(x - e, z)) / (2 * e), dz = (hAt(x, z + e) - hAt(x, z - e)) / (2 * e), l = Math.hypot(dx, 1, dz);
+    return [-dx / l, 1 / l, -dz / l];
+  };
+  for (let i = 0; i < nx; i++)
+    for (let j = 0; j < nz; j++)
+      for (let a = 0; a < N; a++)
+        for (let c = 0; c < N; c++) {
+          const xa = x0 + i * bw + (a / N) * bw + 0.01, xb = x0 + i * bw + ((a + 1) / N) * bw - 0.01;
+          const za = z0 + j * bd + (c / N) * bd + 0.01, zb = z0 + j * bd + ((c + 1) / N) * bd - 0.01;
+          const col = IH.silver[(a * 7 + c * 3 + i + j * 2) % IH.silver.length];
+          mb.quadN([xa, hAt(xa, zb), zb], [xb, hAt(xb, zb), zb], [xb, hAt(xb, za), za], [xa, hAt(xa, za), za], nAt(xa, zb), nAt(xb, zb), nAt(xb, za), nAt(xa, za), col);
+        }
+  // 屋根のふちの白い帯（ガラスの壁の上）
+  mb.box(x0, H, z0, x1, H + 0.6, z1, MW, PAT.none, MW);
+  // 屋根の頂の小さな高窓（夜に光る）
+  for (let i = 0; i < nx; i++)
+    for (let j = 0; j < nz; j++) {
+      const cx = x0 + (i + 0.5) * bw, cz = z0 + (j + 0.5) * bd, y = H + 0.6 + rise;
+      litSign(mb, cx - 1.6, y - 0.1, cz - 1.6, cx + 1.6, y + 0.35, cz + 1.6, C(0xe8f4ff));
+    }
+  // 池と木
+  mb.ground(x1 - 12, z0 - 4.5, hw - 1, z0 - 1.5, 0.1, PALETTE.water);
+  for (let x = -hw + 3; x < hw - 2; x += 8) tf(x, -hd + 2.2, 0.8 + rng.next() * 0.4);
+  for (let z = z0 + 4; z < z1 - 2; z += 8) { tf(-hw + 2.2, z, 0.8 + rng.next() * 0.3); tf(hw - 2.2, z, 0.8 + rng.next() * 0.3); }
+  ihEntrance(mb, 0, z1 - 0.6, rng.pick(IH_ACCENT));
+  ihParking(mb, rng, -hw + 1.5, hd - 11.5, hw - 1.5, hd - 0.6);
 }
 
 // ---------------- 記念施設 ----------------
