@@ -9,7 +9,7 @@ import { RailLayer, TRACK_GAP } from './railLayer';
 import { isUrbanHighway, urbanTurnOk } from '../sim/traffic';
 import { ROAD_LIFT } from './roadLayer';
 import { findTurnbacks, Turnback, Island, islandSpread, ISLAND_GAP } from './turnback';
-import { boxTruck, cityBus, garbageTruck, TRAIN_SPEC, TrainKind, hatchback, kei, minivan, person, pickup, sedan, suv, taxi, tractor, trailerBox, trailerTank, trainCar, vc } from './vehicles';
+import { BOGIE, boxTruck, cityBus, garbageTruck, TRAIN_SPEC, TrainKind, hatchback, kei, minivan, person, pickup, sedan, suv, taxi, tractor, trailerBox, trailerTank, trainCar, vc } from './vehicles';
 import { createVehicleMaterial, vehicleUniforms } from './vehicleMaterial';
 
 const MAX_CARS = 1500;
@@ -374,9 +374,9 @@ export class CarLayer {
       for (let i = 0; i < N; i++) if (g.bstop[i]) stops++;
       stops += this.busStopBuildings;
       this.bus.target = Math.min(this.bus.target, Math.max(1, Math.ceil(stops * 1.5)));
-      // 高架鉄道（i = 1）は本数を 4 割に（3両編成なので、4両のときと本数が同じになるよう 0.3 倍）
+      // 高架鉄道（i = 1）は本数を 4 割に（4両編成）
       this.lineFleets.forEach((f, i) => {
-        build(f, riders.subarray((i + 1) * N, (i + 2) * N), (0.0012 / f.carsPer) * (i === 1 ? 0.3 : 1));
+        build(f, riders.subarray((i + 1) * N, (i + 2) * N), (0.0012 / f.carsPer) * (i === 1 ? 0.4 : 1));
         this.splitLines(g, f);
       });
     }
@@ -411,7 +411,7 @@ export class CarLayer {
     const big = lines.filter((L) => L.cells.length >= 4 && !!st && L.cells.some((c) => st.has(c)));
     const sumR = big.reduce((a, L) => a + L.riders, 0) || 1;
     // 本数は乗る人の割合で分け、どの路線にも長さに応じて最低 1〜4 本は走らせる
-    // 線路の長さで走れる本数には限りがある（多すぎると前の列車に詰まる）。3両編成でおよそ 8 マスに 1 本
+    // 線路の長さで走れる本数には限りがある（多すぎると前の列車に詰まる）。高架鉄道（長さ 55.6m）でおよそ 8 マスに 1 本
     const per = Math.max(6, (2.3 * ((f.carsPer - 1) * f.spacing + 2 * f.halfLen)) / CELL);
     let quotas = big.map((L) => {
       const cap = Math.max(1, Math.floor(L.cells.length / per));
@@ -470,7 +470,15 @@ export class CarLayer {
       from, to: nx[0], din: nx[1], d: nx[1], t: Math.random(), hA: this.trackH(f, from), alive: true, lane: Math.random() < 0.5 ? 0 : 1,
       col: (Math.random() * f.colors.length) | 0, col2: (Math.random() * Math.max(1, f.trailerColors.length)) | 0, hist: [],
     };
-    if (f.mid) this.seedHistory(f, car);
+    if (f.mid) {
+      this.seedHistory(f, car);
+      // 行き止まりのすぐ近くでは、後ろの車両が線路の外にはみ出すので出さない（ほかの場所で出し直す）
+      // ただし、列車が収まる場所のないごく短い路線では、そのまま出す
+      const need = CarLayer.trainBogies(f);
+      let room = car.t * CarLayer.cellLen(car);
+      for (const h of car.hist) room += CarLayer.cellLen(h);
+      if (room < need && L && L.nodes.length * CELL > need + 2 * CELL) return null;
+    }
     return car;
   }
 
@@ -607,10 +615,18 @@ export class CarLayer {
     const n = this.grid!.n, ox = ((o.from % n) + 0.5) * CELL, oz = (((o.from / n) | 0) + 0.5) * CELL;
     const step = Math.hypot(DX[o.d], DY[o.d]) * CELL;
     const head = (tb.ex - ox) * tb.ux + (tb.ez - oz) * tb.uz - (o.t - 0.5) * step;
-    const tail = head + (f.carsPer - 1) * f.spacing + f.halfLen * 2;
+    const tail = head + CarLayer.trainBack(f);
     return tail < (tb.d0 + tb.d1) / 2;
   }
-  // 行き止まりで向きを変える：最後尾の位置が新しい先頭になり、来た道を戻る（右側通行なので、渡った先の線路をそのまま走る）
+  // 列車の位置（c）は先頭の車両の前の台車。そこから最後尾の車両の後ろの台車まで・後ろの端までの長さ
+  private static trainBogies(f: Fleet) {
+    return (f.carsPer - 1) * f.spacing + 2 * f.halfLen * BOGIE;
+  }
+  private static trainBack(f: Fleet) {
+    return (f.carsPer - 1) * f.spacing + f.halfLen * (1 + BOGIE);
+  }
+  // 行き止まりで向きを変える：最後尾の車両の後ろの台車が新しい先頭になり、来た道を戻る（右側通行なので、渡った先の線路をそのまま走る）
+  // 列車は同じ場所にとどまる（車両の並びが前後で入れ替わるだけ）
   private reverseTrain(f: Fleet, c: Car) {
     const rev = (q: Cell): Cell => {
       const n = this.grid!.n, x = (q.from % n) - DX[q.din], y = ((q.from / n) | 0) - DY[q.din];
@@ -618,7 +634,7 @@ export class CarLayer {
       return { from: q.from, to, din: opp(q.d), d: opp(q.din), hA: this.trackH(f, q.from) };
     };
     const segs: Cell[] = [c, ...c.hist];
-    let rem = (f.carsPer - 1) * f.spacing + f.halfLen * 1.6;
+    let rem = CarLayer.trainBogies(f);
     let k = 0, tf = 0;
     for (; k < segs.length; k++) {
       const L = CarLayer.cellLen(segs[k]);
@@ -801,10 +817,11 @@ export class CarLayer {
             const inSt = !!st && st.has(c.from);
             if (!inSt) c.lastStop = -1;
             if (inSt) {
-              // ホームでは速度を落とし、ホームの端のマスの中ほどで止まる
+              // ホームでは速度を落とし、ホームの端のマスで、先頭がホームの端の 3m 手前に来るところで止まる
               adv *= 0.45;
-              if (!st!.has(c.to) && c.lastStop !== c.from && c.t < 0.5 && c.t + adv >= 0.5) {
-                c.t = 0.5;
+              const stopT = Math.max(0.5, 1 - (3 + f.halfLen * (1 - BOGIE)) / len);
+              if (!st!.has(c.to) && c.lastStop !== c.from && c.t < stopT && c.t + adv >= stopT) {
+                c.t = stopT;
                 adv = 0;
                 c.stop = 5;
                 c.lastStop = c.from;
@@ -856,6 +873,8 @@ export class CarLayer {
             const edge = ex === 0 || ey === 0 || ex === g2.n - 1 || ey === g2.n - 1;
             if (f.mid && !edge) {
               if (c.revPending && (c.stop ?? 0) <= 0) {
+                // 止まっていた位置（マスの終わり）から向きを変える
+                c.t = 1;
                 this.reverseTrain(f, c);
                 c.revPending = false;
                 continue;
@@ -881,8 +900,8 @@ export class CarLayer {
         const lane = walk ? (def.width / 2 + 0.9) * (c.lane ? 1 : -1) : line ? TRACK_GAP : def.oneWay ? (c.lane ? 1 : -1) * def.width * 0.2 : (def.width / 2) * 0.48;
         const x = P.x - P.tz * lane, z = P.z + P.tx * lane, h = P.h, tx = P.tx, tz = P.tz;
         if (f.mid) {
-          // 列車：車両ごとに、前と後ろの台車の位置から向きを決めて並べる
-          const nCar = f.carsPer, sp = f.spacing, half = f.halfLen * 0.7;
+          // 列車：車両ごとに、前と後ろの台車の位置から向きを決めて並べる（c は先頭の車両の前の台車）
+          const nCar = f.carsPer, sp = f.spacing, half = f.halfLen * BOGIE;
           // 折り返しの手前の X 字の分岐器では、反対側の線路へ渡る
           const tb = this.endAhead(f, c);
           const isl = f.track === 'erail' && this.islands.length ? this.islands : null;
@@ -902,10 +921,10 @@ export class CarLayer {
             if (dist > z.d0 + f.carsPer * sp + 10) c.tbDep = null;
           }
           for (let j = 0; j < nCar; j++) {
-            this.placeBack(f, c, Math.max(0, j * sp - half));
+            this.placeBack(f, c, j * sp);
             const l0 = laneAt();
             const fx = P.x - P.tz * l0, fz = P.z + P.tx * l0, fh = P.h;
-            this.placeBack(f, c, j * sp + half);
+            this.placeBack(f, c, j * sp + 2 * half);
             const l1 = laneAt();
             const rx = P.x - P.tz * l1, rz = P.z + P.tx * l1, rh = P.h;
             let ang = Math.atan2(fx - rx, fz - rz);
