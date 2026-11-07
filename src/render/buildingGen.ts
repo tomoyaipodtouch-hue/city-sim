@@ -952,7 +952,14 @@ function longAxis(mb: MeshBuilder, f: LotFrame, tf: TF) {
   };
   const tree = (a: number, c: number, sc = 1, kind = 0) => { const [x, z] = P(a, c); tf(x, z, sc, kind); };
   const cyl = (a: number, c: number, y0: number, y1: number, r: number, col: THREE.Color, top?: THREE.Color) => { const [x, z] = P(a, c); mb.cylinder(x, z, y0, y1, r, 10, col, top); };
-  return { A, Cw, box, ground, tree, cyl };
+  // 頂点ごとの法線つきの面（a, y, c の座標）。向きを入れ替えると裏返るので、そのときは順番を逆にする
+  type V3 = [number, number, number];
+  const map = (v: V3): V3 => { const [x, z] = P(v[0], v[2]); return [x, v[1], z]; };
+  const quadN = (p0: V3, p1: V3, p2: V3, p3: V3, n0: V3, n1: V3, n2: V3, n3: V3, col: THREE.Color, pat = 0) => {
+    if (alongX) mb.quadN(map(p0), map(p1), map(p2), map(p3), map(n0), map(n1), map(n2), map(n3), col, pat);
+    else mb.quadN(map(p0), map(p3), map(p2), map(p1), map(n0), map(n3), map(n2), map(n1), col, pat);
+  };
+  return { A, Cw, box, ground, tree, cyl, quadN };
 }
 const bench = (L: ReturnType<typeof longAxis>, a: number, c: number) => {
   L.box(a - 0.9, 0, c - 0.25, a + 0.9, 0.45, c + 0.25, PALETTE.wood);
@@ -1906,11 +1913,36 @@ function airport(mb: MeshBuilder, f: LotFrame, rng: Rng, size: number, tf: TF) {
   for (const a of [ta0 - 10, (ta0 + ta1) / 2, ta1 + 10 - tw]) L.ground(a, tc + tw / 2, a + tw, apC0, 0.1, asph);
   ln(-A / 2 + 22, apC0 + 7 - 0.2, A / 2 - 22, apC0 + 7 + 0.2, yel); // エプロンの通り道
   // ---- ターミナル ----
-  const tH = big ? 18 : 11;
-  L.box(ta0, 0, termC0, ta1, tH, termC1, PALETTE.glass, PAT.office, C(0xd8dadc));
-  L.box(ta0 - 3, tH, termC0 - 4, ta1 + 3, tH + 1.2, termC1 + 2, C(0xe8e9ea));
-  L.box(ta0 + 8, tH + 1.2, termC0 + 3, ta1 - 8, tH + 3, termC1 - 6, C(0xe8e9ea));
-  L.box(ta0, 0, termC1, ta1, 4.5, termC1 + 3, C(0xd8dadc)); // 出発ロビーのひさし（道路の側）
+  // ガラス張りの箱の上に、前後にのびる大きな弓なりの屋根（白い膜と、光を通す細い帯）。道路側は大きなひさし
+  const tH = big ? 16 : 10;
+  const tGlass = C(0x5f8fb8), roofW = C(0xeef0f2), roofU = C(0xc9cfd5);
+  L.box(ta0, 0, termC0, ta1, tH, termC1, tGlass, PAT.fullglass, roofU);
+  const rc0 = termC0 - (big ? 8 : 5), rc1 = termC1 + (big ? 14 : 9), rise = big ? 11 : 7;
+  const ra0r = ta0 - (big ? 8 : 5), ra1r = ta1 + (big ? 8 : 5);
+  const NR = 24, span = rc1 - rc0;
+  const ry = (u: number) => tH + 1 + rise * Math.sin(Math.PI * u);
+  const rn = (u: number): [number, number, number] => { const sl = (rise * Math.PI * Math.cos(Math.PI * u)) / span, l = Math.hypot(sl, 1); return [0, 1 / l, -sl / l]; };
+  for (let k = 0; k < NR; k++) {
+    const u0 = k / NR, u1 = (k + 1) / NR, c0 = rc0 + span * u0, c1 = rc0 + span * u1, y0 = ry(u0), y1 = ry(u1);
+    const col = k % 6 === 3 ? C(0x9fc0d8) : roofW; // 天窓の帯
+    L.quadN([ra0r, y0, c0], [ra0r, y1, c1], [ra1r, y1, c1], [ra1r, y0, c0], rn(u0), rn(u1), rn(u1), rn(u0), col);
+    // 屋根の裏（下から見たとき）
+    L.quadN([ra0r, y0 - 0.6, c0], [ra1r, y0 - 0.6, c0], [ra1r, y1 - 0.6, c1], [ra0r, y1 - 0.6, c1], [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, -1, 0], roofU);
+  }
+  // 屋根の両端（弧の下の三日月形の帯）と、ガラスの妻壁
+  for (const a of [ra0r, ra1r]) for (let k = 0; k < NR; k++) {
+    const u0 = k / NR, u1 = (k + 1) / NR, c0 = rc0 + span * u0, c1 = rc0 + span * u1;
+    const sd = a === ra0r ? -1 : 1;
+    const nn: [number, number, number] = [sd, 0, 0];
+    if (sd > 0) L.quadN([a, ry(u0) - 0.6, c0], [a, ry(u0), c0], [a, ry(u1), c1], [a, ry(u1) - 0.6, c1], nn, nn, nn, nn, roofU);
+    else L.quadN([a, ry(u0) - 0.6, c0], [a, ry(u1) - 0.6, c1], [a, ry(u1), c1], [a, ry(u0), c0], nn, nn, nn, nn, roofU);
+  }
+  // 屋根を支える木のような柱（ひさしの下と、エプロン側）
+  for (let a = ta0; a <= ta1 + 0.1; a += big ? 24 : 18) for (const c of [termC1 + (big ? 9 : 6), termC0 - (big ? 4 : 3)]) {
+    L.box(a - 0.35, 0, c - 0.35, a + 0.35, tH * 0.6, c + 0.35, C(0xdfe3e7));
+    L.box(a - 2.4, tH * 0.6, c - 0.2, a + 2.4, tH * 0.6 + 0.4, c + 0.2, C(0xdfe3e7));
+  }
+  L.box(ta0, 0, termC1, ta1, 0.25, termC1 + (big ? 12 : 8), C(0xb9b6ae)); // 出発ロビーの前の歩道
   // ---- 搭乗橋と旅客機（鼻先がターミナルを向く） ----
   const tails = [PALETTE.accent[2], PALETTE.accent[0], PALETTE.accent[5], PALETTE.accent[3], C(0x1d3557), PALETTE.accent[4]];
   const gateGap = 34 * s + 12;
@@ -2302,28 +2334,53 @@ function museum(mb: MeshBuilder, f: LotFrame, tf: TF) {
   tf(f.W / 2 - 2, f.D / 2 - 2, 0.9);
 }
 
+// スタジアム：なめらかな楕円のすり鉢。白い縦のリブの外壁と、真ん中の開いた輪の屋根（ふちは夜に光る）
 function stadium(mb: MeshBuilder, f: LotFrame, rng: Rng) {
-  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.07, PALETTE.asphalt);
-  // 観客席（外側の壁と段）を八角形で
-  const R = Math.min(f.W, f.D) / 2 - 3, seg = 16;
-  const seat = new THREE.Color(0x2f86d0), wall = PALETTE.concrete;
-  for (let k = 0; k < seg; k++) {
-    const a0 = (k / seg) * Math.PI * 2, a1 = ((k + 1) / seg) * Math.PI * 2;
-    const c0 = Math.cos(a0), s0 = Math.sin(a0), c1 = Math.cos(a1), s1 = Math.sin(a1);
-    // 外壁
-    mb.quad([c1 * R, 0, s1 * R], [c0 * R, 0, s0 * R], [c0 * R, 16, s0 * R], [c1 * R, 16, s1 * R], wall, PAT.industrial);
-    // 段々の客席（内側へ下がる斜面）
-    const r2 = R * 0.62;
-    mb.quad([c0 * R, 16, s0 * R], [c1 * R, 16, s1 * R], [c1 * r2, 3, s1 * r2], [c0 * r2, 3, s0 * r2], k % 2 ? seat : new THREE.Color(0xe8e8e2));
+  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.07, PALETTE.pavement);
+  const Rx = f.W / 2 - 5, Rz = f.D / 2 - 5, SEG = 72;
+  const white = C(0xf2f3f4), rib = C(0xdfe3e7), glassBand = C(0x5f8fb8), roof = C(0xf6f7f8), roofU = C(0xc9cfd5);
+  const seatA = C(0x2f86d0), seatB = C(0x1f5f9e), concourse = C(0xb9b6ae);
+  const E = (a: number, k: number, y: number): [number, number, number] => [Math.cos(a) * Rx * k, y, Math.sin(a) * Rz * k];
+  // 楕円の外向きの法線
+  const NO = (a: number, ny = 0): [number, number, number] => { const nx = Math.cos(a) / Rx, nz = Math.sin(a) / Rz, l = Math.hypot(nx, nz) || 1; const h = Math.sqrt(Math.max(0, 1 - ny * ny)); return [(nx / l) * h, ny, (nz / l) * h]; };
+  const H = 30;
+  for (let k = 0; k < SEG; k++) {
+    const a0 = (k / SEG) * Math.PI * 2, a1 = ((k + 1) / SEG) * Math.PI * 2;
+    // 外壁：下は暗いガラスの帯、上は白い膜
+    mb.quadN(E(a1, 1, 0), E(a0, 1, 0), E(a0, 1, 7), E(a1, 1, 7), NO(a1), NO(a0), NO(a0), NO(a1), glassBand, PAT.fullglass);
+    mb.quadN(E(a1, 1, 7), E(a0, 1, 7), E(a0, 1.03, H - 4), E(a1, 1.03, H - 4), NO(a1, 0.1), NO(a0, 0.1), NO(a0, 0.1), NO(a1, 0.1), white);
+    // 縦のリブ（2区画ごと）
+    if (k % 2 === 0) {
+      const [x, , z] = E(a0, 1.045, 0);
+      mb.box(x - 0.35, 0, z - 0.35, x + 0.35, H - 2, z + 0.35, rib);
+    }
+    // 客席：外側の高いところから、フィールドのふちへ下がる2層のすり鉢（なめらかな斜面）
+    const tiers: [number, number, number, number, THREE.Color][] = [[0.97, H - 6, 0.8, 14, seatB], [0.8, 13, 0.62, 2, seatA]];
+    for (const [k0, y0, k1, y1, col] of tiers) {
+      const slope = (y0 - y1) / ((k0 - k1) * Math.min(Rx, Rz));
+      const nUp = (a: number): [number, number, number] => { const o = NO(a), l = Math.hypot(slope, 1); return [(-o[0] * slope) / l, 1 / l, (-o[2] * slope) / l]; };
+      mb.quadN(E(a1, k0, y0), E(a0, k0, y0), E(a0, k1, y1), E(a1, k1, y1), nUp(a1), nUp(a0), nUp(a0), nUp(a1), col);
+    }
+    // 上下の層の間の通路
+    mb.quadN(E(a1, 0.8, 14), E(a0, 0.8, 14), E(a0, 0.78, 13), E(a1, 0.78, 13), [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], concourse);
+    // 輪の屋根：外のふちから内側へ、少し上がりながらのびる（真ん中は開いている）
+    const ri = 0.86;
+    mb.quadN(E(a1, 1.05, H - 4), E(a0, 1.05, H - 4), E(a0, ri, H + 2), E(a1, ri, H + 2), [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], roof);
+    mb.quadN(E(a0, 1.05, H - 4.6), E(a1, 1.05, H - 4.6), E(a1, ri, H + 1.4), E(a0, ri, H + 1.4), [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, -1, 0], roofU);
+    // 屋根の内側のふち（夜に光る）
+    mb.quadN(E(a1, ri, H + 1.4), E(a0, ri, H + 1.4), E(a0, ri, H + 2.1), E(a1, ri, H + 2.1), NO(a1), NO(a0), NO(a0), NO(a1), C(0xdfe6ee), PAT.glow);
+    // 外壁の上の LED の帯
+    mb.quadN(E(a1, 1.035, H - 5.2), E(a0, 1.035, H - 5.2), E(a0, 1.035, H - 4.4), E(a1, 1.035, H - 4.4), NO(a1), NO(a0), NO(a0), NO(a1), C(0xbfe0ff), PAT.glow);
   }
-  // フィールド
-  mb.ground(-R * 0.6, -R * 0.45, R * 0.6, R * 0.45, 3, PALETTE.lawn2);
-  for (let x = -R * 0.5; x < R * 0.5; x += R * 0.2) mb.ground(x, -R * 0.45, x + R * 0.1, R * 0.45, 3.02, PALETTE.lawn);
-  // 照明塔
-  for (const [x, z] of [[-R, -R], [R, -R], [-R, R], [R, R]].map(([x, z]) => [x * 0.8, z * 0.8])) {
-    mb.box(x - 0.4, 0, z - 0.4, x + 0.4, 30, z + 0.4, PALETTE.steel);
-    mb.box(x - 2, 30, z - 0.6, x + 2, 32, z + 0.6, PALETTE.white);
-  }
+  // フィールド（縞の芝と白線）
+  const fx = Rx * 0.55, fz = Rz * 0.4;
+  mb.ground(-Rx * 0.62, -Rz * 0.62, Rx * 0.62, Rz * 0.62, 2, PALETTE.lawn2);
+  for (let x = -fx; x < fx; x += fx / 5) mb.ground(x, -fz, x + fx / 10, fz, 2.02, PALETTE.lawn);
+  const ln = (x0: number, z0: number, x1: number, z1: number) => mb.ground(x0, z0, x1, z1, 2.04, PALETTE.white);
+  ln(-fx, -fz, fx, -fz + 0.25); ln(-fx, fz - 0.25, fx, fz); ln(-fx, -fz, -fx + 0.25, fz); ln(fx - 0.25, -fz, fx, fz); ln(-0.12, -fz, 0.12, fz);
+  mb.cylinder(0, 0, 2.03, 2.05, fz * 0.3, 32, PALETTE.white, PALETTE.lawn2);
+  // 入口の大階段（正面）
+  for (let k = 0; k < 6; k++) mb.box(-10 + k * 0.6, k * 1.1, Rz - 1 + (6 - k) * 1.2, 10 - k * 0.6, (k + 1) * 1.1, Rz + 6, concourse);
   void rng;
 }
 
