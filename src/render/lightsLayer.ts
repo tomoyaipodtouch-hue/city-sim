@@ -34,7 +34,8 @@ function poleGeo() {
 export class StreetLights {
   group = new THREE.Group(); // 昼も見える柱と、夜だけの光
   points = new THREE.Group();
-  private poles = new THREE.InstancedMesh(poleGeo(), new THREE.MeshLambertMaterial({ color: 0x5b6066 }), 8192 * 6);
+  // 柱は亜鉛めっきの鉄（少しつやのある金属）
+  private poles = new THREE.InstancedMesh(poleGeo(), new THREE.MeshStandardMaterial({ color: 0x80878e, roughness: 0.5, metalness: 0.55 }), 8192 * 6);
   // 航空障害灯（高い建物のてっぺんの赤いランプ）
   private beacons: THREE.Points;
   private beaconMat: THREE.PointsMaterial;
