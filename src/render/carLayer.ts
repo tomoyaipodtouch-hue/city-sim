@@ -9,7 +9,8 @@ import { RailLayer, TRACK_GAP } from './railLayer';
 import { isUrbanHighway, urbanTurnOk } from '../sim/traffic';
 import { ROAD_LIFT } from './roadLayer';
 import { findTurnbacks, Turnback, Island, islandSpread, ISLAND_GAP } from './turnback';
-import { boxTruck, cityBus, garbageTruck, trainCar, TRAIN_SPEC, TrainKind, hatchback, minivan, pickup, sedan, suv, tractor, trailerBox, trailerTank, vc } from './vehicles';
+import { boxTruck, cityBus, garbageTruck, TRAIN_SPEC, TrainKind, hatchback, kei, minivan, person, pickup, sedan, suv, taxi, tractor, trailerBox, trailerTank, trainCar, vc } from './vehicles';
+import { createVehicleMaterial, vehicleUniforms } from './vehicleMaterial';
 
 const MAX_CARS = 1500;
 const MAX_TRUCKS = 300;
@@ -43,13 +44,26 @@ interface Car extends Cell {
   tbFor?: Turnback | null; // tbSide を決めた折り返し
   tbSide?: 0 | 1; // 終点のどちらのホームに入るか（0 = 分岐器で渡った先、1 = 渡らずにそのまま）
   tbDep?: Turnback | null; // 渡らずに入った終点から出ていくところ（出るときに分岐器で渡る）
+  vs?: number; // 見た目の乱数（人の背の高さ・歩く周期）
 }
 
 // 走る場所：道路（車・トラック・バス）、歩道、線路（鉄道・高架鉄道・モノレール・地下鉄）
 type Track = 'road' | 'bus' | 'walk' | LineKind;
 
+// 車両の材質（全部の車両で共有）と、歩く人の材質
+const VEH_MAT = createVehicleMaterial();
+const WALK_MAT = createVehicleMaterial(true);
+// 形の大きさ：[幅, 長さ, 中心の前後の位置]（車の下の影に使う）
+const footOf = (g: THREE.BufferGeometry): [number, number, number] => {
+  g.computeBoundingBox();
+  const b = g.boundingBox!;
+  return [b.max.x - b.min.x, b.max.z - b.min.z, (b.max.z + b.min.z) / 2];
+};
+
 class Fleet {
   mesh: THREE.InstancedMesh;
+  foot: [number, number, number];
+  tfoot: [number, number, number] = [0, 0, 0];
   trailer: THREE.InstancedMesh | null = null;
   // 列車：先頭と最後尾は mesh（運転台つき）、中間の車両は mid
   mid: THREE.InstancedMesh | null = null;
@@ -68,12 +82,14 @@ class Fleet {
   constructor(geo: THREE.BufferGeometry, public max: number, palette: number[], public track: Track = 'road', public halfLen = 2.3, public share = 1) {
     this.colors = palette.map((h) => new THREE.Color(h));
     this.mesh = this.makeMesh(geo, max);
+    this.foot = footOf(geo);
   }
   makeMesh(geo: THREE.BufferGeometry, max: number) {
-    const m = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }), max);
+    const m = new THREE.InstancedMesh(geo, this.track === 'walk' ? WALK_MAT : VEH_MAT, max);
     m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     m.count = 0;
     m.frustumCulled = false;
+    m.receiveShadow = true;
     m.setColorAt(0, new THREE.Color());
     return m;
   }
@@ -90,12 +106,28 @@ class Fleet {
   withTrailer(geo: THREE.BufferGeometry, palette: number[]) {
     this.trailer = this.makeMesh(geo, this.max);
     this.trailerColors = palette.map((h) => new THREE.Color(h));
+    this.tfoot = footOf(geo);
     return this;
   }
 }
 
-const CAR_COLORS = [0xd8d8d8, 0x2b2b2b, 0x9a1d1d, 0x1d3f8a, 0x8a8f96, 0xf2f2f2, 0x3b5d3a, 0xc9a227, 0x5a2d82, 0x6d4c33, 0xb8bcc0, 0x101820, 0x7a1f2b, 0x4a6a8a];
-const CAB_COLORS = [0xe8e8e8, 0xc0392b, 0x2e6da4, 0xd9a400, 0x4c7a3b, 0x2b2b2b, 0x8a8f96];
+// 車の色：実際の街に多い色ほど多く入れる（白・黒・銀・灰が中心）
+const CAR_COLORS = [0xeef0f0, 0xeef0f0, 0xeef0f0, 0xeef0f0, 0xf6f6f3, 0xf6f6f3, 0x141619, 0x141619, 0x141619, 0xa9adb2, 0xa9adb2, 0xc4c8cc, 0x5b6067, 0x5b6067, 0x26324d, 0x2b4f86, 0x8c1d22, 0x6a5442, 0xbfb49c, 0x3d4a40];
+// 軽自動車は明るい色も多い
+const KEI_COLORS = [0xeef0f0, 0xeef0f0, 0xeef0f0, 0x141619, 0xa9adb2, 0xd9cdb4, 0xd9cdb4, 0x9cc1d1, 0xc98f8b, 0x7f9a7c, 0x5b6067, 0xd3b064];
+// タクシー：濃い藍色が多く、黒・黄・緑・白
+const TAXI_COLORS = [0x1d2340, 0x1d2340, 0x1d2340, 0x1d2340, 0x141619, 0x141619, 0xd6a72c, 0x2f6b4f, 0xeef0f0];
+const CAB_COLORS = [0xeef0f0, 0xeef0f0, 0xeef0f0, 0x2b4f86, 0x8c1d22, 0x3e6b45, 0xd9a42a, 0x5b6067];
+// 人の服の色（ズボン・肌・髪は材質の中で選ぶ）
+const CLOTH_COLORS = [0xe9e9e6, 0xe9e9e6, 0x26272a, 0x26272a, 0x2b3a55, 0x7d8288, 0xc8b89a, 0x5d6a48, 0x7a2e35, 0x9db8d2, 0xc99a2e, 0xb23a33, 0xd99aa5, 0x7a5a42];
+const MAX_BLOBS = 2600;
+// 描いた台数の分だけ GPU へ送る（画面の外を省くので、送る量も減る）
+const flush = (a: THREE.BufferAttribute | null | undefined, n: number, size: number) => {
+  if (!a || !n) return;
+  a.clearUpdateRanges();
+  a.addUpdateRange(0, n * size);
+  a.needsUpdate = true;
+};
 
 export class CarLayer {
   group = new THREE.Group();
@@ -107,6 +139,23 @@ export class CarLayer {
   private people: Fleet;
   private lineFleets: Fleet[];
   private night = 0;
+  // 車の下の柔らかい影（全部の車で 1 回の描画）
+  private blob: THREE.InstancedMesh;
+  private nb = 0;
+  // 夜の前照灯が道路を照らす光（加算で重ねる、1 回の描画）
+  private beams: THREE.InstancedMesh;
+  private nbm = 0;
+  // 画面の外の車は描かない（カメラは描画のときに受け取る）
+  private cam: THREE.PerspectiveCamera | null = null;
+  private frustum = new THREE.Frustum();
+  private pm = new THREE.Matrix4();
+  private sph = new THREE.Sphere();
+  private cull = false;
+  private bs = new THREE.Vector3();
+  private grabCam = (_r: THREE.WebGLRenderer, _s: THREE.Scene, cam: THREE.Camera) => {
+    const c = cam as THREE.PerspectiveCamera;
+    if (c.isPerspectiveCamera && c.fov < 80) this.cam = c;
+  };
   private lightsHead: THREE.Points;
   private lightsTail: THREE.Points;
   private grid: Grid | null = null;
@@ -125,7 +174,8 @@ export class CarLayer {
   // 夜は車が暗くなりすぎないように、少し光らせる。前後のライトは光の点で描く
   setNight(k: number) {
     this.night = k;
-    for (const f of this.fleets) for (const m of [f.mesh, f.trailer, f.mid]) if (m) (m.material as THREE.MeshLambertMaterial).emissive.setRGB(0.05 * k, 0.05 * k, 0.045 * k);
+    vehicleUniforms.uNightK.value = k;
+    (this.beams.material as THREE.MeshBasicMaterial).opacity = 0.3 * k;
     for (const p of [this.lightsHead, this.lightsTail]) (p.material as THREE.PointsMaterial).opacity = Math.min(1, k * 1.3);
   }
   private makeLights(color: number, size: number) {
@@ -157,44 +207,111 @@ export class CarLayer {
       vc(new THREE.BoxGeometry(2.62, 0.9, 13).translate(0, 1.6, 0), 0x2a3440),
       vc(new THREE.BoxGeometry(2.64, 0.35, 15).translate(0, 0.1, 0), 0x2ea37a),
     ])!;
-    // 歩く人：脚、胴（服の色）、頭
-    const person = mergeGeometries([
-      vc(new THREE.BoxGeometry(0.46, 0.75, 0.3).translate(0, 0.45, 0), 0x9a9aa0),
-      vc(new THREE.BoxGeometry(0.5, 0.65, 0.32).translate(0, 1.15, 0), 0xffffff),
-      vc(new THREE.BoxGeometry(0.28, 0.28, 0.28).translate(0, 1.65, 0), 0xf0d0b0),
-    ])!;
-    // 自家用車の種類と割合
+    // 自家用車の種類と割合（台数の上限の合計は前と同じくらい）
     this.cars = [
-      new Fleet(sedan(), 600, CAR_COLORS, 'road', 2.3, 0.34),
-      new Fleet(hatchback(), 340, CAR_COLORS, 'road', 2.0, 0.18),
-      new Fleet(suv(), 460, CAR_COLORS, 'road', 2.4, 0.26),
-      new Fleet(pickup(), 220, [0xf2f2f2, 0x2b2b2b, 0x9a1d1d, 0x1d3f8a, 0x8a8f96, 0x3b5d3a, 0xb8bcc0], 'road', 2.7, 0.1),
-      new Fleet(minivan(), 240, CAR_COLORS, 'road', 2.5, 0.12),
+      new Fleet(sedan(), 410, CAR_COLORS, 'road', 2.3, 0.22),
+      new Fleet(hatchback(), 260, CAR_COLORS, 'road', 2.0, 0.14),
+      new Fleet(suv(), 372, CAR_COLORS, 'road', 2.4, 0.2),
+      new Fleet(pickup(), 75, [0xeef0f0, 0x141619, 0xa9adb2, 0x5b6067, 0x8c1d22, 0x2b4f86], 'road', 2.7, 0.04),
+      new Fleet(minivan(), 205, CAR_COLORS, 'road', 2.4, 0.11),
+      new Fleet(kei(), 354, KEI_COLORS, 'road', 1.7, 0.19),
+      new Fleet(taxi(), 186, TAXI_COLORS, 'road', 2.2, 0.1),
     ];
     // トラック：箱型、箱型のトレーラー、タンクのトレーラー
     this.trucks = [
       new Fleet(boxTruck(), 160, CAB_COLORS, 'road', 4.4, 0.45),
-      new Fleet(tractor(), 140, CAB_COLORS, 'road', 3.1, 0.4).withTrailer(trailerBox(), [0xf2f2f0, 0xe4e6e8, 0xd0d4d8, 0xb5452f, 0x2f6fb5]),
-      new Fleet(tractor(), 60, CAB_COLORS, 'road', 3.1, 0.15).withTrailer(trailerTank(), [0xd8dce0, 0xc8ccd0, 0xf0f0f0]),
+      new Fleet(tractor(), 140, CAB_COLORS, 'road', 3.1, 0.4).withTrailer(trailerBox(), [0xf0f1f0, 0xe2e4e6, 0xcfd3d7, 0xa8432f, 0x2d5f9a]),
+      new Fleet(tractor(), 60, CAB_COLORS, 'road', 3.1, 0.15).withTrailer(trailerTank(), [0xd8dce0, 0xc8ccd0, 0xe8eaec]),
     ];
-    this.packers = new Fleet(garbageTruck(), 60, [0xf2f2f2, 0x2e8b57, 0x2e6da4, 0x3f7f3f], 'road', 3.7);
-    this.bus = new Fleet(cityBus(), 200, [0xe0a800, 0x2f86d0, 0x2e8b57, 0xd0d0d0], 'bus', 6.0);
+    this.packers = new Fleet(garbageTruck(), 60, [0x2e7d4f, 0x2e6da4, 0x3f7f3f, 0x5b6067], 'road', 3.7);
+    this.bus = new Fleet(cityBus(), 200, [0x1f7a4a, 0x1f5fa8, 0xc8702a, 0xa3262e, 0x2f3a4a], 'bus', 6.0);
     this.lineFleets = [
       new Fleet(train, 60, [0xffffff], 'rail').asTrain('rail'),
       new Fleet(train, 60, [0xffffff], 'erail').asTrain('erail'),
       new Fleet(mono, 50, [0xffffff], 'mono').asTrain('mono'),
       new Fleet(train, 60, [0xffffff], 'sub').asTrain('sub'),
     ];
-    this.people = new Fleet(person, MAX_PEOPLE, [0xc0392b, 0x2e6da4, 0xf2f2f2, 0x333333, 0xe0a800, 0x4c7a3b, 0x8e44ad, 0xd98aa0, 0x6d8fb0, 0xb07a4a], 'walk');
+    this.people = new Fleet(person(), MAX_PEOPLE, CLOTH_COLORS, 'walk');
     this.fleets = [...this.cars, ...this.trucks, this.packers, this.bus, ...this.lineFleets, this.people];
     this.lightsHead = this.makeLights(0xfff1c8, 3.2);
     this.lightsTail = this.makeLights(0xff3020, 2.2);
     this.group.add(this.lightsHead, this.lightsTail);
     for (const f of this.fleets) {
-      this.group.add(f.mesh);
-      if (f.trailer) this.group.add(f.trailer);
-      if (f.mid) this.group.add(f.mid);
+      for (const m of [f.mesh, f.trailer, f.mid]) {
+        if (!m) continue;
+        m.onBeforeRender = this.grabCam;
+        this.group.add(m);
+      }
     }
+    this.blob = this.makeBlob();
+    this.beams = this.makeBeams();
+    this.group.add(this.blob, this.beams);
+  }
+
+  // 前照灯の光：車の前から先へ広がりながら薄くなる（テクスチャの上が車に近い側）
+  private makeBeams() {
+    const S = 64, c = document.createElement('canvas');
+    c.width = c.height = S;
+    const x = c.getContext('2d')!, img = x.createImageData(S, S);
+    const sm = (a: number, b: number, v: number) => { const t = Math.max(0, Math.min(1, (v - a) / (b - a))); return t * t * (3 - 2 * t); };
+    for (let j = 0; j < S; j++)
+      for (let i = 0; i < S; i++) {
+        const t = (j + 0.5) / S, u = Math.abs((i + 0.5) / S - 0.5) * 2;
+        const hw = 0.32 + 0.68 * t;
+        const a = Math.pow(1 - t, 1.4) * sm(0, 0.1, t) * (1 - sm(hw * 0.5, hw, u));
+        const v = Math.round(255 * a);
+        img.data.set([v, v, v, 255], (j * S + i) * 4);
+      }
+    x.putImageData(img, 0, 0);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xfff3e0, alphaMap: new THREE.CanvasTexture(c), transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
+    const m = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2).translate(0, 0, 0.5), mat, MAX_BLOBS);
+    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    m.count = 0;
+    m.frustumCulled = false;
+    m.renderOrder = 2;
+    return m;
+  }
+
+  // 車の下の影：角の丸い四角が外へ向かって薄くなる
+  private makeBlob() {
+    const S = 64, c = document.createElement('canvas');
+    c.width = c.height = S;
+    const x = c.getContext('2d')!, img = x.createImageData(S, S);
+    for (let j = 0; j < S; j++)
+      for (let i = 0; i < S; i++) {
+        const px = Math.abs((i + 0.5) / S - 0.5) * 2, pz = Math.abs((j + 0.5) / S - 0.5) * 2;
+        const bx = 0.62, bz = 0.78;
+        const dx = Math.max(px - bx, 0), dz = Math.max(pz - bz, 0);
+        const d = Math.hypot(dx, dz) + Math.min(Math.max(px - bx, pz - bz), 0);
+        const a = Math.max(0, Math.min(1, 1 - (d + 0.12) / 0.34));
+        const v = Math.round(255 * a * a * (3 - 2 * a));
+        img.data.set([v, v, v, 255], (j * S + i) * 4);
+      }
+    x.putImageData(img, 0, 0);
+    const tex = new THREE.CanvasTexture(c);
+    const mat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.62, alphaMap: tex, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
+    const m = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), mat, MAX_BLOBS);
+    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    m.count = 0;
+    m.frustumCulled = false;
+    m.renderOrder = 1;
+    m.onBeforeRender = this.grabCam;
+    return m;
+  }
+  // 影を 1 つ置く（向きは this.q）。f = [幅, 長さ, 中心の前後]
+  private addBlob(x: number, h: number, z: number, tx: number, tz: number, f: [number, number, number]) {
+    if (this.nb >= MAX_BLOBS) return;
+    this.v.set(x + tx * f[2], h + 0.04, z + tz * f[2]);
+    this.bs.set(f[0] * 1.12, 1, f[1] * 1.06);
+    this.mtx.compose(this.v, this.q, this.bs);
+    this.blob.setMatrixAt(this.nb++, this.mtx);
+  }
+  // 画面の中（少し広め）に入っているか
+  private seen(x: number, y: number, z: number, r: number) {
+    if (!this.cull) return true;
+    this.sph.center.set(x, y, z);
+    this.sph.radius = r;
+    return this.frustum.intersectsSphere(this.sph);
   }
 
   setData(g: Grid, traffic: Float32Array, cong: Float32Array, freight: Float32Array, riders?: Float32Array, garbage?: Uint8Array, garbageLeft?: Uint8Array) {
@@ -598,9 +715,25 @@ export class CarLayer {
         if (f.trailer) f.trailer.count = 0;
         if (f.mid) f.mid.count = 0;
       }
+      this.blob.count = 0;
+      this.beams.count = 0;
       return;
     }
     const lit = this.night > 0.05;
+    // 歩く動きの時間（一時停止中は止まる）
+    vehicleUniforms.uWalk.value += dt;
+    // 画面の外の車は描かない（影の分だけ少し広めに見る）。近づいたときだけ車と人の影を落とす
+    if (this.cam) {
+      this.cam.updateMatrixWorld();
+      this.pm.multiplyMatrices(this.cam.projectionMatrix, this.cam.matrixWorldInverse);
+      this.frustum.setFromProjectionMatrix(this.pm);
+      this.cull = true;
+    }
+    const near = this.viewDist < 360;
+    for (const f of this.fleets)
+      for (const m of [f.mesh, f.trailer, f.mid]) if (m) m.castShadow = f.track === 'walk' ? this.viewDist < 160 : f.mid ? this.viewDist < 900 : near;
+    this.nb = 0;
+    this.nbm = 0;
     const hp = this.lightsHead.geometry.getAttribute('position') as THREE.BufferAttribute;
     const tp = this.lightsTail.geometry.getAttribute('position') as THREE.BufferAttribute;
     let nh = 0, nt = 0;
@@ -773,6 +906,7 @@ export class CarLayer {
             const tail = j === nCar - 1;
             if (tail) ang += Math.PI;
             this.v.set((fx + rx) / 2, (fh + rh) / 2, (fz + rz) / 2);
+            if (!this.seen(this.v.x, this.v.y, this.v.z, f.halfLen + 4)) continue;
             this.q.setFromAxisAngle(this.up, ang);
             this.mtx.compose(this.v, this.q, this.s);
             if (j === 0 || tail) {
@@ -787,11 +921,22 @@ export class CarLayer {
           if (k >= f.max) break;
           continue;
         }
+        // 画面の外の車・人は描かない（トレーラーは後ろへ長いので広めに見る）
+        if (!this.seen(x, h, z, f.halfLen + (f.trailer ? 18 : 4))) {
+          if (k >= f.max) break;
+          continue;
+        }
         this.v.set(x, h, z);
         this.q.setFromAxisAngle(this.up, Math.atan2(tx, tz));
-        this.mtx.compose(this.v, this.q, this.s);
+        if (walk) {
+          // 人は背の高さを少しずつ変える（この大きさから歩く周期と服の色も決まる）
+          const ks = 0.9 + 0.2 * (c.vs ??= Math.random());
+          this.bs.set(ks, ks, ks);
+          this.mtx.compose(this.v, this.q, this.bs);
+        } else this.mtx.compose(this.v, this.q, this.s);
         f.mesh.setColorAt(k, f.colors[c.col]);
         f.mesh.setMatrixAt(k, this.mtx);
+        if (!walk) this.addBlob(x, h, z, tx, tz, f.foot);
         // トレーラー：連結部から後ろの車輪へ向けて置く（カーブで折れ曲がる）
         if (f.trailer) {
           this.placeBack(f, c, KINGPIN);
@@ -803,12 +948,23 @@ export class CarLayer {
           this.mtx.compose(this.v, this.q, this.s);
           f.trailer.setMatrixAt(k, this.mtx);
           f.trailer.setColorAt(k, f.trailerColors[c.col2 % f.trailerColors.length]);
+          const al = Math.hypot(kx - rx, kz - rz) || 1;
+          this.addBlob(kx, kh, kz, (kx - rx) / al, (kz - rz) / al, f.tfoot);
           if (lit && nt < MAX_LIGHTS - 2) {
             const bx = (kx - rx) / TRAILER_AXLE, bz = (kz - rz) / TRAILER_AXLE;
             for (const sd of [-0.9, 0.9]) tp.setXYZ(nt++, rx - bx * 1.8 - bz * sd, kh + 1.0, rz - bz * 1.8 + bx * sd);
           }
         }
         k++;
+        // 夜は前照灯で道路の先を照らす
+        if (lit && !walk && !line && this.nbm < MAX_BLOBS) {
+          const fw = f.halfLen - 0.1, wd = f.track === 'bus' || f.trailer || f.halfLen > 3.2 ? 5.0 : 4.2;
+          this.v.set(x + tx * fw, h + 0.05, z + tz * fw);
+          this.q.setFromAxisAngle(this.up, Math.atan2(tx, tz));
+          this.bs.set(wd, 1, 11);
+          this.mtx.compose(this.v, this.q, this.bs);
+          this.beams.setMatrixAt(this.nbm++, this.mtx);
+        }
         // 夜のライト（前は白、後ろは赤）
         if (lit && !walk && !line && nh < MAX_LIGHTS - 2) {
           const half = f.halfLen, py = h + 0.8;
@@ -823,17 +979,22 @@ export class CarLayer {
       f.mesh.count = f.mid ? hk : k;
       if (f.mid) {
         f.mid.count = mk;
-        f.mid.instanceMatrix.needsUpdate = true;
-        if (f.mid.instanceColor) f.mid.instanceColor.needsUpdate = true;
+        flush(f.mid.instanceMatrix, mk, 16);
+        flush(f.mid.instanceColor, mk, 3);
       }
-      f.mesh.instanceMatrix.needsUpdate = true;
-      if (f.mesh.instanceColor) f.mesh.instanceColor.needsUpdate = true;
+      flush(f.mesh.instanceMatrix, f.mesh.count, 16);
+      flush(f.mesh.instanceColor, f.mesh.count, 3);
       if (f.trailer) {
         f.trailer.count = k;
-        f.trailer.instanceMatrix.needsUpdate = true;
-        if (f.trailer.instanceColor) f.trailer.instanceColor.needsUpdate = true;
+        flush(f.trailer.instanceMatrix, k, 16);
+        flush(f.trailer.instanceColor, k, 3);
       }
     }
+    this.blob.count = this.nb;
+    flush(this.blob.instanceMatrix, this.nb, 16);
+    this.beams.count = this.nbm;
+    this.beams.visible = lit;
+    flush(this.beams.instanceMatrix, this.nbm, 16);
     this.lightsHead.geometry.setDrawRange(0, nh);
     this.lightsTail.geometry.setDrawRange(0, nt);
     hp.needsUpdate = tp.needsUpdate = nh + nt > 0;
