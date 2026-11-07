@@ -18,7 +18,7 @@ import { SkyDome } from './sky';
 import { updateAO } from './ao';
 import { PostFX } from './post';
 import { SkyEnv } from './env';
-import { shared } from './materials';
+import { shared, bldQuality } from './materials';
 import { findIslands } from './turnback';
 import { pondUniforms } from './parkPond';
 
@@ -124,6 +124,8 @@ export class CityRenderer {
       this.sun.shadow.map?.dispose();
       this.sun.shadow.map = null;
     }
+    // 建物のマテリアルは画質で作り方が変わる（ふつうの画質ではガラス以外の映り込みを式で求める）
+    bldQuality.hq = !!this.quality.hq;
     this.scene.traverse((o) => {
       const m = (o as THREE.Mesh).material as THREE.Material | undefined;
       if (m) m.needsUpdate = true;
@@ -153,6 +155,7 @@ export class CityRenderer {
     if (this.terrain) this.scene.remove(this.terrain.group);
     this.terrain = new TerrainLayer(n);
     this.scene.add(this.terrain.group);
+    this.lastNightKey = -1; // 新しい地形のオーバーレイにも、昼夜の明るさを入れ直す
     this.grid = new Grid(n);
     this.rig.setMap(n);
     this.scene.remove(this.buildings.group);
@@ -278,6 +281,8 @@ export class CityRenderer {
     if (this.dirty.overlay) {
       buildOverlay(this.terrain.overlayData, g, this.maps, this.dataView);
       this.terrain.commitOverlay();
+      // ふだんの画面のゾーンの色だけ、夜は暗くする（データ表示は夜でも見やすいまま）
+      this.terrain.overlayMat.uniforms.uDim.value = this.dataView === 'none' ? 1 : 0;
     }
     this.dirty = { heights: false, grid: false, buildings: false, overlay: false, trees: false };
   }
@@ -372,10 +377,14 @@ export class CityRenderer {
   // 影：太陽から見て、画面に映る範囲（地面から高い建物の高さまで）だけをぴったり囲む。
   // 影の地図の1マスの単位で位置をそろえて、動かしたときのちらつきを抑える
   private shTmp = { x: new THREE.Vector3(), y: new THREE.Vector3(), p: new THREE.Vector3(), d: new THREE.Vector3(), c: new THREE.Vector3() };
+  private shW = 0;
+  private shH = 0;
   private updateShadow() {
     const d = this.rig.dist;
-    // 遠くからは影を省く
-    this.sun.castShadow = this.quality.shadows && d < 1800 && this.night < 0.75;
+    // 遠くからは影を省く。急に消えないよう、手前から少しずつ薄くする（夕方も同じ）
+    const fade = (1 - smooth(1450, 1800, d)) * (1 - smooth(0.55, 0.75, this.night));
+    this.sun.shadow.intensity = fade;
+    this.sun.castShadow = this.quality.shadows && fade > 0.001;
     if (!this.sun.castShadow) return;
     const t = this.rig.target;
     const cam = this.rig.camera;
@@ -404,9 +413,14 @@ export class CityRenderer {
       add(p.copy(cp).addScaledVector(dir, Math.max(0, st)));
     }
     const size = this.sun.shadow.mapSize.x;
-    // 大きさは少しずつ段をつけて変える（ズームのたびに細かく変わらないように）
-    const q = (v: number) => Math.pow(2, Math.ceil(Math.log2(Math.max(60, v * 1.04)) * 8) / 8);
-    const w = q(x1 - x0), h = q(y1 - y0);
+    // 大きさは少しずつ段をつけて変える（ズームのたびに細かく変わらないように）。
+    // 足りなくなったら少し余裕をもって広げ、かなり余ったときだけ狭める（回転やズームの途中で何度も変わらないように）
+    const q = (v: number) => Math.pow(2, Math.ceil(Math.log2(v) * 8) / 8);
+    const fit = (cur: number, v: number) => {
+      const need = Math.max(60, v * 1.04);
+      return cur >= need && cur < need * 1.35 ? cur : q(need * 1.08);
+    };
+    const w = (this.shW = fit(this.shW, x1 - x0)), h = (this.shH = fit(this.shH, y1 - y0));
     const tx = w / size, ty = h / size;
     const cx = Math.round((x0 + x1) / 2 / tx) * tx, cy = Math.round((y0 + y1) / 2 / ty) * ty;
     // 画面の外でも、太陽の側にある高い建物の影が入るように、手前（太陽の側）を広くとる
@@ -481,6 +495,7 @@ export class CityRenderer {
     shared.uSkyTop.value.copy(su.uZenith.value).lerp(new THREE.Color(1, 1, 1), 0.12);
     shared.uSkyHz.value.copy(sky);
     this.lights.setNight(smooth(0.35, 0.9, night));
+    if (this.terrain) this.terrain.overlayMat.uniforms.uLit.value = 1 - 0.7 * shared.uNight.value;
     this.cars.setNight(smooth(0.35, 0.9, night));
     this.updateEnv(sunCol, day, night, dusk);
   }

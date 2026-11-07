@@ -20,15 +20,38 @@ export const shared = {
   uTime: { value: 0 }, // 光の冠の色を変えるのに使う（秒）
 };
 
+// 高画質かどうか（CityRenderer.setQuality が決める）。ふつうの画質では、ガラス以外の映り込みを式で求めて軽くする
+export const bldQuality = { hq: false };
+
+// まわりからの光：環境マップのいちばんぼけた段と同じ値を式で求める（テクスチャを読まないぶん軽い）。
+// Lambert・Phong のマテリアルの '#include <lights_fragment_maps>' と置きかえて使う
+export const AMB_IRR_PARS = `
+uniform vec3 uAmbSky;
+uniform vec3 uAmbGround;
+uniform vec3 uAmbSun;
+uniform vec3 uSunDir;`;
+export const AMB_IRR_GLSL = `
+{
+  vec3 nWa = inverseTransformDirection(geometryNormal, viewMatrix);
+  iblIrradiance += PI * (mix(uAmbGround, uAmbSky, 0.5 + 0.5 * nWa.y) + uAmbSun * pow(0.5 + 0.5 * dot(nWa, uSunDir), 3.0));
+}`;
+export function ambUniforms(u: Record<string, THREE.IUniform>) {
+  u.uAmbSky = shared.uAmbSky;
+  u.uAmbGround = shared.uAmbGround;
+  u.uAmbSun = shared.uAmbSun;
+  u.uSunDir = shared.uSunDir;
+}
+
 // 素材の番号（textures.ts の MAT）ごとの粗さと金属らしさ
 // none, brick, concrete, plaster, siding, metal, membrane, gravel, shingle, ground
-const ROUGH = [0.6, 0.9, 0.85, 0.8, 0.58, 0.55, 0.66, 0.95, 0.8, 0.92];
+const ROUGH = [0.6, 0.95, 0.85, 0.8, 0.58, 0.55, 0.66, 0.95, 0.95, 0.92];
 const METAL = [0.0, 0.0, 0.0, 0.0, 0.0, 0.35, 0.0, 0.0, 0.0, 0.0];
 const arr = (a: number[]) => `float[${a.length}](${a.map((v) => v.toFixed(3)).join(', ')})`;
 
 export function createBuildingMaterial(): THREE.MeshStandardMaterial {
   const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8, metalness: 0 });
   m.onBeforeCompile = (sh) => {
+    const hq = bldQuality.hq;
     sh.uniforms.uNight = shared.uNight;
     sh.uniforms.uSunDir = shared.uSunDir;
     sh.uniforms.uSunCol = shared.uSunCol;
@@ -68,6 +91,7 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
       .replace(
         '#include <common>',
         `#include <common>
+        ${hq ? '#define BLD_HQ' : ''}
         uniform float uNight;
         uniform vec3 uSunDir;
         uniform vec3 uSunCol;
@@ -126,6 +150,16 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
           #else
             return Rw.y > 0.0 ? mix(uSkyHz, uSkyTop, pow(Rw.y, 0.6)) : mix(uSkyHz * 0.6, uAmbGround * 3.0, clamp(-Rw.y * 4.0, 0.0, 1.0));
           #endif
+        }
+        // 映り込む空を式で（ガラス以外の、ざらついた面用。環境マップと同じ作り方を簡単にしたもの）
+        vec3 envLite(vec3 Rw, float rough){
+          float h = Rw.y;
+          vec3 sky = mix(uSkyHz, uSkyTop, sqrt(clamp(h, 0.0, 1.0)));
+          vec3 gnd = mix(uSkyHz * 0.75, uCity, clamp(-h * 3.3, 0.0, 1.0));
+          float w = 0.02 + 0.7 * rough * rough;
+          vec3 col = mix(gnd, sky, smoothstep(-w, w, h));
+          vec3 amb = mix(uAmbGround, uAmbSky, 0.5 + 0.5 * h) + uAmbSun * pow(0.5 + 0.5 * dot(Rw, uSunDir), 3.0);
+          return mix(col, amb, smoothstep(0.35, 1.0, rough));
         }`,
       )
       .replace(
@@ -160,11 +194,13 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
             diffuseColor.rgb = mix(c, g, grassy);
           }
         }
-        // 塗った金属（色の濃いもの）は金属らしさを弱める
+        // 塗った金属（色の濃いもの）は金属らしさを弱め、つやを消す（赤い屋根などが空を映して白っぽくあせないように）
         {
           vec3 c = vColor.rgb;
           float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b));
-          gMetal *= 1.0 - smoothstep(0.1, 0.4, (mx - mn) / max(mx, 1e-3));
+          float paint = smoothstep(0.1, 0.4, (mx - mn) / max(mx, 1e-3));
+          gMetal *= 1.0 - paint;
+          if (mi == 5) gRough = mix(gRough, 0.85, paint);
         }
         float pat = floor(vPat + 0.5);
         float aband = 0.0;
@@ -321,7 +357,8 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
           if (aband > 0.5) { gRough = max(gRough, 0.85); gMetal = 0.0; }
         }
         // 壁の根元の陰（地面や下の屋根との境目）。まわりからの光ほど強くさえぎられる
-        if (vNy < 0.5) {
+        // 壁の座標を持たない面（円柱やドーム、斜めの部材など）は高さがわからないので、陰をつけない
+        if (vNy < 0.5 && abs(vUvm.x) + abs(vUvm.y) > 1e-4) {
           float k = smoothstep(0.0, 5.0, vUvm.y);
           gAO = mix(0.5, 1.0, k);
           diffuseColor.rgb *= mix(0.86, 1.0, k);
@@ -371,7 +408,13 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
             // 窓枠などのガラスでない部分は、下の街並みを映した暗めの色（枠の線がガラスの上で見えるように）
             radiance += mix(uCity, ge, clamp(gWin, 0.0, 1.0));
           } else {
-            radiance += envSky(Rw, rr);
+            // ざらついた面ほど、空の映り込みは凹凸や汚れにさえぎられて弱い（色があせて見えないように）
+            float so = mix(1.0, 0.35, smoothstep(0.45, 0.9, rr));
+            #ifdef BLD_HQ
+              radiance += envSky(Rw, rr) * so;
+            #else
+              radiance += envLite(Rw, rr) * so;
+            #endif
           }
         }`,
       )
@@ -390,6 +433,6 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
         totalEmissiveRadiance += diffuseColor.rgb * gLit * uNight * 1.1;`,
       );
   };
-  m.customProgramCacheKey = () => 'bld-pbr';
+  m.customProgramCacheKey = () => 'bld-pbr-' + (bldQuality.hq ? 1 : 0);
   return m;
 }

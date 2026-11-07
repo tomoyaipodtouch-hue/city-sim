@@ -3,17 +3,21 @@
 import * as THREE from 'three';
 import { surfaceNoise, SURF_GLSL } from './surfaceNoise';
 import { AO_DECL, aoExpr, aoUniforms } from './ao';
+import { AMB_IRR_GLSL, AMB_IRR_PARS, ambUniforms } from './materials';
 
 export function createGroundMaterial(params: THREE.MeshLambertMaterialParameters = {}, ao = true) {
   const m = new THREE.MeshLambertMaterial(params);
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uSurf = { value: surfaceNoise() };
     Object.assign(sh.uniforms, aoUniforms);
+    ambUniforms(sh.uniforms);
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vGw;')
       .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvGw = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vGw;\n' + SURF_GLSL + AO_DECL)
+      .replace('#include <common>', '#include <common>\nvarying vec3 vGw;\n' + SURF_GLSL + AO_DECL + AMB_IRR_PARS)
+      // まわりからの光は式で（環境マップを読まない）
+      .replace('#include <lights_fragment_maps>', AMB_IRR_GLSL)
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
@@ -43,9 +47,10 @@ export function createGroundMaterial(params: THREE.MeshLambertMaterialParameters
           g *= 0.9 + 0.2 * nF.r;
           // 土が見えるところ（すり減った草地、小道のようなところ）
           float dirtN = nS.a * 0.5 + nM.a * 0.35 + nF.g * 0.15;
-          float dirt = smoothstep(0.73, 0.8, dirtN);
+          // 土の見えるところは少なく、うすく（寄ったとき泥のしみに見えないように）
+          float dirt = smoothstep(0.78, 0.84, dirtN);
           vec3 soil = vec3(0.15, 0.115, 0.075) * (0.8 + 0.4 * nF.r) * (0.85 + 0.3 * nS.g);
-          g = mix(g, soil, dirt * 0.6);
+          g = mix(g, soil, dirt * 0.35);
           // 土のまわりは草がまばら（黄色っぽい）
           g = mix(g, g * vec3(1.1, 1.02, 0.78), smoothstep(0.62, 0.74, dirtN) * (1.0 - dirt) * 0.5);
           // ---- 砂・岩・川底（緑でない地面）：粒とむら、岩はひびの線 ----
@@ -57,6 +62,6 @@ export function createGroundMaterial(params: THREE.MeshLambertMaterialParameters
         }`,
       );
   };
-  m.customProgramCacheKey = () => `ground2-${ao ? 1 : 0}`;
+  m.customProgramCacheKey = () => `ground3-${ao ? 1 : 0}`;
   return m;
 }

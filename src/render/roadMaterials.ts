@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { surfaceNoise, SURF_GLSL } from './surfaceNoise';
 import { AO_DECL, aoExpr, aoUniforms } from './ao';
+import { AMB_IRR_GLSL, AMB_IRR_PARS, ambUniforms } from './materials';
 
 export const SURF = { asphalt: 0, concrete: 1 } as const;
 // 歩道・壁などの種類（aRd.w）
@@ -18,6 +19,7 @@ function inject(m: THREE.Material, key: string, ao: number, body: string, decl =
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uSurf = { value: surfaceNoise() };
     Object.assign(sh.uniforms, aoUniforms);
+    ambUniforms(sh.uniforms);
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nattribute vec4 aRd;\nvarying vec4 vRd;\nvarying vec3 vRw;\nvarying vec3 vRn;')
       .replace(
@@ -25,7 +27,9 @@ function inject(m: THREE.Material, key: string, ao: number, body: string, decl =
         '#include <worldpos_vertex>\nvRw = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvRd = aRd;\nvRn = normalize(mat3(modelMatrix) * objectNormal);',
       );
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec4 vRd;\nvarying vec3 vRw;\nvarying vec3 vRn;\n' + SURF_GLSL + AO_DECL + decl)
+      .replace('#include <common>', '#include <common>\nvarying vec4 vRd;\nvarying vec3 vRw;\nvarying vec3 vRn;\n' + SURF_GLSL + AO_DECL + AMB_IRR_PARS + decl)
+      // まわりからの光は式で（環境マップを読まない）
+      .replace('#include <lights_fragment_maps>', AMB_IRR_GLSL)
       .replace('#include <color_fragment>', `#include <color_fragment>\n{\n${body}\n}\n${ao > 0 ? `diffuseColor.rgb *= ${aoExpr('vRw', ao)};` : ''}`);
   };
   m.customProgramCacheKey = () => key;
@@ -36,7 +40,7 @@ function inject(m: THREE.Material, key: string, ao: number, body: string, decl =
 // コンクリートの路面（高速道路・高架）は、板の目地と板ごとの色の違い
 export function createRoadSurfaceMaterial() {
   const m = new THREE.MeshLambertMaterial({ vertexColors: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
-  return inject(m, 'road-surface-2', 0.32, `
+  return inject(m, 'road-surface-3', 0.32, `
     vec2 p = vRw.xz;
     float code = floor(vRd.w + 0.5);
     float lanes = mod(code, 4.0);
@@ -50,8 +54,17 @@ export function createRoadSurfaceMaterial() {
     float de = vRd.z - abs(lat); // 路肩（縁石）からの距離
     float fw = max(length(fwidth(p)), 1e-3); // 1 画素の大きさ（m）
     float fa = max(fwidth(alg), 1e-4), fl = max(fwidth(acr), 1e-4);
-    vec4 nF = texture2D(uSurf, p * (1.0 / 3.1));
-    vec4 nC = texture2D(uSurf, mat2(0.6, 0.8, -0.8, 0.6) * p * (1.0 / 8.7) + 0.21);
+    // 細かい模様（骨材の粒、車輪のあと、油のしみ、ひび、板の目地）は、1 画素が 0.5m より小さいときだけ描く。
+    // 引いて見ると画素より小さくて見えないので、その分の計算とテクスチャの読み込みを省く（境目はなめらかに消す）
+    float fine = 1.0 - smoothstep(0.3, 0.5, fw);
+    vec2 pdx = dFdx(p), pdy = dFdy(p);
+    vec4 nF = vec4(0.5), nC = vec4(0.5);
+    if (fine > 0.0) {
+      // 分岐の中なので、ミップマップの選び方は分岐の外で求めた変化量で決める
+      nF = textureGrad(uSurf, p * (1.0 / 3.1), pdx * (1.0 / 3.1), pdy * (1.0 / 3.1));
+      mat2 rC = mat2(0.6, 0.8, -0.8, 0.6) * (1.0 / 8.7);
+      nC = textureGrad(uSurf, rC * p + 0.21, rC * pdx, rC * pdy);
+    }
     vec4 nM = texture2D(uSurf, mat2(0.8, -0.6, 0.6, 0.8) * p * (1.0 / 23.0) + seed * 0.137);
     vec4 nL = texture2D(uSurf, p * (1.0 / 191.0) + 0.5);
     vec3 c = diffuseColor.rgb;
@@ -64,23 +77,23 @@ export function createRoadSurfaceMaterial() {
     c *= 0.9 + 0.2 * nM.g;
     // 車輪の通るところ（車線の中心の左右）の黒ずみと、車線の真ん中の油のしみ
     float trk = 0.0, oil = 0.0;
-    if (lanes > 0.5) {
+    if (lanes > 0.5 && fine > 0.0) {
       float span = vRd.z * 0.9;
       float lw = 2.0 * span / lanes;
       float x = lat + span;
       float lc = (fract(x / lw) - 0.5) * lw;
       float inside = 1.0 - smoothstep(span - 0.3, span, abs(lat));
       float var = 0.55 + 0.9 * nM.a;
-      trk = (1.0 - smoothstep(0.1, 0.45 + fl, abs(abs(lc) - 0.85))) * inside * var;
-      oil = (1.0 - smoothstep(0.05, 0.35 + fl, abs(lc))) * inside * var * smoothstep(0.35, 0.65, nC.g);
+      trk = (1.0 - smoothstep(0.1, 0.45 + fl, abs(abs(lc) - 0.85))) * inside * var * fine;
+      oil = (1.0 - smoothstep(0.05, 0.35 + fl, abs(lc))) * inside * var * smoothstep(0.35, 0.65, nC.g) * fine;
       if (conc > 0.5) {
         // コンクリートの板：4.5m ごとの目地と、車線の境目の目地。板ごとに少し色が違う
         float ja = (fract(alg / 4.5 + 0.5) - 0.5) * 4.5;
         float jl = (fract(x / lw + 0.5) - 0.5) * lw;
         float joint = max(sLine(ja, 0.05, fa), sLine(jl, 0.04, fl) * inside);
         float slab = sHash(vec2(floor(alg / 4.5), floor(x / lw)) + seed * 0.07);
-        c *= 1.0 + (slab - 0.5) * 0.09 * (1.0 - smoothstep(0.4, 1.2, fw));
-        c *= 1.0 - joint * 0.4;
+        c *= 1.0 + (slab - 0.5) * 0.09 * fine;
+        c *= 1.0 - joint * 0.4 * fine;
       }
     }
     // 交差点の中：車の止まる真ん中ほど油で黒ずみ、むらがある
@@ -88,8 +101,8 @@ export function createRoadSurfaceMaterial() {
       c *= 1.0 - smoothstep(1.0, 4.0, de) * 0.07 * (0.5 + nC.g);
       c *= 0.94 + 0.12 * nC.a;
     }
-    // 補修のあと（車線ごと、11m ごとに、ある確率で四角い継ぎはぎ）
-    {
+    // 補修のあと（車線ごと、11m ごとに、ある確率で四角い継ぎはぎ）。数 m の大きさなので、もう少し引いても描く
+    if (fw < 1.2) {
       vec2 cell = vec2(floor(alg / 11.0), floor((acr + 40.0) / 3.2));
       float h = sHash(cell + seed * 0.71 + 0.3);
       if (h < 0.16) {
@@ -105,7 +118,7 @@ export function createRoadSurfaceMaterial() {
       }
     }
     // 細いひび（古い舗装のところだけ）
-    float crack = nC.b * smoothstep(0.5, 0.7, nM.a + (sv - 0.5) * 0.3);
+    float crack = nC.b * smoothstep(0.5, 0.7, nM.a + (sv - 0.5) * 0.3) * fine;
     // 縁石ぞいの側溝（コンクリートの帯）と、ごみのたまる黒ずみ。縁石のない道は路肩の汚れ
     if (curb > 0.5) {
       float gut = 1.0 - smoothstep(0.42, 0.42 + fw, de);
@@ -118,7 +131,7 @@ export function createRoadSurfaceMaterial() {
       c *= 1.0 - (1.0 - smoothstep(0.0, 0.7, de)) * 0.13 * (0.6 + 0.8 * nC.g);
     }
     // 骨材の粒（近くで見えるざらつき）。車輪のあとはすり減ってなめらか
-    float grain = nF.r - 0.5;
+    float grain = (nF.r - 0.5) * fine;
     c *= 1.0 + grain * (conc > 0.5 ? 0.16 : 0.42) * (1.0 - trk * 0.5);
     c *= 1.0 - trk * 0.16 - oil * 0.1;
     c *= 1.0 - crack * 0.3;

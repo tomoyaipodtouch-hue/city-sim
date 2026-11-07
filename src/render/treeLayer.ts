@@ -7,7 +7,7 @@ import { Grid } from '../sim/grid';
 import { CELL } from '../sim/constants';
 import { ROADS, RoadType } from '../sim/defs';
 import { hash2 } from '../sim/rng';
-import { shared } from './materials';
+import { shared, AMB_IRR_GLSL, AMB_IRR_PARS, ambUniforms } from './materials';
 import type { TreeSpot } from './buildingGen';
 
 const MAX_TREES = 64000;
@@ -343,11 +343,13 @@ function broadleafGeo(lod: number) {
   return gb.build();
 }
 
-// 針葉樹（トウヒ・モミ）：段になった枝葉。ふちはぎざぎざ、下側は暗い
+// 針葉樹（トウヒ・モミ）：段になった枝葉。ふちはぎざぎざ、下側は暗い。
+// 近く（lod 0）は段ごとに中ほどの輪を外へふくらませて、平らな三角の板に見えないようにする
 function coniferGeo(lod: number) {
   const gb = new GeoB();
+  // 近くの段の数は、ふちに並べる小枝の板（needleCards）とそろえる
   const tiers = lod === 0 ? 6 : lod === 1 ? 4 : 2;
-  const seg = lod === 0 ? 11 : lod === 1 ? 8 : 6;
+  const seg = lod === 0 ? 13 : lod === 1 ? 8 : 6;
   const r = rng(11);
   for (let k = 0; k < tiers; k++) {
     const t = k / Math.max(1, tiers - 1);
@@ -356,7 +358,7 @@ function coniferGeo(lod: number) {
     const R = 2.3 * (1 - 0.72 * Math.pow(t, 0.9)) * (lod === 2 ? 1.05 : 1);
     const apexY = base + h;
     const shade = 0.62 + 0.38 * t; // 下の段ほど暗い
-    const apexIn: number[] = [], rim: number[] = [];
+    const apexIn: number[] = [], rim: number[] = [], mid: number[] = [];
     const rot = r() * 6.28;
     for (let s = 0; s < seg; s++) {
       const a = rot + (s / seg) * Math.PI * 2;
@@ -368,9 +370,22 @@ function coniferGeo(lod: number) {
       const n: V3 = [cx * h, rr * 0.9, cz * h];
       rim.push(gb.v([cx * rr, ry, cz * rr], n, [shade * 1.05, shade * 1.07, shade * 0.92], 1));
       const inS = lod === 2 ? 0.85 : 0.6;
+      if (lod === 0) {
+        // 中ほどの輪：外へふくらませ、法線は横向きに（丸みのある段に見える）
+        const mr = rr * 0.5 * 1.18, my = ry + (apexY - ry) * 0.5;
+        const ms = shade * 0.85;
+        mid.push(gb.v([cx * mr, my, cz * mr], [cx * h * 1.25, rr * 0.75, cz * h * 1.25], [ms * 1.04, ms * 1.06, ms * 0.93], 1));
+      }
       apexIn.push(gb.v([0, apexY, 0], n, [shade * inS, shade * inS * 1.03, shade * inS], 1));
     }
-    for (let s = 0; s < seg; s++) gb.t(apexIn[s], rim[s], rim[(s + 1) % seg]);
+    for (let s = 0; s < seg; s++) {
+      const s1 = (s + 1) % seg;
+      if (lod === 0) {
+        gb.t(mid[s], rim[s], rim[s1]);
+        gb.t(mid[s], rim[s1], mid[s1]);
+        gb.t(apexIn[s], mid[s], mid[s1]);
+      } else gb.t(apexIn[s], rim[s], rim[s1]);
+    }
     if (lod < 2) {
       // 下側（枝の裏）：ふちから幹へ
       const inner = gb.v([0, base + h * 0.32, 0], [0, -1, 0], [0.22, 0.22, 0.2], 1);
@@ -500,6 +515,8 @@ function treeMaterial(lod: number, conifer: boolean, cards = false) {
     sh.uniforms.uFarS = U.uFarS;
     sh.uniforms.uLeafTex = { value: leafTexture() };
     sh.uniforms.uSkyC = shared.uSkyHz;
+    sh.uniforms.uNight = shared.uNight;
+    ambUniforms(sh.uniforms);
     sh.vertexShader = sh.vertexShader
       .replace(
         '#include <common>',
@@ -528,7 +545,7 @@ function treeMaterial(lod: number, conifer: boolean, cards = false) {
         // 模様の位置（世界の座標。ゆれる前の位置なので、模様は葉といっしょに動く）
         vLeafP = (instanceMatrix * vec4(transformed, 1.0)).xyz;
         ${lod < 2 ? WIND : ''}
-        ${lod === 1 ? '{ vec2 dd = instanceMatrix[3].xz - uRing.xy; if (dot(dd, dd) < uRing.z) transformed = vec3(0.0); }' : ''}
+        ${lod >= 1 ? '{ vec2 dd = instanceMatrix[3].xz - uRing.xy; if (dot(dd, dd) < uRing.z) transformed = vec3(0.0); }' : ''}
         ${lod === 2 ? 'transformed *= uFarS;' : ''}`,
       );
     sh.fragmentShader = sh.fragmentShader
@@ -539,6 +556,8 @@ function treeMaterial(lod: number, conifer: boolean, cards = false) {
         varying vec3 vLeafP;
         uniform highp sampler3D uLeafTex;
         uniform vec3 uSkyC;
+        uniform float uNight;
+        ${AMB_IRR_PARS}
         float gSun = 1.0;`,
       )
       .replace(
@@ -550,7 +569,7 @@ function treeMaterial(lod: number, conifer: boolean, cards = false) {
         float lf = clamp((sampledDiffuseColor.r - 0.5) * 2.0, 0.0, 1.0);
         vec3 lg = vec3(0.0);
         float bk = 0.5;`
-            : lod < 2
+            : lod === 0
             ? `// 葉の房の模様。針葉樹は細かめ
         vec3 lp = vLeafP * ${conifer ? '1.6' : '1.0'};
         vec4 n1 = texture(uLeafTex, lp * 0.19);
@@ -560,12 +579,31 @@ function treeMaterial(lod: number, conifer: boolean, cards = false) {
         // 樹皮は縦のすじ
         float bk = 0.5;
         if (vLeaf < 0.5) bk = texture(uLeafTex, vLeafP * vec3(1.6, 0.18, 1.6)).a;`
+            : lod === 1
+            ? `// 葉の房の模様。針葉樹は細かめ。遠く（約 300m より先）は模様が画素より小さいので読まない（軽くする）
+        vec3 lp = vLeafP * ${conifer ? '0.304' : '0.19'};
+        float near = 1.0 - smoothstep(240.0, 300.0, length(vViewPosition));
+        vec3 ldx = dFdx(lp), ldy = dFdy(lp);
+        float lf = 0.5;
+        vec3 lg = vec3(0.0);
+        float bk = 0.5;
+        if (near > 0.0) {
+          // 分岐の中なので、ミップマップの選び方は分岐の外で求めた変化量で決める
+          vec4 n1 = textureGrad(uLeafTex, lp, ldx, ldy);
+          lf = mix(0.5, n1.a, near);
+          lg = (n1.rgb - 0.5) * 0.9 * near;
+          // 樹皮は縦のすじ
+          if (vLeaf < 0.5) {
+            vec3 bp = vLeafP * vec3(1.6, 0.18, 1.6), bdx = dFdx(bp), bdy = dFdy(bp);
+            bk = mix(0.5, textureGrad(uLeafTex, bp, bdx, bdy).a, near);
+          }
+        }`
             : 'float lf = 0.5; float bk = 0.5;'
         }
-        // 房のすき間は奥が見えて暗い。日が当たる房は少し黄色っぽく
-        float gap = mix(0.5, 1.0, smoothstep(0.1, 0.38, lf));
+        // 房のすき間は奥が見えて暗い（近くの木は黒い穴に見えないよう浅めに。夜はさらに浅く）。日が当たる房は少し黄色っぽく
+        float gap = mix(mix(${lod === 0 ? '0.65' : '0.5'}, 0.8, uNight), 1.0, smoothstep(0.1, 0.38, lf));
         vec3 leafC = (0.58 + 0.72 * lf) * gap * mix(vec3(0.93, 0.97, 1.08), vec3(1.06, 1.03, 0.9), lf);
-        diffuseColor.rgb *= mix(vec3(0.75 + 0.5 * bk), leafC, vLeaf)${lod === 2 ? (conifer ? ' * 1.3' : ' * 1.12') : ''};
+        diffuseColor.rgb *= mix(vec3(0.75 + 0.5 * bk), leafC, vLeaf)${lod === 2 ? (conifer ? ' * 1.15' : '') : ''};
         gSun = mix(1.0, 0.4 + 1.2 * lf, vLeaf);`,
       )
       .replace(
@@ -596,15 +634,19 @@ function treeMaterial(lod: number, conifer: boolean, cards = false) {
         #define RE_Direct RE_Direct_Lambert
         #define RE_IndirectDiffuse RE_IndirectDiffuse_Lambert`,
       )
+      // まわりからの光は式で（環境マップを読まない。値は同じ）
+      .replace('#include <lights_fragment_maps>', AMB_IRR_GLSL)
       .replace(
         '#include <lights_fragment_end>',
         `#include <lights_fragment_end>
-        // ふちに空の色がうっすら乗る（空気感）
+        // ふちに空の色がうっすら乗る（空気感）。夜は月明かりの青白い色
         float rimF = pow(1.0 - saturate(dot(normal, normalize(vViewPosition))), 3.0);
-        reflectedLight.indirectDiffuse += uSkyC * diffuseColor.rgb * rimF * 0.7 * vLeaf;`,
+        reflectedLight.indirectDiffuse += max(uSkyC, vec3(0.05, 0.06, 0.09) * uNight) * diffuseColor.rgb * rimF * 0.7 * vLeaf;
+        // 夜：街あかりや月明かりの照り返しで、木が真っ黒の固まりにならないように少し持ち上げる
+        reflectedLight.indirectDiffuse += diffuseColor.rgb * vec3(0.07, 0.08, 0.11) * uNight;`,
       );
   };
-  m.customProgramCacheKey = () => 'tree' + lod + (conifer ? 'c' : 'b') + (cards ? 'L' : '');
+  m.customProgramCacheKey = () => 'tree2-' + lod + (conifer ? 'c' : 'b') + (cards ? 'L' : '');
   return m;
 }
 
@@ -640,7 +682,7 @@ const SHAPE: V3[][] = [
 const hex = (h: number) => new THREE.Color(h);
 // 夏の緑（少しずつ違う）、赤むらさきの葉（ベニバスモモ）、黄緑の葉（ニセアカシア 'フリーシア'）
 const GREENS = [0x557a2c, 0x5f8434, 0x4a6e2a, 0x6a8c38, 0x587d36, 0x748f3a, 0x4f7034, 0x678a3c, 0x5c7a2e, 0x4b7330].map(hex);
-const COPPER = [0x5c4440, 0x52404a].map(hex);
+const COPPER = [0x6a4a46, 0x5e4852].map(hex);
 const GOLDEN = [0x8e9e44, 0x99a24c].map(hex);
 const DARKS = [0x2f5532, 0x37603a, 0x2c4e34, 0x3a6036, 0x30583f, 0x42673a].map(hex);
 
@@ -658,7 +700,10 @@ function pickSpecies(kind: number, src: number, h: number, h2: number): Pick {
     if (h < acc) { shape = k; break; }
   }
   const cp = src === 0 ? 0.015 : src === 1 ? 0.035 : 0.06, gd = src === 0 ? 0.03 : src === 1 ? 0.045 : 0.04;
-  const color = h2 < cp ? COPPER[Math.floor((h2 / cp) * COPPER.length)] : h2 < cp + gd ? GOLDEN[Math.floor(((h2 - cp) / gd) * GOLDEN.length)] : GREENS[Math.floor(((h2 - cp - gd) / (1 - cp - gd)) * GREENS.length) % GREENS.length];
+  const copper = h2 < cp;
+  const color = copper ? COPPER[Math.floor((h2 / cp) * COPPER.length)] : h2 < cp + gd ? GOLDEN[Math.floor(((h2 - cp) / gd) * GOLDEN.length)] : GREENS[Math.floor(((h2 - cp - gd) / (1 - cp - gd)) * GREENS.length) % GREENS.length];
+  // 赤むらさきの葉の木（ベニバスモモ、ムラサキブナ）は丸い形か横に広い形（細長いと枯れた木のように見える）
+  if (copper && (shape === 1 || shape === 2)) shape = h < 0.5 ? 0 : 3;
   return { shape, color };
 }
 
@@ -673,6 +718,23 @@ const HERO_MAX = 2400;
 const CARDS = 40;
 const CARDS_HQ = 56;
 
+interface Chunk { meshes: THREE.InstancedMesh[]; totals: number[]; cx: number; cz: number; ci: number; y0: number; y1: number; far: boolean; hash: number }
+
+// 区画の中身（木の位置・大きさ・色）から求める値
+function listHash(L: { m: number[]; seed: number[]; col: number[] }[]) {
+  let h = 2166136261;
+  const mix = (v: number) => { h = Math.imul(h ^ (v | 0), 16777619); };
+  for (const l of L) {
+    mix(l.seed.length);
+    for (let k = 0; k < l.seed.length; k++) {
+      const o = k * 16;
+      mix(l.m[o + 12] * 64); mix(l.m[o + 13] * 64); mix(l.m[o + 14] * 64); mix(l.m[o] * 1024); mix(l.m[o + 5] * 1024);
+      mix(l.seed[k] * 65536); mix(l.col[k * 3] * 4096); mix(l.col[k * 3 + 1] * 4096);
+    }
+  }
+  return h >>> 0;
+}
+
 export class TreeLayer {
   group = new THREE.Group();
   private hero = [broadleafGeo(0), coniferGeo(0)];
@@ -685,7 +747,8 @@ export class TreeLayer {
   private depthMat = [treeDepthMaterial(false, true), treeDepthMaterial(true, true)];
   // 近くの木の輪郭につける葉の板 [広葉樹, 針葉樹]
   private heroCards: THREE.InstancedMesh[];
-  private chunks: { meshes: THREE.InstancedMesh[]; totals: number[]; cx: number; cz: number }[] = [];
+  // far = この区画を遠くの形で描いているか。hash = 中身が変わったかを調べるための値（同じなら作り直さない）
+  private chunks: Chunk[] = [];
   private lodFar = false;
   private keep = 1;
   private shadows = true;
@@ -742,27 +805,48 @@ export class TreeLayer {
     });
   }
 
-  // ズームに合わせて、木の形の細かさと本数を切り替える
+  // ズームに合わせて、木の形の細かさと本数を切り替える。
+  // 近くから見ているときも、カメラから遠い区画は遠くの形にする（画面の奥の林まで細かい形で描かない）
   setLod(dist: number) {
     U.uWindT.value = (performance.now() / 1000) % 3600;
-    const far = dist > 450;
+    const allFar = dist > 450;
     const keep = dist > 2600 ? 0.1 : dist > 1800 ? 0.16 : dist > 1100 ? 0.3 : dist > 700 ? 0.55 : 1;
     const shadows = dist < 600;
-    // 間引いた分、残りを少し大きくして林のこみ具合を保つ
-    U.uFarS.value = Math.pow(keep, -0.28);
-    if (far !== this.lodFar || keep !== this.keep || shadows !== this.shadows) {
-      this.lodFar = far;
-      this.keep = keep;
-      this.shadows = shadows;
-      for (const c of this.chunks)
-        c.meshes.forEach((m, k) => {
-          m.geometry = (far ? this.far : this.near)[k];
-          m.material = (far ? this.matFar : this.matNear)[k];
-          m.count = Math.ceil(c.totals[k] * keep);
-          m.castShadow = shadows;
-        });
+    // 間引いた分、残りを少し大きくして林のこみ具合を保つ（遠くから見ても林が閉じて見えるように）
+    U.uFarS.value = Math.pow(keep, -0.35);
+    const all = keep !== this.keep || shadows !== this.shadows || allFar !== this.lodFar;
+    this.lodFar = allFar;
+    this.keep = keep;
+    this.shadows = shadows;
+    // 区画がカメラからこれより遠ければ遠くの形（ズームに合わせて広げる。境目で行ったり来たりしないよう幅をもたせる）
+    const T = Math.max(280, dist * 1.5);
+    for (const c of this.chunks) {
+      const far = allFar || this.chunkFar(c, T);
+      if (far !== c.far || all) this.applyLod(c, far);
     }
     this.updateHero(dist);
+  }
+
+  private chunkFar(c: Chunk, T: number) {
+    const cam = this.cam;
+    if (!cam) return false;
+    const span = CHUNK * CELL, p = cam.position;
+    const x0 = c.cx * span, z0 = c.cz * span;
+    const dx = Math.max(x0 - p.x, 0, p.x - x0 - span), dz = Math.max(z0 - p.z, 0, p.z - z0 - span);
+    const dy = Math.max(c.y0 - p.y, 0, p.y - c.y1);
+    const d2 = dx * dx + dy * dy + dz * dz;
+    const t = c.far ? T * 0.92 : T * 1.08;
+    return d2 > t * t;
+  }
+
+  private applyLod(c: Chunk, far: boolean) {
+    c.far = far;
+    c.meshes.forEach((m, k) => {
+      m.geometry = (far ? this.far : this.near)[k];
+      m.material = (far ? this.matFar : this.matNear)[k];
+      m.count = Math.ceil(c.totals[k] * this.keep);
+      m.castShadow = this.shadows;
+    });
   }
 
   // カメラの近くの木を、くわしい形に置きかえる
@@ -789,7 +873,8 @@ export class TreeLayer {
     const fwd = this.fwd.set(0, 0, -1).applyQuaternion(cam.quaternion);
     const tx = cam.position.x + fwd.x * dist, tz = cam.position.z + fwd.z * dist;
     const cx = tx + (cam.position.x - tx) * 0.25, cz = tz + (cam.position.z - tz) * 0.25;
-    const R = hq ? Math.min(170, Math.max(60, dist * 1.3 + 25)) : Math.min(100, Math.max(45, dist * 0.85 + 12));
+    // いちばん寄ったときも、くわしい形の範囲の境目が画面の中ほどに来ないよう、少し広めにとる
+    const R = hq ? Math.min(170, Math.max(65, dist * 1.3 + 25)) : Math.min(100, Math.max(65, dist * 0.85 + 12));
     const moved = Math.hypot(cx - this.heroAt.x, cz - this.heroAt.z);
     if (!this.heroDirty && moved < R * 0.12 && Math.abs(R - this.heroR) < R * 0.1) return;
     this.heroDirty = false;
@@ -846,7 +931,10 @@ export class TreeLayer {
 
   rebuild(g: Grid, extra: TreeSpot[]) {
     const n = g.n;
-    for (const c of this.chunks) for (const m of c.meshes) { this.group.remove(m); m.dispose(); }
+    // 前の区画（中身が同じなら、そのまま使う）
+    const old = new Map<number, Chunk>();
+    for (const c of this.chunks) old.set(c.ci, c);
+    const drop = (c: Chunk) => { for (const m of c.meshes) { this.group.remove(m); m.dispose(); } };
     this.chunks = [];
     this.heroDirty = true;
     const cn = Math.ceil(n / CHUNK);
@@ -923,12 +1011,30 @@ export class TreeLayer {
       }
     for (let ci = 0; ci < lists.length; ci++) {
       const L = lists[ci];
-      if (!L[0].seed.length && !L[1].seed.length) continue;
+      const prev = old.get(ci);
+      old.delete(ci);
+      if (!L[0].seed.length && !L[1].seed.length) {
+        if (prev) drop(prev);
+        continue;
+      }
+      // 中身が変わっていない区画は作り直さない（建物が建つたびに全部を作り直すと重い）
+      const hash = listHash(L);
+      if (prev && prev.hash === hash) {
+        this.chunks.push(prev);
+        continue;
+      }
+      if (prev) drop(prev);
       const meshes: THREE.InstancedMesh[] = [];
       const totals: number[] = [];
+      let y0 = Infinity, y1 = -Infinity;
+      for (const list of L) for (let k = 13; k < list.m.length; k += 16) { y0 = Math.min(y0, list.m[k]); y1 = Math.max(y1, list.m[k] + 14); }
+      const chunk: Chunk = { meshes, totals, cx: ci % cn, cz: Math.floor(ci / cn), ci, y0, y1, far: false, hash };
+      // 形の細かさは、次の setLod で区画ごとに決め直す
+      const far = this.lodFar || (prev ? prev.far : false);
+      chunk.far = far;
       L.forEach((list, kind) => {
         const cnt = list.seed.length;
-        const m = new THREE.InstancedMesh((this.lodFar ? this.far : this.near)[kind], (this.lodFar ? this.matFar : this.matNear)[kind], Math.max(1, cnt));
+        const m = new THREE.InstancedMesh((far ? this.far : this.near)[kind], (far ? this.matFar : this.matNear)[kind], Math.max(1, cnt));
         m.customDepthMaterial = this.depthMat[kind];
         // 間引くときに場所が偏らないよう、並びを混ぜる（シードの順）
         const order = list.seed.map((_, k) => k).sort((a2, b2) => ((list.seed[a2] * 7919) % 1) - ((list.seed[b2] * 7919) % 1));
@@ -948,7 +1054,8 @@ export class TreeLayer {
         meshes.push(m);
         totals.push(cnt);
       });
-      this.chunks.push({ meshes, totals, cx: ci % cn, cz: Math.floor(ci / cn) });
+      this.chunks.push(chunk);
     }
+    for (const c of old.values()) drop(c);
   }
 }

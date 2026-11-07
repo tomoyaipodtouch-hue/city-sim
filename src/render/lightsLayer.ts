@@ -5,13 +5,18 @@ import { Grid } from '../sim/grid';
 import { CELL, DX, DY } from '../sim/constants';
 import { ROADS } from '../sim/defs';
 
-function glowTexture() {
+// soft = 街灯の光：中心が明るく、外へ長くうすく消える（寄ったとき、ふちのはっきりした円盤に見えないように）
+function glowTexture(soft = false) {
   const c = document.createElement('canvas');
   c.width = c.height = 64;
   const x = c.getContext('2d')!;
   const gr = x.createRadialGradient(32, 32, 0, 32, 32, 32);
   gr.addColorStop(0, 'rgba(255,255,255,1)');
-  gr.addColorStop(0.25, 'rgba(255,255,255,0.55)');
+  if (soft) {
+    gr.addColorStop(0.12, 'rgba(255,255,255,0.7)');
+    gr.addColorStop(0.35, 'rgba(255,255,255,0.22)');
+    gr.addColorStop(0.65, 'rgba(255,255,255,0.06)');
+  } else gr.addColorStop(0.25, 'rgba(255,255,255,0.55)');
   gr.addColorStop(1, 'rgba(255,255,255,0)');
   x.fillStyle = gr;
   x.fillRect(0, 0, 64, 64);
@@ -46,7 +51,13 @@ export class StreetLights {
     const tex = glowTexture();
     const mk = (size: number, color: number) =>
       new THREE.PointsMaterial({ map: tex, size, color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true, fog: true });
-    this.lampMat = mk(12, 0xffd9a0);
+    this.lampMat = mk(14, 0xffd9a0);
+    this.lampMat.map = glowTexture(true);
+    // 寄って見ても、光のにじみは画面の上で一定の大きさまで（大きな円盤にならないように）。scale は画面の高さの半分（画素）
+    this.lampMat.onBeforeCompile = (sh) => {
+      sh.vertexShader = sh.vertexShader.replace('#include <logdepthbuf_vertex>', 'gl_PointSize = min(gl_PointSize, scale * 0.16);\n#include <logdepthbuf_vertex>');
+    };
+    this.lampMat.customProgramCacheKey = () => 'lamp-halo';
     this.lamps = new THREE.Points(new THREE.BufferGeometry(), this.lampMat);
     // 路面を照らす光：地面に平らに置いた丸い光（建物や地面に食い込まないように）
     this.pools = new THREE.InstancedMesh(

@@ -4,6 +4,7 @@ import { Grid } from '../sim/grid';
 import { CELL, WATER_LEVEL } from '../sim/constants';
 import { hash2 } from '../sim/rng';
 import { createGroundMaterial } from './groundMaterial';
+import { AMB_IRR_GLSL, AMB_IRR_PARS, ambUniforms } from './materials';
 
 export class TerrainLayer {
   group = new THREE.Group();
@@ -55,7 +56,8 @@ export class TerrainLayer {
     this.overlayTex.minFilter = THREE.NearestFilter;
     this.overlayTex.needsUpdate = true;
     this.overlayMat = new THREE.ShaderMaterial({
-      uniforms: { uData: { value: this.overlayTex }, uN: { value: n }, uGrid: { value: 0 }, uSmooth: { value: 0 } },
+      // uLit：夜の明るさ（ゾーンの色を暗くする）、uDim：1 = ふだんの画面（ゾーンの色）、0 = データ表示（夜でも明るいまま）
+      uniforms: { uData: { value: this.overlayTex }, uN: { value: n }, uGrid: { value: 0 }, uSmooth: { value: 0 }, uLit: { value: 1 }, uDim: { value: 1 } },
       vertexShader: `
         varying vec3 vW;
         void main(){
@@ -65,7 +67,7 @@ export class TerrainLayer {
           gl_Position = projectionMatrix * viewMatrix * w;
         }`,
       fragmentShader: `
-        uniform sampler2D uData; uniform float uN; uniform float uGrid;
+        uniform sampler2D uData; uniform float uN; uniform float uGrid; uniform float uLit; uniform float uDim;
         varying vec3 vW;
         void main(){
           vec2 cell = vW.xz / ${CELL.toFixed(1)};
@@ -76,12 +78,16 @@ export class TerrainLayer {
           float l = 1.0 - smoothstep(0.0, 1.2, min(d.x, d.y));
           float px = 1.0 / max(fw.x, fw.y); // 1マスが画面で何ピクセルか
           float line = l * smoothstep(16.0, 44.0, px) * uGrid;
-          // データ表示がないところ（色が黒）は、線だけを白く重ねる
-          vec3 base = c.a > 0.01 ? c.rgb : vec3(1.0);
-          vec3 rgb = mix(base, vec3(1.0), line * 0.5);
-          float a = max(c.a, line * 0.16);
+          // データ表示がないところ（色が黒）は、線だけを白く重ねる。色は線形にして、ほかと同じ色の変換を通す
+          // （高画質のときも同じ色になり、夜はゾーンの色が地面より明るく浮かない）
+          // 線の白は、色の変換（トーンマッピング）のあとも白く残るよう少し明るめ
+          vec3 base = c.a > 0.01 ? pow(c.rgb, vec3(2.2)) * mix(1.0, uLit, uDim) : vec3(1.35);
+          vec3 rgb = mix(base, vec3(1.35), line * 0.6);
+          float a = max(c.a, line * 0.21);
           if (a < 0.01) discard;
           gl_FragColor = vec4(rgb, a);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
         }`,
       transparent: true,
       depthWrite: false,
@@ -111,11 +117,15 @@ export class TerrainLayer {
     const U = this.waterUniforms;
     wm.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, U);
+      ambUniforms(sh.uniforms);
       sh.vertexShader = sh.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vWw;')
         .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWw = (modelMatrix * vec4(transformed, 1.0)).xyz;');
       sh.fragmentShader = sh.fragmentShader
+        // まわりからの光は式で（環境マップを読まない）
+        .replace('#include <lights_fragment_maps>', AMB_IRR_GLSL)
         .replace('#include <common>', `#include <common>
+          ${AMB_IRR_PARS}
           uniform float uTime, uNight; uniform sampler2D uHeights; uniform vec3 uSky;
           varying vec3 vWw;
           float wv(vec2 p, vec2 d, float f, float sp){ return sin(dot(p, d) * f + uTime * sp); }`)

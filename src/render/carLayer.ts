@@ -18,6 +18,7 @@ const MAX_PEOPLE = 700;
 const MAX_LIGHTS = (MAX_CARS + MAX_TRUCKS + 200) * 2;
 const KINGPIN = 1.6; // トラクターの中心から連結部までの距離
 const TRAILER_AXLE = 12.2; // 連結部から後ろの車輪までの距離
+const TRAILER_REAR = KINGPIN + 14.2; // トラクターの中心から荷台の後ろの端までの距離
 
 // 車は「今いるマス（from）」の中を、入ってきた辺の中点から出ていく辺の中点まで、
 // マスの中心を制御点にした曲線（2次ベジェ曲線）に沿って進む。道路の描き方と同じ形になる。
@@ -364,8 +365,8 @@ export class CarLayer {
       const handled = sum > 0 ? Math.max(0, 1 - left / sum) : 0;
       build(this.packers, gv, 0.0002 * handled);
     }
-    // 歩く人は、交通量の多い一般の道路の歩道に多い
-    build(this.people, traffic, 0.006);
+    // 歩く人は、交通量の多い一般の道路の歩道に多い（寄って見たとき、街に人がいるとわかるくらい）
+    build(this.people, traffic, 0.03);
     if (riders && riders.length === 5 * N) {
       // バスは40人に1台、電車は1両に乗る人数を多めに見て台数を決める
       // バスは前の 4 割の台数にし、バス停の数の 1.5 倍までにする
@@ -744,16 +745,32 @@ export class CarLayer {
     const tp = this.lightsTail.geometry.getAttribute('position') as THREE.BufferAttribute;
     let nh = 0, nt = 0;
     const P = this.pt;
-    // 車どうしの間隔：同じマス・同じ向き・同じ車線にいる車を集めておく（前の車に追いついたら待つ）
-    const lanes = new Map<number, { c: Car; h: number }[]>();
-    const laneOf = (c: Car) => ((ROADS[g.nodeType(c.from)] || ROADS[1]).oneWay ? c.lane : 0);
+    // 車どうしの間隔：同じマス・同じ向き・同じ車線にいる車を集めておく（前の車に追いついたら待つ）。
+    // t = マスの中の位置、r = そこから車の後ろの端までの長さ、L = そのマスの長さ。
+    // トレーラーは荷台が後ろのマスまでのびているので、荷台がかかるマスにも後ろの端を入れておく（後ろの車が荷台にめりこまないように）
+    const lanes = new Map<number, { c: Car; t: number; r: number; L: number }[]>();
+    const laneAt = (c: Car, from: number) => ((ROADS[g.nodeType(from)] || ROADS[1]).oneWay ? c.lane : 0);
+    const laneOf = (c: Car) => laneAt(c, c.from);
+    const addLane = (key: number, e: { c: Car; t: number; r: number; L: number }) => {
+      const a = lanes.get(key);
+      if (a) a.push(e);
+      else lanes.set(key, [e]);
+    };
     for (const f of this.fleets) {
       if (f.track !== 'road' && f.track !== 'bus') continue;
       for (const c of f.cars) {
-        const key = (c.from * 8 + c.d) * 2 + laneOf(c);
-        const a = lanes.get(key);
-        if (a) a.push({ c, h: f.halfLen });
-        else lanes.set(key, [{ c, h: f.halfLen }]);
+        const len = CarLayer.cellLen(c);
+        const rear = f.trailer ? TRAILER_REAR : f.halfLen;
+        addLane((c.from * 8 + c.d) * 2 + laneOf(c), { c, t: c.t, r: rear, L: len });
+        if (f.trailer) {
+          let rem = rear - c.t * len;
+          for (const h of c.hist) {
+            if (rem <= 0) break;
+            const pl = CarLayer.cellLen(h);
+            addLane((h.from * 8 + h.d) * 2 + laneAt(c, h.from), { c, t: Math.max(0, 1 - rem / pl), r: 0, L: pl });
+            rem -= pl;
+          }
+        }
       }
     }
     for (const f of this.fleets) {
@@ -826,11 +843,11 @@ export class CarLayer {
           // 前の車（同じマスの先、または次のマス）との間をあける
           const lb = laneOf(c), me = f.halfLen;
           let gap = Infinity;
-          for (const o of lanes.get((c.from * 8 + c.d) * 2 + lb) ?? []) if (o.c !== c && o.c.t > c.t) gap = Math.min(gap, (o.c.t - c.t) * len - o.h - me);
+          for (const o of lanes.get((c.from * 8 + c.d) * 2 + lb) ?? []) if (o.c !== c && o.t > c.t) gap = Math.min(gap, (o.t - c.t) * len - o.r - me);
           if (gap === Infinity)
             for (let d = 0; d < 8; d++) {
               if (d === opp(c.d)) continue;
-              for (const o of lanes.get((c.to * 8 + d) * 2 + lb) ?? []) if (o.c !== c) gap = Math.min(gap, (1 - c.t) * len + o.c.t * CarLayer.cellLen(o.c) - o.h - me);
+              for (const o of lanes.get((c.to * 8 + d) * 2 + lb) ?? []) if (o.c !== c) gap = Math.min(gap, (1 - c.t) * len + o.t * o.L - o.r - me);
             }
           const room = Math.max(0, gap - 1.5);
           if (room < adv * len) {

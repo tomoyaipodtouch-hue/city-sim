@@ -312,9 +312,46 @@ function mansion(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
   tf(f.W / 2 - 3, f.D / 2 - 4, 1.2);
 }
 
-// 屋上の設備（空調の室外機、換気口、天窓）
-function roofUnits(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, rng: Rng, n: number) {
+// 大きな平らな屋上の設備：階段室（エレベーターの機械室）、室外機をまとめて置いた一角とそのダクト。
+// 使った幅と、右側（x1 の側）に置いたかを返す。残りの場所に小さな設備を散らす
+function roofPlant(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, rng: Rng) {
+  const W = x1 - x0, D = z1 - z0;
+  const flip = rng.next() < 0.5;
+  const X = (x: number) => (flip ? x1 - (x - x0) : x);
+  const bx = (a: number, b: number, za: number, zb: number, ya: number, yb: number, c: THREE.Color, roof?: THREE.Color) =>
+    mb.box(Math.min(X(a), X(b)), ya, za, Math.max(X(a), X(b)), yb, zb, c, PAT.none, roof);
+  const wall = C(0xd2cfc8), unit = C(0xb9bdc2), fan = C(0x3a3d42), duct = C(0xa7acb2);
+  // 階段室：屋上より一段高い小さな箱と、扉
+  const sw = 4 + rng.next() * 1.5, sd = 5 + rng.next() * 2;
+  const sz0 = z0 + 2 + rng.next() * Math.max(0.1, D - sd - 4);
+  bx(x0 + 2, x0 + 2 + sw, sz0, sz0 + sd, y, y + 3.3, wall, C(0xa9a69f));
+  mb.box(Math.min(X(x0 + 2 + sw), X(x0 + 2 + sw + 0.05)), y, sz0 + sd / 2 - 0.5, Math.max(X(x0 + 2 + sw), X(x0 + 2 + sw + 0.05)), y + 2.2, sz0 + sd / 2 + 0.5, C(0x5a6066));
+  // 室外機の一角：2 列に並べる
+  const ux0 = x0 + 4 + sw, cols = W > 30 ? 3 : 2, rows = D > 26 ? 3 : 2;
+  const uz0 = z0 + 2.5 + rng.next() * Math.max(0.1, D - rows * 2.4 - 5);
+  for (let i = 0; i < cols; i++)
+    for (let j = 0; j < rows; j++) {
+      const ux = ux0 + i * 3.0, uz = uz0 + j * 2.4;
+      bx(ux, ux + 2.4, uz, uz + 1.5, y, y + 1.3, unit);
+      const fx = X(ux + 1.2);
+      mb.cylinder(fx, uz + 0.75, y + 1.3, y + 1.36, 0.55, 8, fan, fan);
+    }
+  // ダクト：室外機の一角から階段室へ
+  const dz = uz0 + rows * 2.4 + 0.2;
+  if (dz + 0.7 < z1 - 1) bx(x0 + 2 + sw, ux0 + cols * 3.0, dz, dz + 0.7, y + 0.3, y + 1.0, duct);
+  return { w: 4 + sw + cols * 3.0 + 1, flip };
+}
+
+// 屋上の設備（空調の室外機、換気口、天窓）。plant = 大きな屋上には階段室と室外機の一角も置く（屋上にほかの物がない建物だけ）
+function roofUnits(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, rng: Rng, n: number, plant = false) {
   const unit = C(0xb9bdc2), fan = C(0x3a3d42);
+  if (plant && x1 - x0 >= 22 && z1 - z0 >= 16) {
+    const { w, flip } = roofPlant(mb, x0, z0, x1, z1, y, rng);
+    // 残りの場所に散らす（設備の一角と重ならないように、反対の側へ）
+    if (x1 - x0 - w < 6) return;
+    if (flip) x1 = x1 - w; else x0 = x0 + w;
+    n = Math.max(1, n - 1);
+  }
   for (let k = 0; k < n; k++) {
     const x = x0 + 1.2 + rng.next() * Math.max(0.1, x1 - x0 - 4), z = z0 + 1.2 + rng.next() * Math.max(0.1, z1 - z0 - 4);
     const kind = rng.next();
@@ -1338,10 +1375,11 @@ function apartments(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: numb
   } else {
     blocks.push([-W / 2, zf - Math.min(D, 14 + rng.next() * 6), W / 2, zf]);
   }
+  const tank = !modernApt && rng.next() < 0.4;
   for (const [x0, z0, x1, z1] of blocks) {
     mb.box(x0, 0, z0, x1, h, z1, wall, modernApt ? resPat : PAT.apartment, flatRoof());
     roofRim(mb, x0, z0, x1, z1, h, wall);
-    roofUnits(mb, x0, z0, x1, z1, h, rng, 2 + rng.int(3));
+    roofUnits(mb, x0, z0, x1, z1, h, rng, 2 + rng.int(3), !tank);
   }
   // ベランダ（正面）
   const [bx0, , bx1, bz1] = blocks[0];
@@ -1350,7 +1388,7 @@ function apartments(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: numb
   // 入口のひさし
   mb.box(-2, 2.8, bz1, 2, 3.1, bz1 + 2, kind === 'R3' ? PALETTE.dark : PALETTE.concrete);
   // 給水タンク
-  if (!modernApt && rng.next() < 0.4) waterTank(mb, bx0 + 3, blocks[0][1] + 3, h, 1.4, rng);
+  if (tank) waterTank(mb, bx0 + 3, blocks[0][1] + 3, h, 1.4, rng);
   tf(-f.W / 2 + 1.6, f.D / 2 - 1.6, 0.8);
   tf(f.W / 2 - 1.6, f.D / 2 - 1.6, 0.8);
 }
@@ -1374,7 +1412,7 @@ function shopMid(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number,
   mb.quad([-W / 2 + 0.4, 3.0, z1 + 1.6], [W / 2 - 0.4, 3.0, z1 + 1.6], [W / 2 - 0.4, 3.6, z1], [-W / 2 + 0.4, 3.6, z1], accent);
   // 縦の看板（ネオン風）
   if (rng.next() < 0.5 && floors >= 3) mb.box(W / 2 - 2, g, z1, W / 2 - 1.2, Math.min(h, g + 9), z1 + 1.2, rng.pick(PALETTE.accent));
-  roofUnits(mb, -W / 2 + 0.7, z0 + 0.7, W / 2 - 0.7, z1 - 0.7, h, rng, 3 + rng.int(3));
+  roofUnits(mb, -W / 2 + 0.7, z0 + 0.7, W / 2 - 0.7, z1 - 0.7, h, rng, 3 + rng.int(3), true);
   if (rng.next() < 0.5) tf(-f.W / 2 + 1.2, f.D / 2 - 1.0, 0.7);
 }
 
@@ -1390,7 +1428,8 @@ function commercialMid(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: n
   // 複合でないモールは、百貨店くらいの高さ（7階）まで
   const mallFloors = mixed ? 4 + rng.int(2) : Math.min(7, floors);
   const led = rng.next() < 0.5;
-  const top = led ? ledMall(mb, rng, -W / 2, z0, W / 2, z1, mallFloors) : atriumMall(mb, rng, tf, -W / 2, z0, W / 2, z1, mallFloors);
+  // 上に塔が立つときは、屋上の大きな設備は置かない
+  const top = led ? ledMall(mb, rng, -W / 2, z0, W / 2, z1, mallFloors, !mixed) : atriumMall(mb, rng, tf, -W / 2, z0, W / 2, z1, mallFloors, !mixed);
   if (mixed) mixedTower(mb, rng, -W / 2, z0, W / 2, z1, top, floors - mallFloors, upscale);
   tf(-f.W / 2 + 1.2, f.D / 2 - 0.8, 0.7);
   tf(f.W / 2 - 1.2, f.D / 2 - 0.8, 0.7);
@@ -1408,7 +1447,7 @@ function adScreen(mb: MeshBuilder, rng: Rng, x0: number, x1: number, y0: number,
   }
 }
 
-function ledMall(mb: MeshBuilder, rng: Rng, x0: number, z0: number, x1: number, z1: number, floors: number) {
+function ledMall(mb: MeshBuilder, rng: Rng, x0: number, z0: number, x1: number, z1: number, floors: number, plant = true) {
   const g = 5, fh = 4.4, h = g + (floors - 1) * fh;
   const skin = rng.pick([MW, C(0x2c3036), C(0xd9d6cf), C(0x3d4752)]);
   // 1階のショーウィンドウと、上の階の壁
@@ -1433,11 +1472,11 @@ function ledMall(mb: MeshBuilder, rng: Rng, x0: number, z0: number, x1: number, 
   mb.box(ex - 6, 4.2, z1 - 0.5, ex + 6, 4.6, z1 + 3.2, skin, PAT.none, MW2);
   litSign(mb, ex - 5, 4.6, z1 + 3.0, ex + 5, 5.3, z1 + 3.2, rng.pick(AD_COLORS));
   roofRim(mb, x0, z0, x1, z1, h, skin, 1.0);
-  roofUnits(mb, x0 + 2, z0 + 2, x1 - 2, z1 - 2, h, rng, 3);
+  roofUnits(mb, x0 + 2, z0 + 2, x1 - 2, z1 - 2, h, rng, 3, plant);
   return h;
 }
 
-function atriumMall(mb: MeshBuilder, rng: Rng, tf: TF, x0: number, z0: number, x1: number, z1: number, floors: number) {
+function atriumMall(mb: MeshBuilder, rng: Rng, tf: TF, x0: number, z0: number, x1: number, z1: number, floors: number, plant = true) {
   const g = 5, fh = 4.4;
   const wall = rng.pick([MW, C(0xe9e4da), C(0xd4d0c8)]);
   // 上の階ほど奥へ下がる（段の上はテラス）
@@ -1462,6 +1501,7 @@ function atriumMall(mb: MeshBuilder, rng: Rng, tf: TF, x0: number, z0: number, x
     }
   }
   roofRim(mb, x0 + (steps - 1) * 1.5, z0 + (steps - 1) * 1.5, x1 - (steps - 1) * 1.5, zf, y, wall, 1.0);
+  if (plant) roofUnits(mb, x0 + (steps - 1) * 1.5 + 1.5, z0 + (steps - 1) * 1.5 + 1.5, x1 - (steps - 1) * 1.5 - 1.5, zf - 1.5, y, rng, 3, true);
   // 正面の吹き抜け（ガラス、何層もの高さ）
   const aw = Math.min(14, (x1 - x0) * 0.35), ah = Math.min(y + 2, g + fh * 3);
   const ax = (x0 + x1) / 2;
