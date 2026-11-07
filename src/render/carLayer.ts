@@ -58,6 +58,9 @@ class Fleet {
   nodes = new Int32Array(0);
   target = 0;
   vol: Float32Array = new Float32Array(0); // 次の行き先を選ぶときの重み
+  // 列車：つながった線路（路線）ごとの番号と、路線ごとの出す場所・目標の本数
+  comp: Int32Array | null = null;
+  lines: { nodes: Int32Array; cdf: Float32Array; quota: number }[] = [];
   colors: THREE.Color[];
   constructor(geo: THREE.BufferGeometry, public max: number, palette: number[], public track: Track = 'road', public halfLen = 2.3, public share = 1) {
     this.colors = palette.map((h) => new THREE.Color(h));
@@ -246,8 +249,65 @@ export class CarLayer {
       stops += this.busStopBuildings;
       this.bus.target = Math.min(this.bus.target, Math.max(1, Math.ceil(stops * 1.5)));
       // 高架鉄道（i = 1）は本数を 4 割に（3両編成なので、4両のときと本数が同じになるよう 0.3 倍）
-      this.lineFleets.forEach((f, i) => build(f, riders.subarray((i + 1) * N, (i + 2) * N), (0.0012 / f.carsPer) * (i === 1 ? 0.3 : 1)));
+      this.lineFleets.forEach((f, i) => {
+        build(f, riders.subarray((i + 1) * N, (i + 2) * N), (0.0012 / f.carsPer) * (i === 1 ? 0.3 : 1));
+        this.splitLines(g, f);
+      });
     }
+  }
+
+  // 線路をつながりごとの路線に分け、乗る人が少ない路線にも列車が走るように路線ごとの本数を決める
+  private splitLines(g: Grid, f: Fleet) {
+    const n = g.n, N = n * n, mask = g[f.track as LineKind];
+    const comp = f.comp && f.comp.length === N ? f.comp.fill(-1) : (f.comp = new Int32Array(N).fill(-1));
+    const lines: { cells: number[]; riders: number }[] = [];
+    const stack: number[] = [];
+    for (let s = 0; s < N; s++) {
+      if (!mask[s] || comp[s] >= 0) continue;
+      const id = lines.length, L = { cells: [] as number[], riders: 0 };
+      lines.push(L);
+      comp[s] = id;
+      stack.push(s);
+      while (stack.length) {
+        const c = stack.pop()!;
+        L.cells.push(c);
+        L.riders += f.vol[c] || 0;
+        const x = c % n, y = (c / n) | 0, m = mask[c];
+        for (let d = 0; d < 8; d++) {
+          if (!(m & (1 << d)) || !g.inb(x + DX[d], y + DY[d])) continue;
+          const j = (y + DY[d]) * n + x + DX[d];
+          if (mask[j] && comp[j] < 0) { comp[j] = id; stack.push(j); }
+        }
+      }
+    }
+    // 駅のある路線だけに走らせる
+    const st = this.stations.get(f.track);
+    const big = lines.filter((L) => L.cells.length >= 4 && !!st && L.cells.some((c) => st.has(c)));
+    const sumR = big.reduce((a, L) => a + L.riders, 0) || 1;
+    // 本数は乗る人の割合で分け、どの路線にも長さに応じて最低 1〜4 本は走らせる
+    let quotas = big.map((L) => Math.max(Math.min(4, 1 + Math.floor(L.cells.length / 25)), Math.round((f.target * L.riders) / sumR)));
+    const sum = quotas.reduce((a, q) => a + q, 0);
+    if (sum > f.max) quotas = quotas.map((q) => Math.max(1, Math.floor((q * f.max) / sum)));
+    f.target = Math.min(f.max, quotas.reduce((a, q) => a + q, 0));
+    f.lines = lines.map((L) => {
+      const k = big.indexOf(L);
+      let t = 0;
+      const cdf = Float32Array.from(L.cells, (c) => (t += (f.vol[c] || 0) + 1));
+      return { nodes: Int32Array.from(L.cells), cdf, quota: k >= 0 ? quotas[k] : 0 };
+    });
+    // 路線ごとの本数より多い列車は消す（路線が分かれた・短くなったとき）
+    const have = new Array(lines.length).fill(0);
+    f.cars = f.cars.filter((c) => { const k = comp[c.from]; if (k < 0) return false; return ++have[k] <= f.lines[k].quota; });
+  }
+
+  // 列車を出す路線：目標の本数にいちばん足りていない路線
+  private pickLine(f: Fleet) {
+    if (!f.comp || !f.lines.length) return null;
+    const have = new Array(f.lines.length).fill(0);
+    for (const c of f.cars) { const k = f.comp[c.from % f.comp.length]; if (k >= 0) have[k]++; }
+    let best = -1, bd = 0;
+    f.lines.forEach((L, k) => { const d = (L.quota - have[k]) / Math.max(1, L.quota); if (L.quota > have[k] && d > bd) { bd = d; best = k; } });
+    return best >= 0 ? f.lines[best] : null;
   }
 
   private trackH(f: Fleet, node: number) {
@@ -260,16 +320,19 @@ export class CarLayer {
   }
 
   private spawn(f: Fleet): Car | null {
-    if (!f.nodes.length) return null;
-    const total = f.cdf[f.cdf.length - 1];
+    const L = f.mid ? this.pickLine(f) : null;
+    if (f.mid && !L) return null;
+    const nodes = L ? L.nodes : f.nodes, cdf = L ? L.cdf : f.cdf;
+    if (!nodes.length) return null;
+    const total = cdf[cdf.length - 1];
     const r = Math.random() * total;
-    let lo = 0, hi = f.cdf.length - 1;
+    let lo = 0, hi = cdf.length - 1;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (f.cdf[mid] < r) lo = mid + 1;
+      if (cdf[mid] < r) lo = mid + 1;
       else hi = mid;
     }
-    const from = f.nodes[lo];
+    const from = nodes[lo];
     const nx = this.pickNext(f, from, -1);
     if (!nx) return null;
     const car: Car = {
@@ -344,6 +407,12 @@ export class CarLayer {
       for (let d = 0; d < 8; d++) if (m & (1 << d) && g.inb(x + DX[d], y + DY[d])) add((y + DY[d]) * n + x + DX[d], d);
     }
     if (!opts.length) return null;
+    // 列車は分かれ道で、行き先を順番に変える（どちらの路線にも列車が行くように）
+    if (f.mid && opts.length > 1 && din >= 0) {
+      const key = node * 8 + din, k = this.forkTurn.get(key) ?? (Math.random() * opts.length) | 0;
+      this.forkTurn.set(key, k + 1);
+      return opts.slice().sort((a, b) => a[1] - b[1])[k % opts.length];
+    }
     let r = Math.random() * total;
     for (let k = 0; k < opts.length; k++) {
       r -= ws[k];
@@ -358,6 +427,7 @@ export class CarLayer {
 
   // 駅のホームに接する線路のマス（路線ごと）
   private stations = new Map<string, Set<number>>();
+  private forkTurn = new Map<number, number>();
   private busStopBuildings = 0;
   // 線路の行き止まり（折り返し）。線路が変わったときに呼ぶ
   private turnbacks = new Map<string, Map<number, Turnback>>();
