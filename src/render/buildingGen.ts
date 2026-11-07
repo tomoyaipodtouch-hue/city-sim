@@ -1547,7 +1547,7 @@ function tower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, o
   const crown = rng.next();
   if (office && luxury && floors > 30 && crown < 0.4) {
     mb.hip(-tw / 2, cz - td / 2, tw / 2, cz + td / 2, y, Math.min(tw, td) * 0.9, wall, 0);
-    mb.box(-0.3, y, cz - 0.3, 0.3, y + Math.min(tw, td) * 0.9 + 18, cz + 0.3, PALETTE.steel);
+    mb.box(-0.12, y, cz - 0.12, 0.12, y + Math.min(tw, td) * 0.9 + 6, cz + 0.12, PALETTE.steel);
   } else if (floors > 24 && crown < 0.75) {
     // 屋上の目隠しパネル（夜は光る帯）と、ヘリポート
     if (allGlass) glassParapet(mb, -tw / 2, cz - td / 2, tw / 2, cz + td / 2, y, wall, 4);
@@ -1557,7 +1557,7 @@ function tower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, o
   } else {
     mb.box(-tw / 3, y, cz - td / 3, tw / 3, y + 3.5, cz + td / 3, PALETTE.concrete, PAT.industrial, flatRoof());
     roofUnits(mb, -tw / 2 + 0.5, cz - td / 2 + 0.5, tw / 2 - 0.5, cz + td / 2 - 0.5, y, rng, 3);
-    if (floors > 20 && crown < 0.6) mb.box(-0.25, y + 3.5, cz - 0.25, 0.25, y + 16, cz + 0.25, PALETTE.steel);
+    if (floors > 20 && crown < 0.6) mb.box(-0.1, y + 3.5, cz - 0.1, 0.1, y + 9, cz + 0.1, PALETTE.steel);
     if (!office && resPat !== PAT.balcony) waterTank(mb, tw / 4, cz, y + 3.5, 1.6, rng);
   }
   // 入口と植え込み
@@ -1739,9 +1739,10 @@ function highrise(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number
     // タワーマンションが中心。広い敷地では、まれに積み木の集合住宅
     const rr = rng.next();
     if (Math.min(f.W, f.D) >= 46 && floors >= 12 && rr < 0.18) return stackedBlocks(mb, f, rng, tf, floors);
-    if (floors >= 15 && rr < 0.62) {
+    if (floors >= 15 && (rr < 0.62 || Math.min(f.W, f.D) < 30)) {
       // タワマンの種類：今のタワマン、波打つバルコニー、らせん、ジェンガ、ツイン（広い敷地だけ）を同じくらいの割合で
-      const kinds = [towerMansion, waveTower, twistTower, jengaTower];
+      // 波・らせん・ジェンガは、幅が 2 マス以上の敷地だけ（細い敷地だと塔が細くなりすぎる）
+      const kinds = Math.min(f.W, f.D) >= 30 ? [towerMansion, waveTower, twistTower, jengaTower] : [towerMansion];
       if (Math.max(f.W, f.D) >= 44 && floors >= 20) kinds.push(twinMansion);
       return kinds[Math.floor(rng.next() * kinds.length)](mb, f, rng, tf, floors);
     }
@@ -1937,11 +1938,20 @@ function balconyFloors(mb: MeshBuilder, y0: number, floors: number, fh: number, 
 // 各面のまん中に縦の柱、頂部は枠（夜に光る帯）。足元は石とガラスの基壇。平面の形と色はいくつかの中から選ぶ
 function towerMansion(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number) {
   const p = podiumBase(mb, f, rng, tf, MW, Math.min(floors, 19));
-  const fh = 3.1, S = Math.min(40, p.size * (0.62 + rng.next() * 0.1));
+  const fh = 3.1;
+  // 幅が 1 マスの細い敷地では、塔を敷地いっぱいに広げ、高さも細すぎない程度（幅の 9 倍まで）にする
+  const narrow = Math.min(f.W, f.D) < 30;
+  let S = Math.min(40, p.size * (0.62 + rng.next() * 0.1));
+  let D = S * (0.8 + rng.next() * 0.2);
+  if (narrow) {
+    S = Math.min(40, (f.W - 2) * 0.88);
+    D = Math.min(40, (f.D - 3) * 0.88);
+    floors = Math.min(floors, Math.max(15, Math.round((Math.min(S, D) * 9) / fh)));
+  }
   const col = mansionColors(rng);
-  const D = S * (0.8 + rng.next() * 0.2);
   const outer = mansionPlan(rng, p.cx, p.cz, S, D);
-  const inner = scaleP(outer, p.cx, p.cz, 1 - 3.6 / S);
+  // バルコニーの奥行き（細い塔では浅くして、奥のガラスの壁が細くなりすぎないように）
+  const inner = scaleP(outer, p.cx, p.cz, 1 - Math.min(3.6, S * 0.16) / S);
   const H = floors * fh;
   const top = balconyFloors(mb, p.y, floors, fh, col, () => outer, () => inner, p.cx, p.cz, true);
   // 各面のまん中の縦の柱
@@ -1961,7 +1971,8 @@ function waveTower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: numbe
   const fh = 3.1, S = Math.min(38, p.size * (0.6 + rng.next() * 0.08)), D = S * (0.75 + rng.next() * 0.2);
   const col = mansionColors(rng);
   if (rng.next() < 0.6) col.slab = MW;
-  const core = rrect(p.cx, p.cz, S - 6, D - 6, 2, 2);
+  const ins = Math.min(3, Math.min(S, D) * 0.14), amp = Math.min(1, Math.min(S, D) / 20);
+  const core = rrect(p.cx, p.cz, S - 2 * ins, D - 2 * ins, 2, 2);
   const ring = densify(core, 1.6);
   const ph = rng.next() * 10, L = (S + D) * 2;
   // 外周に沿った位置 u と階 k で、張り出しの長さが波のように変わる
@@ -1972,7 +1983,7 @@ function waveTower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: numbe
       const dx = x - p.cx, dz = z - p.cz, l = Math.hypot(dx, dz) || 1;
       const w = Math.sin((u / L) * Math.PI * 2 * 3 + k * 0.33 + ph) * Math.sin((u / L) * Math.PI * 2 * 1.3 - k * 0.19 + ph * 0.7);
       u += Math.hypot(nx2 - x, nz2 - z);
-      const o = 1.0 + 2.6 * (0.5 + 0.5 * w);
+      const o = (1.0 + 2.6 * (0.5 + 0.5 * w)) * amp;
       return [x + (dx / l) * o, z + (dz / l) * o] as P2;
     });
   };
@@ -1985,7 +1996,7 @@ function twistTower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: numb
   const fh = 3.1, S = Math.min(36, p.size * 0.58), D = S * (0.62 + rng.next() * 0.15);
   const col = mansionColors(rng);
   const plan = rng.next() < 0.5 ? rrect(p.cx, p.cz, S, D, Math.min(S, D) * 0.46, 4) : rrect(p.cx, p.cz, S, D, 3, 2);
-  const core = scaleP(plan, p.cx, p.cz, 1 - 4 / S);
+  const core = scaleP(plan, p.cx, p.cz, 1 - Math.min(4, Math.min(S, D) * 0.3) / S);
   const total = ((90 + rng.next() * 30) * Math.PI) / 180 * (rng.next() < 0.5 ? 1 : -1);
   const ang = (k: number) => (total * k) / floors;
   balconyFloors(mb, p.y, floors, fh, col, (k) => rotP(plan, p.cx, p.cz, ang(k)), (k) => rotP(core, p.cx, p.cz, ang(k)), p.cx, p.cz, false);
@@ -2002,7 +2013,7 @@ function jengaTower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: numb
   const g = 2;
   for (let k = 0; k < floors; k += g) {
     const t = k / floors, n = Math.min(g, floors - k), h = n * fh;
-    const amp = 0.6 + t * 5.5;
+    const amp = (0.6 + t * 5.5) * Math.min(1, S / 24);
     const o = [0, 0, 0, 0].map(() => (rng.next() * 2 - 1) * amp);
     const x0 = p.cx - S / 2 + o[0], x1 = p.cx + S / 2 + o[1], z0 = p.cz - S / 2 + o[2], z1 = p.cz + S / 2 + o[3];
     mb.box(x0, y, z0, x1, y + h - 0.4, z1, glass, PAT.fullglass, slab);
@@ -2031,7 +2042,7 @@ function twinMansion(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: num
     const off = sd * (gap / 2 + S / 2);
     const cx = p.cx + (alongX ? off : 0), cz = p.cz + (alongX ? 0 : off);
     const outer = alongX ? rrect(cx, cz, S, D, 3, 3) : rrect(cx, cz, D, S, 3, 3);
-    const inner = scaleP(outer, cx, cz, 1 - 3.6 / S);
+    const inner = scaleP(outer, cx, cz, 1 - Math.min(3.6, Math.min(S, D) * 0.16) / S);
     tops.push(balconyFloors(mb, p.y, sd < 0 ? floors : fl2, fh, col, () => outer, () => inner, cx, cz, true));
   }
   // 渡り廊下（2層分、ガラス。夜は光る帯）と、下の方にもう1本
@@ -2396,7 +2407,10 @@ function notchTower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: numb
 }
 
 function spire(mb: MeshBuilder, cx: number, cz: number, y: number, h: number) {
-  mb.cylinder(cx, cz, y, y + h, 0.7, 8, PALETTE.steel, PALETTE.steel, 0.15);
+  // 避雷針・アンテナ：細く短く（指定の高さの 3 割ほど、最大 9m）
+  const hh = Math.min(9, Math.max(3.5, h * 0.3));
+  mb.cylinder(cx, cz, y, y + 0.6, 0.35, 8, PALETTE.steel, PALETTE.steel, 0.25);
+  mb.cylinder(cx, cz, y + 0.6, y + hh, 0.14, 6, PALETTE.steel, PALETTE.steel, 0.04);
 }
 
 // ねじれた塔：階ごとに少しずつ回る
