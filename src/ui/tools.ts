@@ -108,6 +108,7 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { tool: 'plop:museum', name: `記念：${CIVIC.museum.name}`, note: '人口8千・評価55・教育90' },
       { tool: 'plop:city_hall', name: `記念：${CIVIC.city_hall.name}`, note: '人口1万・評価50' },
       { tool: 'plop:stadium', name: `記念：${CIVIC.stadium.name}`, note: '人口3万・評価60' },
+      { tool: 'plop:future_stadium', name: `記念：${CIVIC.future_stadium.name}（8×8）`, note: '人口3万・評価60' },
     ],
   },
   {

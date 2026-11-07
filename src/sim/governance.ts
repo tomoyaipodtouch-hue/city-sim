@@ -170,6 +170,7 @@ export const REWARD_REQ: Record<string, RewardReq & { label: string }> = {
   statue: { pop: 5000, rating: 70, label: '人口 5,000人・市長評価 70以上' },
   museum: { pop: 8000, rating: 55, eq: 90, label: '人口 8,000人・市長評価 55以上・大人の教育水準 90以上' },
   stadium: { pop: 30000, rating: 60, label: '人口 30,000人・市長評価 60以上' },
+  future_stadium: { pop: 30000, rating: 60, label: '人口 30,000人・市長評価 60以上' },
 };
 
 export function rewardUnlocked(id: string, pop: number, rating: number, eq: number) {

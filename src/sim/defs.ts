@@ -194,7 +194,7 @@ export type CivicId = 'coal' | 'gas' | 'oil' | 'nuclear' | 'nuclear_in' | 'nucle
   | 'ferry_p' | 'ferry_c' | 'seaport' | 'airport_s' | 'airport_l' | 'freight_st'
   | 'police_s' | 'police_l' | 'fire_s' | 'fire_l' | 'clinic' | 'hospital' | 'school_e' | 'school_h' | 'college' | 'library'
   | 'landfill' | 'incinerator' | 'recycling'
-  | 'mayor_house' | 'city_hall' | 'statue' | 'museum' | 'stadium';
+  | 'mayor_house' | 'city_hall' | 'statue' | 'museum' | 'stadium' | 'future_stadium';
 
 export interface CivicDef {
   id: CivicId;
@@ -272,6 +272,7 @@ export const CIVIC: Record<CivicId, CivicDef> = {
   city_hall: { id: 'city_hall', name: '市役所', w: 4, h: 3, cost: 12000, upkeep: 120, park: 0.2, reward: true, desc: '記念施設。周りの地価が上がり、市長評価が上がる' },
   statue: { id: 'statue', name: '市長の銅像', w: 1, h: 1, cost: 500, upkeep: 5, park: 0.1, reward: true, desc: '記念施設。市長評価が上がる' },
   museum: { id: 'museum', name: '博物館', w: 3, h: 3, cost: 15000, upkeep: 200, park: 0.25, reward: true, desc: '記念施設。周りの地価と、大人の教育水準が上がる' },
+  future_stadium: { id: 'future_stadium', name: '近未来スタジアム', w: 8, h: 8, cost: 60000, upkeep: 500, park: 0.12, reward: true, desc: '記念施設。白い曲面の大きなスタジアム。商業の需要が上がり、市長評価が上がる' },
   stadium: { id: 'stadium', name: 'スタジアム', w: 6, h: 6, cost: 40000, upkeep: 400, park: 0.1, reward: true, desc: '記念施設。商業の需要が上がり、市長評価が上がる' },
   recycling: { id: 'recycling', name: 'リサイクルセンター', w: 3, h: 2, cost: 6000, upkeep: 200, service: 'recycling', capacity: 4000, desc: 'ゴミを月 4,000 減らす' },
   freight_st: { id: 'freight_st', name: '貨物駅', w: 3, h: 2, cost: 8000, upkeep: 120, freightRail: true, desc: '線路と道路に接するように置く。線路がマップの端まで続いていれば、トラックの荷物を鉄道で運ぶ' },

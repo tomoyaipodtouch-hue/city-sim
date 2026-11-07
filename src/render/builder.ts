@@ -16,6 +16,7 @@ export const PAT = {
   balcony: 9, // 高層マンション：床の帯、ガラスの手すり、奥の窓
   fullglass: 10, // ほぼガラスだけの外壁（極細の窓枠と、階ごとの細い線）
   glow: 11, // 夜に光る帯（頂部のライトアップ）
+  lit: 12, // 夜に照明で明るくなる面（スタジアムのフィールド）。色はそのまま明るくなる
 } as const;
 
 export class MeshBuilder {

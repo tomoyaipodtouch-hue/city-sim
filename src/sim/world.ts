@@ -1623,7 +1623,7 @@ export class World {
     for (const k of ['ID', 'IM'] as const) raw[k] += this.seaportBoost;
     // 記念施設
     const has = (t: string) => [...this.buildings.values()].some((b) => b.type === t);
-    if (has('stadium')) for (const k of ['CS1', 'CS2', 'CS3'] as const) raw[k] += 0.1;
+    if (has('stadium') || has('future_stadium')) for (const k of ['CS1', 'CS2', 'CS3'] as const) raw[k] += 0.1;
     if (has('museum')) this.services.eq.adult = Math.min(150, this.services.eq.adult + 0.05);
     // 条例
     for (const k of ['R1', 'R2', 'R3'] as const) raw[k] += this.fx.demand.R + (this.rating - 50) / 250;

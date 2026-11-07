@@ -171,6 +171,7 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     case 'statue': statue(mb, f, tf); break;
     case 'museum': museum(mb, f, tf); break;
     case 'stadium': stadium(mb, f, rng); break;
+    case 'future_stadium': futureStadium(mb, f); break;
   }
   mb.abandoned = false;
 }
@@ -2382,6 +2383,103 @@ function stadium(mb: MeshBuilder, f: LotFrame, rng: Rng) {
   // 入口の大階段（正面）
   for (let k = 0; k < 6; k++) mb.box(-10 + k * 0.6, k * 1.1, Rz - 1 + (6 - k) * 1.2, 10 - k * 0.6, (k + 1) * 1.1, Rz + 6, concourse);
   void rng;
+}
+
+// 近未来スタジアム（8×8）：角の丸い四角の白い殻。正面の右側を斜めにえぐって、内側のガラスの帯と柱を見せる。
+// 正面にガラスの入口棟、全体は低い基壇の上。屋根は内側へ下がる輪で、放射状のリブ。フィールドは夜に明るく光る
+function futureStadium(mb: MeshBuilder, f: LotFrame) {
+  const hw = f.W / 2, hd = f.D / 2;
+  const white = C(0xf4f5f6), shade = C(0xe1e4e7), grey = C(0x8a9097), dark = C(0x3c434b), glass = C(0x6f93ae);
+  const seatU = C(0x5a6169), seatL = C(0x6c737b), concourse = C(0xc9ccd0);
+  // 基壇（低い台）と、正面の階段
+  const PB = 1.6;
+  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.06, PALETTE.pavement);
+  mb.box(-hw + 2, 0, -hd + 2, hw - 2, PB, hd - 2, C(0xe9eaeb), PAT.none, C(0xdcdfe2));
+  for (let k = 0; k < 4; k++) mb.box(-22, 0, hd - 2 + (3 - k) * 0.9, 22, (k + 1) * 0.4, hd - 2 + (4 - k) * 0.9, C(0xdcdfe2));
+  // 角の丸い四角（スーパー楕円）。k = 外周に対する大きさ
+  const Rx = hw - 7, Rz = hd - 9, P = 5;
+  const sq = (t: number) => Math.sign(t) * Math.pow(Math.abs(t), 2 / P);
+  const E = (a: number, k: number, y: number): [number, number, number] => [sq(Math.cos(a)) * Rx * k, y, sq(Math.sin(a)) * Rz * k - 2];
+  const NO = (a: number, ny = 0): [number, number, number] => {
+    const [x, , z0] = E(a, 1, 0), z = z0 + 2;
+    const gx = Math.sign(x) * Math.pow(Math.abs(x / Rx), P - 1) / Rx, gz = Math.sign(z) * Math.pow(Math.abs(z / Rz), P - 1) / Rz;
+    const l = Math.hypot(gx, gz) || 1, h = Math.sqrt(Math.max(0, 1 - ny * ny));
+    return [(gx / l) * h, ny, (gz / l) * h];
+  };
+  const up: [number, number, number] = [0, 1, 0], dn: [number, number, number] = [0, -1, 0];
+  const SEG = 120, H = 34, B = PB;
+  // えぐれ：正面の右から右側面にかけて、白い殻の下のふちが斜めに上がる（なめらかな山）
+  const cut = (a: number) => {
+    const c = 0.35; // 中心の角度（ラジアン、+x 寄りの正面側）
+    let d = Math.atan2(Math.sin(a - c), Math.cos(a - c));
+    const w = d < 0 ? 0.9 : 1.6; // 片側は急に、反対側はゆっくり
+    d /= w;
+    return Math.abs(d) < 1 ? Math.pow(Math.cos((d * Math.PI) / 2), 2) : 0;
+  };
+  const low = (a: number) => B + 6 + cut(a) * 18; // 白い殻の下のふち
+  for (let i = 0; i < SEG; i++) {
+    const a0 = (i / SEG) * Math.PI * 2, a1 = ((i + 1) / SEG) * Math.PI * 2;
+    // 1階：少し奥まった暗いガラス
+    mb.quadN(E(a1, 0.975, B), E(a0, 0.975, B), E(a0, 0.975, B + 6), E(a1, 0.975, B + 6), NO(a1), NO(a0), NO(a0), NO(a1), dark, PAT.fullglass);
+    // えぐれた所：奥のガラスの帯
+    const l0 = low(a0), l1 = low(a1);
+    if (l0 > B + 6.05 || l1 > B + 6.05) {
+      mb.quadN(E(a1, 0.955, B + 6), E(a0, 0.955, B + 6), E(a0, 0.955, Math.max(l0, B + 6)), E(a1, 0.955, Math.max(l1, B + 6)), NO(a1), NO(a0), NO(a0), NO(a1), glass, PAT.fullglass);
+      // えぐれの中の柱（斜めにならぶ）
+      if (i % 3 === 0 && l0 > B + 8) {
+        const [x, , z] = E(a0, 0.985, 0);
+        mb.box(x - 0.3, B + 6, z - 0.3, x + 0.3, l0, z + 0.3, white);
+      }
+      // えぐれの下面（殻の厚み）
+      mb.quadN(E(a1, 0.955, l1), E(a0, 0.955, l0), E(a0, 1.0, l0), E(a1, 1.0, l1), dn, dn, dn, dn, shade);
+    }
+    // 白い殻：下のふちから上へ、少しふくらんで、上で内側へまるく巻き込む
+    const prof: [number, number][] = [[1.0, 0], [1.012, 0.35], [1.015, 0.7], [1.0, 0.9], [0.975, 1.0]];
+    for (let k = 0; k + 1 < prof.length; k++) {
+      const [k0, t0] = prof[k], [k1, t1] = prof[k + 1];
+      const ya0 = l0 + (B + H - l0) * t0, ya1 = l1 + (B + H - l1) * t0, yb0 = l0 + (B + H - l0) * t1, yb1 = l1 + (B + H - l1) * t1;
+      const ny = Math.max(-0.2, Math.min(0.9, (k0 - k1) * 25));
+      mb.quadN(E(a1, k1 === k0 ? k0 : k0, ya1), E(a0, k0, ya0), E(a0, k1, yb0), E(a1, k1, yb1), NO(a1, ny * 0.5), NO(a0, ny * 0.5), NO(a0, ny), NO(a1, ny), white);
+    }
+    // 屋根：ふちから内側へ下がる輪（白）と、下面
+    const ro = 0.975, ri = 0.8, yo = B + H, yi = B + H - 5;
+    mb.quadN(E(a1, ro, yo), E(a0, ro, yo), E(a0, ri, yi), E(a1, ri, yi), up, up, up, up, white);
+    mb.quadN(E(a0, ro, yo - 0.8), E(a1, ro, yo - 0.8), E(a1, ri, yi - 0.8), E(a0, ri, yi - 0.8), dn, dn, dn, dn, shade);
+    // 放射状のリブ（細い盛り上がり）
+    if (i % 4 === 0) {
+      const am = a0 + 0.004;
+      mb.quadN(E(am, ro - 0.003, yo + 0.25), E(a0, ro - 0.003, yo + 0.25), E(a0, ri, yi + 0.25), E(am, ri, yi + 0.25), up, up, up, up, C(0xc9cdd2));
+    }
+    // 屋根の内側のふち（夜に光る）
+    const inw = (n: [number, number, number]): [number, number, number] => [-n[0], 0, -n[2]];
+    mb.quadN(E(a0, ri, yi - 0.8), E(a1, ri, yi - 0.8), E(a1, ri, yi), E(a0, ri, yi), inw(NO(a0)), inw(NO(a1)), inw(NO(a1)), inw(NO(a0)), C(0xdfe6ee), PAT.glow);
+    // 客席：上の層と下の層（内側へ下がる）
+    const tiers: [number, number, number, number, THREE.Color][] = [[0.95, B + H - 6, 0.76, B + 15, seatU], [0.74, B + 13, 0.6, B + 2.5, seatL]];
+    for (const [k0, y0, k1, y1, col] of tiers) {
+      const n0 = NO(a0), n1 = NO(a1), sl = (y0 - y1) / ((k0 - k1) * Math.min(Rx, Rz)), L = Math.hypot(sl, 1);
+      const nU = (n: [number, number, number]): [number, number, number] => [(-n[0] * sl) / L, 1 / L, (-n[2] * sl) / L];
+      mb.quadN(E(a1, k0, y0), E(a0, k0, y0), E(a0, k1, y1), E(a1, k1, y1), nU(n1), nU(n0), nU(n0), nU(n1), col);
+    }
+    mb.quadN(E(a1, 0.76, B + 15), E(a0, 0.76, B + 15), E(a0, 0.74, B + 13), E(a1, 0.74, B + 13), up, up, up, up, concourse);
+  }
+  // フィールド（緑の縞と白線）。夜は照明で明るい
+  const fx = Rx * 0.48, fz = Rz * 0.36, fy = B + 2.5, cz = -2;
+  mb.ground(-Rx * 0.6, cz - Rz * 0.6, Rx * 0.6, cz + Rz * 0.6, fy - 0.02, C(0x4f8a3c));
+  for (let k = 0; k < 10; k++) {
+    const x0 = -fx + (k * 2 * fx) / 10, x1 = -fx + ((k + 1) * 2 * fx) / 10;
+    const col = k % 2 ? C(0x5f9f45) : C(0x6aad4e);
+    mb.quad([x0, fy, cz + fz], [x1, fy, cz + fz], [x1, fy, cz - fz], [x0, fy, cz - fz], col, PAT.lit);
+  }
+  const ln = (x0: number, z0: number, x1: number, z1: number) => mb.quad([x0, fy + 0.03, z1], [x1, fy + 0.03, z1], [x1, fy + 0.03, z0], [x0, fy + 0.03, z0], PALETTE.white, PAT.lit);
+  ln(-fx, cz - fz, fx, cz - fz + 0.3); ln(-fx, cz + fz - 0.3, fx, cz + fz); ln(-fx, cz - fz, -fx + 0.3, cz + fz); ln(fx - 0.3, cz - fz, fx, cz + fz); ln(-0.15, cz - fz, 0.15, cz + fz);
+  // 正面のガラスの入口棟（白い枠）
+  const ez0 = E(Math.PI / 2, 1, 0)[2] - 4, ez1 = hd - 6;
+  mb.box(-20, B, ez0, 20, B + 20, ez1, glass, PAT.fullglass, white);
+  mb.box(-20.6, B + 20, ez0, 20.6, B + 21.2, ez1 + 0.6, white);
+  for (const x of [-20.3, 20.3]) mb.box(x - 0.6, B, ez0, x + 0.6, B + 20, ez1 + 0.6, white);
+  for (let x = -14; x <= 14; x += 7) mb.box(x - 0.2, B, ez1 - 0.1, x + 0.2, B + 20, ez1 + 0.3, white);
+  mb.box(-24, B + 6, ez1, 24, B + 6.6, ez1 + 5, white); // ひさし
+  void grey;
 }
 
 // ---- 農地の畑（農家の区画の空いたマス全部）----

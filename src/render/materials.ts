@@ -58,6 +58,7 @@ export function createBuildingMaterial(): THREE.MeshLambertMaterial {
         vec3 gTint = vec3(0.0);
         float gGlow = 0.0;
         float gPane = 0.5;
+        float gLit = 0.0;
         uniform highp sampler2DArray uDetail;
         uniform float uTile[10];
         varying float vMat;
@@ -179,6 +180,8 @@ export function createBuildingMaterial(): THREE.MeshLambertMaterial {
             diffuseColor.rgb = mix(diffuseColor.rgb * 0.5, vec3(0.5, 0.53, 0.56), max(line, mull));
             cellId = floor(vec2(uv.x / 4.5, uv.y / 3.8));
             gRefl = 1.35;
+          } else if (pat > 11.5 && pat < 12.5) { // 夜に照明で明るくなる面
+            gLit = 1.0;
           } else if (pat > 10.5 && pat < 11.5) { // 夜に光る帯
             gGlow = 1.0;
             diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.8, 0.82, 0.85), 0.5);
@@ -223,6 +226,7 @@ export function createBuildingMaterial(): THREE.MeshLambertMaterial {
         `#include <emissivemap_fragment>
         totalEmissiveRadiance += vec3(1.0, 0.82, 0.5) * lit * uNight * 0.9;
         totalEmissiveRadiance += vec3(0.75, 0.88, 1.0) * gGlow * uNight * 1.4;
+        totalEmissiveRadiance += diffuseColor.rgb * gLit * uNight * 1.1;
         if (gWin > 0.001) {
           // ガラスの映り込み：斜めから見るほど空が強く映り、太陽の方向にはキラッと光る
           vec3 Nv = normalize(normal);
