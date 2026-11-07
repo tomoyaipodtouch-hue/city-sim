@@ -2,6 +2,7 @@
 // 光の計算は PBR（MeshStandardMaterial）。面ごとの粗さ・金属らしさ・ガラスの反射は、模様と素材の番号からシェーダーの中で決める
 import * as THREE from 'three';
 import { detailTexture, MAT_TILE_M } from './textures';
+import { surfaceNoise } from './surfaceNoise';
 
 export const shared = {
   uNight: { value: 0 },
@@ -40,6 +41,7 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
     sh.uniforms.uTime = shared.uTime;
     sh.uniforms.uDetail = { value: detailTexture() };
     sh.uniforms.uTile = { value: MAT_TILE_M };
+    sh.uniforms.uSurf = { value: surfaceNoise() };
     sh.vertexShader = sh.vertexShader
       .replace(
         '#include <common>',
@@ -89,6 +91,7 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
         float gMetal = 0.0;
         float gAO = 1.0;
         uniform highp sampler2DArray uDetail;
+        uniform sampler2D uSurf;
         uniform float uTile[10];
         const float ROUGH[10] = ${arr(ROUGH)};
         const float METAL[10] = ${arr(METAL)};
@@ -139,6 +142,23 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
           diffuseColor.rgb *= mix(1.0, det, 0.9);
           // 汚れて暗いところは少しざらざら、明るいところは少しなめらか
           gRough = clamp(gRough + (1.0 - det) * 0.25, 0.08, 1.0);
+        }
+        // 敷地の芝生：まわりの地面（groundMaterial）と同じ色合いとむらにそろえる（浮いて見えないように）
+        if (mi == 9 && vNy > 0.5) {
+          vec3 c = diffuseColor.rgb;
+          float grassy = clamp((c.g - max(c.r, c.b)) * 14.0, 0.0, 1.0);
+          if (grassy > 0.01) {
+            vec2 p = vWp.xz;
+            vec4 nM = texture2D(uSurf, mat2(0.8, -0.6, 0.6, 0.8) * p * (1.0 / 151.0));
+            vec4 nS = texture2D(uSurf, mat2(0.28, 0.96, -0.96, 0.28) * p * (1.0 / 31.0) + 0.37);
+            vec3 g = mix(vec3(dot(c, vec3(0.3, 0.59, 0.11))), c, 0.86) * vec3(0.95, 0.94, 0.97);
+            float dry = smoothstep(0.5, 0.8, nM.g + (nS.g - 0.5) * 0.6);
+            float lush = smoothstep(0.55, 0.2, nM.a + (nS.g - 0.5) * 0.6);
+            g *= mix(vec3(1.0), vec3(1.12, 1.04, 0.8), dry * 0.6);
+            g *= mix(vec3(1.0), vec3(0.78, 0.9, 0.8), lush * 0.5);
+            g *= 0.86 + 0.28 * nS.g;
+            diffuseColor.rgb = mix(c, g, grassy);
+          }
         }
         // 塗った金属（色の濃いもの）は金属らしさを弱める
         {
