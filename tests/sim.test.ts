@@ -384,6 +384,23 @@ describe('stage 2a roads', () => {
     expect(rc.face).toBe((r0 + 4) & 7);
   });
 
+  it('track-only stations can sit side by side on parallel elevated lines', () => {
+    const w = new World(48);
+    w.g.heights.fill(6);
+    w.funds = 1e7;
+    const g = w.g;
+    expect(w.exec({ t: 'road', x0: 5, y0: 22, x1: 40, y1: 22, road: RoadType.Road }).ok).toBe(true);
+    expect(w.exec({ t: 'transit', x0: 5, y0: 20, x1: 40, y1: 20, kind: 'erail' }).ok).toBe(true);
+    expect(w.exec({ t: 'transit', x0: 5, y0: 21, x1: 40, y1: 21, kind: 'erail' }).ok).toBe(true);
+    expect(w.exec({ t: 'estop', x: 20, y: 21 }).ok).toBe(true);
+    expect(w.exec({ t: 'estop', x: 20, y: 20 }).ok).toBe(true);
+    let k = 0;
+    for (let i = 0; i < g.n * g.n; i++) if (g.estn[i]) k++;
+    expect(k).toBe(8);
+    // 同じ線路で重なる駅はだめ
+    expect(w.exec({ t: 'estop', x: 23, y: 20 }).ok).toBe(false);
+  });
+
   it('trees can be planted on empty land, but not on roads', () => {
     const w = new World(32);
     w.g.heights.fill(6);

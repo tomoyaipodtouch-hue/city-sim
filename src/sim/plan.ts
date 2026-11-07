@@ -1747,6 +1747,8 @@ export function estopGroup(g: Grid, start: number): number[] {
     out.push(c);
     const x = c % n, y = (c / n) | 0;
     for (let d = 0; d < 8; d++) {
+      // 線路でつながっているホームだけを 1 つの駅とみなす（隣に並べた別の線の駅とは分ける）
+      if (!(g.erail[c] & (1 << d))) continue;
       const nx = x + DX[d], ny = y + DY[d];
       if (!g.inb(nx, ny)) continue;
       const j = ny * n + nx;
@@ -1760,7 +1762,13 @@ export function estopGroup(g: Grid, start: number): number[] {
 // 駅から歩いて出入りできる一般の道路（ホームの下か、すぐ横）
 export function estopRoads(g: Grid, cells: number[]): number[] {
   const n = g.n, out = new Set<number>();
+  // 隣に並んだ駅（別の線）のホームからも出入りできる（乗り換えできる）
+  const all = new Set(cells);
   for (const c of cells) {
+    const x = c % n, y = (c / n) | 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (g.inb(x + dx, y + dy) && g.estn[g.idx(x + dx, y + dy)]) all.add(g.idx(x + dx, y + dy));
+  }
+  for (const c of all) {
     const x = c % n, y = (c / n) | 0;
     for (let dy = -1; dy <= 1; dy++)
       for (let dx = -1; dx <= 1; dx++) {
@@ -1802,8 +1810,9 @@ export function planEStop(g: Grid, x: number, y: number): EStopPlan {
       // 端どうしもつながっていること
       for (let k = 0; k + 1 < cells.length && ok; k++) if (!(g.erail[cells[k]] & (1 << d))) ok = false;
       if (!ok) continue;
-      // ほかの駅のすぐ横には置かない
-      if (cells.some((c) => { const cx = c % n, cy = (c / n) | 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (g.inb(cx + dx, cy + dy) && g.estn[g.idx(cx + dx, cy + dy)]) return true; return false; })) return fail('ほかの駅のすぐ横には置けません', cells);
+      // 同じ線路の上で、ほかの駅と重なったり、すぐ続いたりはできない（隣の線路に並べるのはよい）
+      const ends = [cells[0], cells[cells.length - 1]].flatMap((c, k) => { const cx = (c % n) + DX[d] * (k ? 1 : -1), cy = ((c / n) | 0) + DY[d] * (k ? 1 : -1); return g.inb(cx, cy) ? [g.idx(cx, cy)] : []; });
+      if (cells.some((c) => g.estn[c]) || ends.some((c) => g.estn[c] !== 0)) return fail('同じ線路の上に、すでに駅があります', cells);
       if (!estopRoads(g, cells).length) return fail('ホームの下か横に、一般の道路が必要です（歩いて出入りするため）', cells);
       return { ok: true, cells, remove: false, reason: '', cost: ESTOP_COST };
     }
