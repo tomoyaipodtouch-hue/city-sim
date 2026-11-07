@@ -130,6 +130,7 @@ export class CityRenderer {
     });
     this.cars.enabled = this.quality.cars;
     this.trees.hq = !!this.quality.hq;
+    this.cars.setHq(!!this.quality.hq);
     if (this.quality.hq && !this.post) this.post = new PostFX(this.renderer, this.scene, this.rig.camera);
     if (!this.quality.hq && this.post) { this.post.dispose(); this.post = null; }
     this.resize();

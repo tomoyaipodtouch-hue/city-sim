@@ -171,11 +171,17 @@ export class CarLayer {
   showSubway = false;
   viewDist = 500;
 
+  // 高画質では、前照灯の光（足し合わせ）がトーンマッピングの前に入って強く見えるので、少し弱める
+  private hq = false;
+  setHq(on: boolean) {
+    this.hq = on;
+    this.setNight(this.night);
+  }
   // 夜は車が暗くなりすぎないように、少し光らせる。前後のライトは光の点で描く
   setNight(k: number) {
     this.night = k;
     vehicleUniforms.uNightK.value = k;
-    (this.beams.material as THREE.MeshBasicMaterial).opacity = 0.3 * k;
+    (this.beams.material as THREE.MeshBasicMaterial).opacity = 0.3 * k * (this.hq ? 0.6 : 1);
     for (const p of [this.lightsHead, this.lightsTail]) (p.material as THREE.PointsMaterial).opacity = Math.min(1, k * 1.3);
   }
   private makeLights(color: number, size: number) {
