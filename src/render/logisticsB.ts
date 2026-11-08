@@ -21,7 +21,7 @@ function mute(c: THREE.Color, k: number) {
 // ---------------- 色 ----------------
 const K = {
   joint2: C(0xc4c9ce), panel: C(0xf3f4f5), ivory: C(0xf0ede4), pgrey: C(0xe6e9ec), silver: C(0xdcdfe3), joint: C(0xd5d9dd), annex: C(0xdadee2),
-  cap: C(0xd2d6da), roof: C(0xcfd2d4), plinth: C(0x8e949b), conc: C(0xbcbab3), apron: C(0xb4b2aa), court: C(0x55585c), yard: C(0x66696c),
+  cap: C(0xd2d6da), roof: C(0xcfd2d4), plinth: C(0x8e949b), conc: C(0xbcbab3), apron: C(0xb4b2aa), court: C(0x55585c), yard: C(0x5f6266),
   paint: C(0xefefe9), yel: C(0xf2c200), seal: C(0x26292d), door: C(0xe9ebed), glass: C(0x7aa6c9), glassG: C(0x6f9fa6),
   slot: C(0xa9cbe0), steel: C(0x8a9097), steelDk: C(0x4a5057), fence: C(0x7f868d), solar: C(0x1d3354), lawn: C(0x6e9a4a), hedge: C(0x3f6a31),
   lamp: C(0xfff0cf), led: C(0xe9f2ff), tyre: C(0x1d1f22), chassis: C(0x2c2f33), cabGlass: C(0x1c2834), unit: C(0xc9cdd1), grille: C(0x3b4046),
