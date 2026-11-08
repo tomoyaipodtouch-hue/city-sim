@@ -22,6 +22,9 @@ const JACKKNIFE = (80 * Math.PI) / 180; // トレーラーが折れ曲がる角�
 const KINGPIN = 1.6; // トラクターの中心から連結部までの距離
 const TRAILER_AXLE = 12.2; // 連結部から後ろの車輪までの距離
 const TRAILER_REAR = KINGPIN + 14.2; // トラクターの中心から荷台の後ろの端までの距離
+const TRAIN_ACC = 1.5; // 終点を出る列車の加速（m/s²）
+const LEFT_TERMINAL = -2; // lastStop：終点の駅で向きを変えて、その駅を出ていくところ（駅を出るまで止まらない）
+const FIX_LEN = 16; // 向きを変えたときの横のずれを、この道のり（m）でなくす
 
 // 車は「今いるマス（from）」の中を、入ってきた辺の中点から出ていく辺の中点まで、
 // マスの中心を制御点にした曲線（2次ベジェ曲線）に沿って進む。道路の描き方と同じ形になる。
@@ -47,7 +50,13 @@ interface Car extends Cell {
   revPending?: boolean; // 行き止まりで止まっていて、このあと向きを変える
   tbFor?: Turnback | null; // tbSide を決めた折り返し
   tbSide?: 0 | 1; // 終点のどちらのホームに入るか（0 = 分岐器で渡った先、1 = 渡らずにそのまま）
-  tbDep?: Turnback | null; // 渡らずに入った終点から出ていくところ（出るときに分岐器で渡る）
+  // 向きを変えて出ていくときに反対側の線路へ移るところ（止まった点からの道のりで d1〜d0）と、先頭のいまの道のり s
+  dep?: { d0: number; d1: number; s: number } | null;
+  acc?: number; // 終点で向きを変えて出ていく列車のいまの速さ（m/s）。止まった位置からゆっくり加速する
+  flip?: boolean; // 中間の車両が逆向き（向きを変えるたびに入れ替わる）
+  lanes?: Float32Array; // 台車ごとの、線路の中心からの横の位置（前のコマ。前の車両の前の台車から順に）
+  // 向きを変えたときの、横の位置のずれ（台車ごと）。短い路線で分岐器が重なるときなどに出る。進んだ道のり s のあいだに少しずつなくす
+  fix?: { k: Float32Array; s: number; set: boolean } | null;
   vs?: number; // 見た目の乱数（人の背の高さ・歩く周期）
   sk?: number; // 今の速さの割合（カーブに入る・出るところでなめらかに変える）
   lo?: number; // 今の車線の横の位置（道路の種類が変わるところで、横に跳ばずに移る）
@@ -532,6 +541,8 @@ export class CarLayer {
       const dirIn = (back + 4) & 7;
       const prev: Cell = { from: j, to: cur.from, din: dirIn, d: dirIn, hA: this.trackH(f, j) };
       cur.din = dirIn;
+      // 入口の高さは、走ってきたときと同じく前後のマスの間（向きを変えたときに高さがずれないように）
+      cur.hA = (this.trackH(f, j) + this.trackH(f, cur.from)) / 2;
       c.hist.push(prev);
       cur = prev;
     }
@@ -681,15 +692,23 @@ export class CarLayer {
     return (f.carsPer - 1) * f.spacing + f.halfLen * (1 + BOGIE);
   }
   // 行き止まりで向きを変える：最後尾の車両の後ろの台車が新しい先頭になり、来た道を戻る（右側通行なので、渡った先の線路をそのまま走る）
-  // 列車は同じ場所にとどまる（車両の並びが前後で入れ替わるだけ）
+  // 列車は同じ場所にとどまる（車両の並びが前後で入れ替わるだけ）。先頭は行き止まりのマスの入口（t = 1）で止まっている
   private reverseTrain(f: Fleet, c: Car) {
     const rev = (q: Cell): Cell => {
       const n = this.grid!.n, x = (q.from % n) - DX[q.din], y = ((q.from / n) | 0) - DY[q.din];
       const to = this.grid!.inb(x, y) ? y * n + x : q.from;
-      return { from: q.from, to, din: opp(q.d), d: opp(q.din), hA: this.trackH(f, q.from) };
+      // 入口の高さは、もとの出口の高さ
+      return { from: q.from, to, din: opp(q.d), d: opp(q.din), hA: (this.trackH(f, q.from) + this.trackH(f, q.to)) / 2 };
     };
+    const len = CarLayer.trainBogies(f);
+    // 分岐器で渡って入ったホームなら、そのまま右側の線路。渡らずに入ったホームや分岐器のない行き止まりからは、
+    // 出ていく途中で反対側の線路へ移る（止まっていた線路から少しずつ）
+    const tb = this.turnbacks.get(f.track)?.get(c.to);
+    c.dep = tb && c.tbFor === tb && c.tbSide !== 1 ? null : tb ? { d0: tb.d0, d1: tb.d1, s: len } : { d0: len + CELL * 1.6, d1: len, s: len };
+    // 先頭がホームにいれば（その駅にはもう止まった）、出ていくときにその駅ではもう止まらない
+    const served = !!this.stations.get(f.track)?.has(c.from);
     const segs: Cell[] = [c, ...c.hist];
-    let rem = CarLayer.trainBogies(f);
+    let rem = len;
     let k = 0, tf = 0;
     for (; k < segs.length; k++) {
       const L = CarLayer.cellLen(segs[k]);
@@ -703,11 +722,21 @@ export class CarLayer {
     c.from = head.from; c.to = head.to; c.din = head.din; c.d = head.d; c.hA = head.hA;
     c.t = 1 - tf;
     c.hist = hist;
-    c.tbDep = c.tbSide === 1 ? c.tbFor ?? null : null;
     c.tbFor = null;
     c.tbSide = undefined;
     c.tbKey = -1;
-    c.lastStop = -1;
+    // 駅にいれば、駅を出るまでもう止まらない。止まった位置から加速する。中間の車両は向きを変えない
+    c.lastStop = served ? LEFT_TERMINAL : -1;
+    c.acc = 0;
+    c.flip = !c.flip;
+    // 横の位置も向きを変える前のまま（台車の並びは前後が逆になる）。計算とのずれは次に並べるときに求める
+    const m = c.lanes?.length ?? 0;
+    c.fix = null;
+    if (m === 2 * f.carsPer) {
+      const k = new Float32Array(m);
+      for (let i = 0; i < m; i++) k[i] = -c.lanes![m - 1 - i];
+      c.fix = { k, s: 0, set: false };
+    }
   }
 
   setStations(g: Grid, list: Building[]) {
@@ -896,7 +925,7 @@ export class CarLayer {
               // ホームでは速度を落とし、ホームの端のマスで、先頭がホームの端の 3m 手前に来るところで止まる
               adv *= 0.45;
               const stopT = Math.max(0.5, 1 - (3 + f.halfLen * (1 - BOGIE)) / len);
-              if (!st!.has(c.to) && c.lastStop !== c.from && c.t < stopT && c.t + adv >= stopT) {
+              if (!st!.has(c.to) && c.lastStop !== c.from && c.lastStop !== LEFT_TERMINAL && c.t < stopT && c.t + adv >= stopT) {
                 c.t = stopT;
                 adv = 0;
                 c.stop = 5;
@@ -913,7 +942,19 @@ export class CarLayer {
                 c.wait = (c.wait ?? 0) + dt;
               }
             } else c.wait = 0;
+            // 終点で向きを変えたあとは、止まった位置からゆっくり加速する（線路の速さに届いたら終わり）
+            if (c.acc !== undefined && dt > 0) {
+              const v = Math.min((adv * len) / dt, c.acc + TRAIN_ACC * dt);
+              adv = (v * dt) / len;
+              c.acc = v >= speed ? undefined : v;
+            }
           }
+          // 向きを変えたあと反対側の線路へ移るところ：先頭が進んだ道のり。最後尾まで移り終えたら終わり
+          if (c.dep) {
+            c.dep.s += adv * len;
+            if (c.dep.s - CarLayer.trainBogies(f) > c.dep.d0) c.dep = null;
+          }
+          if (c.fix && c.fix.set && (c.fix.s += adv * len) >= FIX_LEN) c.fix = null;
         }
         if (!line && !walk && adv > 0) {
           // 前の車（同じマスの先、または次のマス）との間をあける
@@ -993,31 +1034,41 @@ export class CarLayer {
           // 折り返しの手前の X 字の分岐器では、反対側の線路へ渡る
           const tb = this.endAhead(f, c);
           const isl = f.track === 'erail' && this.islands.length ? this.islands : null;
-          const laneAt = () => {
+          // 止まった点からの道のり dist が d0 から d1 へ進むあいだに、反対側の線路へ移る（-1 倍になる）
+          const cross = (dist: number, d0: number, d1: number) => {
+            const u = Math.max(0, Math.min(1, (d0 - dist) / (d0 - d1)));
+            return 1 - 2 * u * u * (3 - 2 * u);
+          };
+          const lanes = c.lanes?.length === 2 * nCar ? c.lanes : (c.lanes = new Float32Array(2 * nCar));
+          const fix = c.fix, fu = fix ? Math.min(1, fix.s / FIX_LEN) : 1, fw = 1 - fu * fu * (3 - 2 * fu);
+          // 先頭から back だけ後ろ（いまの P）にある i 番目の台車の、線路の中心からの横の位置
+          const laneAt = (back: number, i: number) => {
             // 島式の駅の前後では、線路が左右に広がる
             const base = isl ? lane + (ISLAND_GAP - lane) * islandSpread(isl, P.x, P.z) : lane;
-            // 渡らずに入るときは分岐器を通らない。渡らずに入った終点から出るときは、出ていく途中で渡る
-            const z = tb ? (c.tbSide === 1 ? null : tb) : c.tbDep;
-            if (!z) return base;
-            const dist = (z.ex - P.x) * z.ux + (z.ez - P.z) * z.uz;
-            const u = Math.max(0, Math.min(1, (z.d0 - dist) / (z.d0 - z.d1)));
-            return base * (1 - 2 * u * u * (3 - 2 * u));
+            let sg = 1;
+            // 渡らずに入るときは分岐器を通らない
+            if (tb && c.tbSide !== 1) sg *= cross((tb.ex - P.x) * tb.ux + (tb.ez - P.z) * tb.uz, tb.d0, tb.d1);
+            // 渡らずに入った終点・分岐器のない行き止まりから出るときは、止まっていた線路から出ていく途中で移る
+            if (c.dep) sg *= cross(c.dep.s - back, c.dep.d0, c.dep.d1);
+            let l = base * sg;
+            // 向きを変えた直後は、向きを変える前の横の位置から始める
+            if (fix) {
+              if (!fix.set) fix.k[i] -= l;
+              l += fix.k[i] * fw;
+            }
+            return (lanes[i] = l);
           };
-          if (c.tbDep) {
-            // 最後尾まで分岐器を渡り終えたら終わり
-            const z = c.tbDep, dist = (z.ex - P.x) * z.ux + (z.ez - P.z) * z.uz;
-            if (dist > z.d0 + f.carsPer * sp + 10) c.tbDep = null;
-          }
           for (let j = 0; j < nCar; j++) {
             this.placeBack(f, c, j * sp);
-            const l0 = laneAt();
+            const l0 = laneAt(j * sp, 2 * j);
             const fx = P.x - P.tz * l0, fz = P.z + P.tx * l0, fh = P.h;
             this.placeBack(f, c, j * sp + 2 * half);
-            const l1 = laneAt();
+            const l1 = laneAt(j * sp + 2 * half, 2 * j + 1);
             const rx = P.x - P.tz * l1, rz = P.z + P.tx * l1, rh = P.h;
             let ang = Math.atan2(fx - rx, fz - rz);
             const tail = j === nCar - 1;
-            if (tail) ang += Math.PI;
+            // 最後尾の車両は後ろ向き。中間の車両は、向きを変えても同じ向きのまま（パンタグラフの位置が変わらないように）
+            if (tail || (j > 0 && c.flip)) ang += Math.PI;
             this.v.set((fx + rx) / 2, (fh + rh) / 2, (fz + rz) / 2);
             if (!this.seen(this.v.x, this.v.y, this.v.z, f.halfLen + 4)) continue;
             this.q.setFromAxisAngle(this.up, ang);
@@ -1030,6 +1081,7 @@ export class CarLayer {
               mk++;
             }
           }
+          if (fix) fix.set = true;
           k++;
           if (k >= f.max) break;
           continue;
