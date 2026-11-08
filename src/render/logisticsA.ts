@@ -7,7 +7,7 @@ import type { MeshBuilder } from './builder';
 import { MAT } from './textures';
 import { Rng } from '../sim/rng';
 import type { LotFrame, TF } from './buildingGen';
-import { LOGI } from './logiRegistry';
+import { LOGI, type LogiFn } from './logiRegistry';
 
 type P3 = [number, number, number];
 const C = (h: number) => new THREE.Color(h);
@@ -122,21 +122,74 @@ function court(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number) 
   gq(mb, x0, z0, x1, z1, 0.09, K.court, PAT.lit);
 }
 // 照明塔の足もとの光だまり（夜は照らされて明るく、外へなめらかに暗くなる。昼はうすい明るいむら）。
-// 頂点ごとに中心からの距離で色を混ぜた格子。a = 光だまりを入れる四角（前庭の範囲）、base = その地面の色
+// 頂点ごとに中心からの距離で色を混ぜた格子。a = 光だまりを入れる四角（前庭の範囲）、base = その地面の色。
+// すぐには描かずにためておき、形を作り終えたら poolFlush でまとめて描く
 function pool(mb: MeshBuilder, cx: number, cz: number, R: number, a: Rect, base: THREE.Color = K.court, peak: THREE.Color = POOL, y = 0.095) {
   const x0 = Math.max(a[0], cx - R), x1 = Math.min(a[2], cx + R), z0 = Math.max(a[1], cz - R), z1 = Math.min(a[3], cz + R);
   if (x1 - x0 < 2 || z1 - z0 < 2) return;
-  const nx = Math.max(2, Math.round((x1 - x0) / (R / 3))), nz = Math.max(2, Math.round((z1 - z0) / (R / 3)));
+  const [tx, ty, tz] = mb.world(0, 0, 0), [ax, , az] = mb.world(1, 0, 0);
+  poolQ.push({ cx, cz, R, e: [x0, z0, x1, z1], c0: [base.r, base.g, base.b], c1: [peak.r, peak.g, peak.b], y, tr: [Math.atan2(az - tz, ax - tx), tx, ty, tz] });
+}
+// ためた光だまり。e = 四角に切った範囲、c0 = 地面の色、c1 = 真下の色、tr = 描いたときの回転と位置
+interface PoolQ { cx: number; cz: number; R: number; e: Rect; c0: number[]; c1: number[]; y: number; tr: [number, number, number, number] }
+const poolQ: PoolQ[] = [];
+// ためた光だまりを描く。同じ高さ・同じ色で範囲が重なるものは 1 枚の格子にまとめ、頂点の明るさはいちばん明るい塔のもの
+// （同じ面に別の三角形の分け方の格子を重ねると、夜にぎざぎざの暗いむらが出る）
+function poolFlush(mb: MeshBuilder) {
+  const q = poolQ.splice(0);
+  if (!q.length) return;
+  const [tx, ty, tz] = mb.world(0, 0, 0), [ax, , az] = mb.world(1, 0, 0);
+  const key = (p: PoolQ) => `${p.tr.join()}|${p.y}|${p.c0.join()}|${p.c1.join()}`;
+  const par = q.map((_, i) => i);
+  const find = (i: number): number => { while (par[i] !== i) i = par[i] = par[par[i]]; return i; };
+  const hit = (a: Rect, b: Rect) => a[0] < b[2] - 1e-3 && b[0] < a[2] - 1e-3 && a[1] < b[3] - 1e-3 && b[1] < a[3] - 1e-3;
+  for (let i = 0; i < q.length; i++) for (let j = i + 1; j < q.length; j++) if (key(q[i]) === key(q[j]) && hit(q[i].e, q[j].e)) par[find(j)] = find(i);
+  const groups = new Map<number, PoolQ[]>();
+  q.forEach((p, i) => { const r = find(i); const g = groups.get(r); if (g) g.push(p); else groups.set(r, [p]); });
+  for (const g of groups.values()) {
+    mb.setTransform(...g[0].tr);
+    poolGrid(mb, g);
+  }
+  mb.setTransform(Math.atan2(az - tz, ax - tx), tx, ty, tz);
+}
+// 光だまりの組を 1 枚の格子で描く。格子の線は、どの光だまりの範囲の端も通る（範囲の外へはみ出さない）。
+// 区間ごとのこまかさは、その区間をおおう光だまりの半径の 1/3（1 つだけなら前と同じ格子）
+function poolGrid(mb: MeshBuilder, g: PoolQ[]) {
+  const lines = (k: 0 | 1) => {
+    const b = g.flatMap((p) => [p.e[k], p.e[k + 2]]).sort((u, v) => u - v);
+    const bs = [b[0]];
+    for (const v of b) if (v - bs[bs.length - 1] > 1e-3) bs.push(v);
+    const out = [bs[0]];
+    for (let i = 1; i < bs.length; i++) {
+      const a = bs[i - 1], L = bs[i] - a;
+      let step = Infinity;
+      for (const p of g) if (p.e[k] <= a + 1e-3 && p.e[k + 2] >= bs[i] - 1e-3) step = Math.min(step, p.R / 3);
+      const n = step === Infinity ? 1 : Math.max(g.length === 1 ? 2 : 1, Math.round(L / step));
+      for (let j = 1; j <= n; j++) out.push(a + (L * j) / n);
+    }
+    return out;
+  };
+  const xs = lines(0), zs = lines(1), nx = xs.length - 1, nz = zs.length - 1;
+  const { y, c0, c1 } = g[0];
   const nv = (nx + 1) * (nz + 1);
   const P = new Float32Array(nv * 3), N = new Float32Array(nv * 3), Cl = new Float32Array(nv * 3), U = new Float32Array(nv * 2);
   for (let j = 0; j <= nz; j++) for (let i = 0; i <= nx; i++) {
-    const k = j * (nx + 1) + i, x = x0 + ((x1 - x0) * i) / nx, z = z0 + ((z1 - z0) * j) / nz;
-    let t = Math.max(0, 1 - Math.hypot(x - cx, z - cz) / R);
-    t = t * t * (3 - 2 * t);
+    const k = j * (nx + 1) + i, x = xs[i], z = zs[j];
+    let t = 0;
+    for (const p of g) {
+      let s = Math.max(0, 1 - Math.hypot(x - p.cx, z - p.cz) / p.R);
+      s = s * s * (3 - 2 * s);
+      t = Math.max(t, s);
+    }
     P[k * 3] = x; P[k * 3 + 1] = y; P[k * 3 + 2] = z; N[k * 3 + 1] = 1;
-    Cl[k * 3] = base.r + (peak.r - base.r) * t; Cl[k * 3 + 1] = base.g + (peak.g - base.g) * t; Cl[k * 3 + 2] = base.b + (peak.b - base.b) * t;
+    for (let c = 0; c < 3; c++) Cl[k * 3 + c] = c0[c] + (c1[c] - c0[c]) * t;
   }
-  mb.gridSurface(nx, nz, P, N, Cl, U, PAT.lit, MAT.ground, () => true);
+  // 四角の中心が、どれかの光だまりの範囲に入るものだけ描く
+  const keep = (i: number, j: number) => {
+    const x = (xs[i] + xs[i + 1]) / 2, z = (zs[j] + zs[j + 1]) / 2;
+    return g.some((p) => x > p.e[0] && x < p.e[2] && z > p.e[1] && z < p.e[3]);
+  };
+  mb.gridSurface(nx, nz, P, N, Cl, U, PAT.lit, MAT.ground, keep);
 }
 
 // ---------------- 車（止まっているトラック・トレーラー・バン・乗用車）----------------
@@ -190,7 +243,7 @@ function truck(mb: MeshBuilder, x: number, z: number, a: number, k: TK, body: TH
       return;
     }
     const c0 = L + (k === 'reefer' ? 0.55 : 0.1);
-    B(L - 1.2, c0 + 5.0, -1.1, 1.1, 0.05, 1.25, K.chassis);
+    B(L - 1.2, c0 + 4.95, -1.1, 1.1, 0.05, 1.25, K.chassis); // 前の端は運転台の面より少し奥（同じ面に重ねない）
     B(c0 + 2.4, c0 + 5.0, -1.25, 1.25, 1.1, 3.75, cab);
     shield(c0 + 5.02, 1.1, 2.3, 3.35);
   } else if (k === 'wing' || k === 'wingOpen') {
@@ -259,7 +312,7 @@ function doors(mb: MeshBuilder, xs: number[], z: number, y: number, dw: number, 
     mb.quad([b, y, zf], [b, y + dh, zf], [a, y + dh, zf], [a, y, zf], K.shutter, 0, dh, dw, 0, 10);
     mb.matOverride = keep;
     // 車止め（黄色）
-    const zb = (bz ?? z) + 0.03 + (bz === null && seal ? 0.32 : 0);
+    const zb = (bz ?? z) + 0.05 + (bz === null && seal ? 0.32 : 0); // 台の前の柱の面より少し前
     for (const s of [a + 0.1, b - 0.55]) wq(mb, 0, zb, s, s + 0.45, y - 0.62, y - 0.12, K.yel, 0, MAT.none, 10);
     // 灯り（夜に光る）
     if (lamp > 0 && i % lamp === 0) wq(mb, 0, z + 0.04, x - 0.4, x + 0.4, y + dh + 0.6, y + dh + 0.9, K.lamp, PAT.lit, MAT.none, 10);
@@ -652,7 +705,8 @@ function mtDeckBody(mb: MeshBuilder, W: number, D: number, end: boolean, q: numb
   for (let k = 1; k <= levels; k++) {
     const y = k * fh, top = k === levels;
     const xd0 = k === 1 ? x0 + ow : x0;
-    B(xd0, y - 0.9, zc, x1, y, z1, K.slab, 0, { roof: top ? K.roof : K.deck, rpat: top ? 0 : PAT.lit, bot: K.under, m: MAT.concrete, rm: top ? MAT.membrane : MAT.concrete });
+    // 床の板。下の面は下の階のバースの天井（夜は照明で明るい）
+    B(xd0, y - 0.9, zc, x1, y, z1, K.slab, 0, { roof: top ? K.roof : K.deck, rpat: top ? 0 : PAT.lit, bot: K.under, bpat: PAT.lit, m: MAT.concrete, rm: top ? MAT.membrane : MAT.concrete });
     // 直線ランプの前の踊り場（デッキの続き）
     if (!helix && !top) {
       B(x1, y - 0.9, z1 - 8, xo, y, z1, K.slab, 0, { roof: K.ramp, bot: K.under, m: MAT.concrete, rm: MAT.ground });
@@ -684,8 +738,8 @@ function mtDeckBody(mb: MeshBuilder, W: number, D: number, end: boolean, q: numb
       if (on[i]) truck(mb, X(xs), zc + 0.35, Math.PI / 2, r < 0.15 ? 'wingOpen' : 'wing', body, rng.pick(DECK_CABS), y);
     });
   }
-  // デッキの反対の端の壁（事務所の上。床の板の端を少し外から覆い、上はいちばん上の床の下まで）
-  B(x0 - 0.05, 2 * fh - 0.9, zc, x0 + 0.4, H - 0.9, z1, wall, 0, { roof: K.cap, m: MAT.metal });
+  // デッキの反対の端の壁（事務所の上。床の板の端を少し外から覆い、上はいちばん上の床の下まで。前の面は床の板の面より少し前）
+  B(x0 - 0.05, 2 * fh - 0.9, zc, x0 + 0.4, H - 0.9, z1 + 0.02, wall, 0, { roof: K.cap, m: MAT.metal });
   // 正面の柱（約 11m ごと）
   {
     const n = Math.max(2, Math.round((deckEnd - x0) / 11));
@@ -1661,5 +1715,17 @@ function distCenter(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number)
   });
 }
 
-LOGI.multiTenant = multiTenant;
-LOGI.distCenter = distCenter;
+// 形を作り終えたら、ためた光だまりを描く
+function withPools(fn: LogiFn): LogiFn {
+  return (mb, f, rng, tf, den) => {
+    poolQ.length = 0;
+    try {
+      fn(mb, f, rng, tf, den);
+      poolFlush(mb);
+    } finally {
+      poolQ.length = 0;
+    }
+  };
+}
+LOGI.multiTenant = withPools(multiTenant);
+LOGI.distCenter = withPools(distCenter);

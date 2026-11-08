@@ -3070,6 +3070,7 @@ function seedRoll(seed: number, k: number) {
 // 倉庫業の建物の種類を選んで建てる（形は logisticsA・B）。近さで帯に分ける：岸壁のすぐそばはコンテナヤード、
 // その外に冷凍・冷蔵倉庫、さらに外に配送センターと背の高いマルチテナント型（岸壁から外へ、低い→高いの順に並ぶ）。
 // 内陸は配送センターとマルチテナント型が中心で、冷凍・冷蔵倉庫が少し。マルチテナント型は 3×3 以上だけ。
+// 冷凍・冷蔵倉庫の帯でも、ふつうの大きさの敷地は半分ほどにとどめる（窓のない白い箱ばかりが並ばないように）。
 // 港のそばの大きな敷地（長い辺が 5 マス以上）は、長いマルチテナント型と長い配送センター・トラックターミナルが多い。
 // 種類は種から決める（建物の rng の並びは変えない）。登録がなければ false
 function logiPick(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, seed: number, port: number): boolean {
@@ -3080,7 +3081,7 @@ function logiPick(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, s
   const near = ss(0.75, 1, port);
   const w: [string, number][] = [
     ['containerYard', (big ? 1.8 : 3) * near],
-    ['coldStorage', (big ? 0.7 : 1) * (0.3 + 2.2 * bell(0.65, 0.2))],
+    ['coldStorage', big ? 0.7 * (0.3 + 2.2 * bell(0.65, 0.2)) : 0.3 + 1.1 * bell(0.65, 0.2)],
     ['distCenter', (big ? 1.6 : 1) * (0.7 + 1.2 * bell(0.45, 0.3))],
     ['multiTenant', mid ? (big ? (wide ? 2.2 : 1.6) : wide ? 1 : 0.5) * (0.6 + 1.2 * bell(0.35, 0.3)) : 0],
   ];

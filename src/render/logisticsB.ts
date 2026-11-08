@@ -7,7 +7,7 @@ import type { MeshBuilder } from './builder';
 import { MAT } from './textures';
 import { Rng } from '../sim/rng';
 import type { LotFrame, TF } from './buildingGen';
-import { LOGI } from './logiRegistry';
+import { LOGI, type LogiFn } from './logiRegistry';
 
 type P3 = [number, number, number];
 type Col = THREE.Color;
@@ -199,7 +199,7 @@ function vehicle(mb: MeshBuilder, x: number, z: number, a: number, k: VK, box: C
   };
   // トラクター（s0 から前へ 6.2m。後ろ半分はフレーム、前に運転台）
   const tractor = (s0: number) => {
-    B(s0, s0 + 6.2, -1.08, 1.08, 0.05, 1.15, K.chassis);
+    B(s0, s0 + 6.15, -1.08, 1.08, 0.05, 1.15, K.chassis); // 前の端は運転台の面より少し奥（同じ面に重ねない）
     B(s0 + 3.85, s0 + 6.2, -1.25, 1.25, 1.05, 3.8, cab);
     shield(s0 + 6.22, 1.1, 2.35, 3.45);
   };
@@ -339,23 +339,76 @@ function fence(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, 
 type Rect = [number, number, number, number];
 interface PoolAt { a: Rect; base: Col }
 // 照明塔の足もとの光だまり（夜は照らされて明るく、外へなめらかに暗くなる。昼はうすい明るいむら）。
-// 頂点ごとに中心からの距離で色を混ぜた格子。地面と同じ色から、真下の明るい色へ
+// 頂点ごとに中心からの距離で色を混ぜた格子。地面と同じ色から、真下の明るい色へ。
+// すぐには描かずにためておき、形を作り終えたら poolFlush でまとめて描く
 function pool(mb: MeshBuilder, cx: number, cz: number, R: number, p: PoolAt, y = 0.095) {
   const { a, base } = p;
   const x0 = Math.max(a[0], cx - R), x1 = Math.min(a[2], cx + R), z0 = Math.max(a[1], cz - R), z1 = Math.min(a[3], cz + R);
   if (x1 - x0 < 2 || z1 - z0 < 2) return;
   tmpC.copy(base).lerp(K.poolHi, 0.75);
-  const nx = Math.max(2, Math.round((x1 - x0) / (R / 3))), nz = Math.max(2, Math.round((z1 - z0) / (R / 3)));
+  const [tx, ty, tz] = mb.world(0, 0, 0), [ax, , az] = mb.world(1, 0, 0);
+  poolQ.push({ cx, cz, R, e: [x0, z0, x1, z1], c0: [base.r, base.g, base.b], c1: [tmpC.r, tmpC.g, tmpC.b], y, tr: [Math.atan2(az - tz, ax - tx), tx, ty, tz] });
+}
+// ためた光だまり。e = 四角に切った範囲、c0 = 地面の色、c1 = 真下の色、tr = 描いたときの回転と位置
+interface PoolQ { cx: number; cz: number; R: number; e: Rect; c0: number[]; c1: number[]; y: number; tr: [number, number, number, number] }
+const poolQ: PoolQ[] = [];
+// ためた光だまりを描く。同じ高さ・同じ色で範囲が重なるものは 1 枚の格子にまとめ、頂点の明るさはいちばん明るい塔のもの
+// （同じ面に別の三角形の分け方の格子を重ねると、夜にぎざぎざの暗いむらが出る）
+function poolFlush(mb: MeshBuilder) {
+  const q = poolQ.splice(0);
+  if (!q.length) return;
+  const [tx, ty, tz] = mb.world(0, 0, 0), [ax, , az] = mb.world(1, 0, 0);
+  const key = (p: PoolQ) => `${p.tr.join()}|${p.y}|${p.c0.join()}|${p.c1.join()}`;
+  const par = q.map((_, i) => i);
+  const find = (i: number): number => { while (par[i] !== i) i = par[i] = par[par[i]]; return i; };
+  const hit = (a: Rect, b: Rect) => a[0] < b[2] - 1e-3 && b[0] < a[2] - 1e-3 && a[1] < b[3] - 1e-3 && b[1] < a[3] - 1e-3;
+  for (let i = 0; i < q.length; i++) for (let j = i + 1; j < q.length; j++) if (key(q[i]) === key(q[j]) && hit(q[i].e, q[j].e)) par[find(j)] = find(i);
+  const groups = new Map<number, PoolQ[]>();
+  q.forEach((p, i) => { const r = find(i); const g = groups.get(r); if (g) g.push(p); else groups.set(r, [p]); });
+  for (const g of groups.values()) {
+    mb.setTransform(...g[0].tr);
+    poolGrid(mb, g);
+  }
+  mb.setTransform(Math.atan2(az - tz, ax - tx), tx, ty, tz);
+}
+// 光だまりの組を 1 枚の格子で描く。格子の線は、どの光だまりの範囲の端も通る（範囲の外へはみ出さない）。
+// 区間ごとのこまかさは、その区間をおおう光だまりの半径の 1/3（1 つだけなら前と同じ格子）
+function poolGrid(mb: MeshBuilder, g: PoolQ[]) {
+  const lines = (k: 0 | 1) => {
+    const b = g.flatMap((p) => [p.e[k], p.e[k + 2]]).sort((u, v) => u - v);
+    const bs = [b[0]];
+    for (const v of b) if (v - bs[bs.length - 1] > 1e-3) bs.push(v);
+    const out = [bs[0]];
+    for (let i = 1; i < bs.length; i++) {
+      const a = bs[i - 1], L = bs[i] - a;
+      let step = Infinity;
+      for (const p of g) if (p.e[k] <= a + 1e-3 && p.e[k + 2] >= bs[i] - 1e-3) step = Math.min(step, p.R / 3);
+      const n = step === Infinity ? 1 : Math.max(g.length === 1 ? 2 : 1, Math.round(L / step));
+      for (let j = 1; j <= n; j++) out.push(a + (L * j) / n);
+    }
+    return out;
+  };
+  const xs = lines(0), zs = lines(1), nx = xs.length - 1, nz = zs.length - 1;
+  const { y, c0, c1 } = g[0];
   const nv = (nx + 1) * (nz + 1);
   const P = new Float32Array(nv * 3), N = new Float32Array(nv * 3), Cl = new Float32Array(nv * 3), U = new Float32Array(nv * 2);
   for (let j = 0; j <= nz; j++) for (let i = 0; i <= nx; i++) {
-    const k = j * (nx + 1) + i, x = x0 + ((x1 - x0) * i) / nx, z = z0 + ((z1 - z0) * j) / nz;
-    let t = Math.max(0, 1 - Math.hypot(x - cx, z - cz) / R);
-    t = t * t * (3 - 2 * t);
+    const k = j * (nx + 1) + i, x = xs[i], z = zs[j];
+    let t = 0;
+    for (const p of g) {
+      let s = Math.max(0, 1 - Math.hypot(x - p.cx, z - p.cz) / p.R);
+      s = s * s * (3 - 2 * s);
+      t = Math.max(t, s);
+    }
     P[k * 3] = x; P[k * 3 + 1] = y; P[k * 3 + 2] = z; N[k * 3 + 1] = 1;
-    Cl[k * 3] = base.r + (tmpC.r - base.r) * t; Cl[k * 3 + 1] = base.g + (tmpC.g - base.g) * t; Cl[k * 3 + 2] = base.b + (tmpC.b - base.b) * t;
+    for (let c = 0; c < 3; c++) Cl[k * 3 + c] = c0[c] + (c1[c] - c0[c]) * t;
   }
-  mb.gridSurface(nx, nz, P, N, Cl, U, PAT.lit, MAT.ground, () => true);
+  // 四角の中心が、どれかの光だまりの範囲に入るものだけ描く
+  const keep = (i: number, j: number) => {
+    const x = (xs[i] + xs[i + 1]) / 2, z = (zs[j] + zs[j + 1]) / 2;
+    return g.some((p) => x > p.e[0] && x < p.e[2] && z > p.e[1] && z < p.e[3]);
+  };
+  mb.gridSurface(nx, nz, P, N, Cl, U, PAT.lit, MAT.ground, keep);
 }
 // 高い照明塔（頭に 2 つの大きな投光器。夜に光り、遠くからも見える）。p = 足もとの光だまり（なければなし）
 function mastT(mb: MeshBuilder, x: number, z: number, h: number, p: PoolAt | null = null) {
@@ -602,7 +655,8 @@ function hvac(mb: MeshBuilder, x: number, z: number, y: number, w = 3.6, d = 2.0
   disc(mb, x + w * 0.7, z + d / 2, y + 1.42, Math.min(0.7, d * 0.34), 8, K.fan);
 }
 // ドックシェルター（黒い布の枠と、白い断熱扉、上の灯り、車止め）。壁 d の面 w、a = 中心、y0 = 床（台）の高さ
-function shelter(mb: MeshBuilder, d: number, w: number, a: number, y0: number, lamp: boolean) {
+// yb = 下の床（地面か、2 階のデッキ）。車止めと黄色い縁は壁の根元の帯より少し前に出す
+function shelter(mb: MeshBuilder, d: number, w: number, a: number, y0: number, lamp: boolean, yb = 0) {
   const s = sgn(d);
   wbox(mb, d, w, a - 1.75, a + 1.75, 0, 0.62, y0 - 0.1, y0 + 3.85, K.seal, 0, { m: MAT.none, v: 10 });
   // 扉（横のうね）：面の座標の u を縦にして、金属のうねを横向きにする
@@ -617,9 +671,9 @@ function shelter(mb: MeshBuilder, d: number, w: number, a: number, y0: number, l
     mb.matOverride = keep;
   }
   // 車止め（黒いゴム）と、黄色い縁
-  wq(mb, d, w + s * 0.03, a - 1.45, a - 1.0, y0 - 0.55, y0 - 0.1, K.black, 0, MAT.none, 10);
-  wq(mb, d, w + s * 0.03, a + 1.0, a + 1.45, y0 - 0.55, y0 - 0.1, K.black, 0, MAT.none, 10);
-  wq(mb, d, w + s * 0.03, a - 1.95, a - 1.8, 0.1, y0 - 0.1, K.yel, 0, MAT.none, 10);
+  wq(mb, d, w + s * 0.05, a - 1.45, a - 1.0, y0 - 0.55, y0 - 0.1, K.black, 0, MAT.none, 10);
+  wq(mb, d, w + s * 0.05, a + 1.0, a + 1.45, y0 - 0.55, y0 - 0.1, K.black, 0, MAT.none, 10);
+  wq(mb, d, w + s * 0.05, a - 1.95, a - 1.8, yb + 0.1, y0 - 0.1, K.yel, 0, MAT.none, 10);
   // 灯り（夜に光る）
   if (lamp) wbox(mb, d, w, a - 0.45, a + 0.45, 0, 0.3, y0 + 4.05, y0 + 4.35, K.lamp, PAT.lit, { m: MAT.none, v: 10 });
 }
@@ -2126,9 +2180,9 @@ function coldRamp(mb: MeshBuilder, g: LongLot, rng: Rng, sr: Rng, den: number) {
     wq(mb, le > 0 ? 3 : 1, xo - le * 0.03, zR0, zD, Y2 + 0.85, Y2 + 1.0, K.led, PAT.glow, MAT.none, 10);
     bx(mb, qx0, Y2, zR0, qx1, Y2 + 1.15, zR0 + 0.3, K.white, 0, { roof: K.cap, m: MAT.concrete });
   }
-  // 柱（デッキの外のふちと、橋の外のふち）
+  // 柱（デッキの外のふちと、橋の外のふちの 1m 内側。橋の床の下）
   for (const x of slots(dx0 + 1, dx1 - 1, 10.5)) bx(mb, x - 0.35, 0, zD - 1.0, x + 0.35, Y2 - 0.9, zD - 0.3, slab, 0, { m: MAT.concrete, roof: null });
-  for (const z of slots(zR0 + 1, zC - 1, 10)) bx(mb, xo - le * 1.0 - 0.35, 0, z - 0.35, xo - le * 1.0 + 0.35, Y2 - 0.9, z + 0.35, slab, 0, { m: MAT.concrete, roof: null });
+  for (const z of slots(zR0 + 1, zC - 1, 10)) bx(mb, xo + le * 1.0 - 0.35, 0, z - 0.35, xo + le * 1.0 + 0.35, Y2 - 0.9, z + 0.35, slab, 0, { m: MAT.concrete, roof: null });
 
   // ---- 裏の長いランプ（登り口から橋の下の踊り場まで）。外の手すり壁は白に会社の色の線と夜に光る線 ----
   {
@@ -2174,7 +2228,7 @@ function coldRamp(mb: MeshBuilder, g: LongLot, rng: Rng, sr: Rng, den: number) {
   {
     const y0 = Y2 + 1.2;
     wq(mb, 0, zC + 0.02, xb0 + 0.5, xb1 - 0.5, Y2, y0, K.plinth, 0, MAT.concrete, Y2);
-    docks.forEach((a) => shelter(mb, 0, zC, a, y0, true));
+    docks.forEach((a) => shelter(mb, 0, zC, a, y0, true, Y2));
     bx(mb, xb0 + 0.5, y0 + 4.5, zC, xb1 - 0.5, y0 + 4.8, zC + 2.6, K.white, 0, { roof: K.roof, bot: K.lamp, bpat: PAT.lit, m: MAT.metal, v: 10 });
     wq(mb, 0, zC + 2.62, xb0 + 0.5, xb1 - 0.5, y0 + 4.52, y0 + 4.78, accent, 0, MAT.none, 10);
     // デッキの白線と、止まっている冷凍車（10t と 4t。デッキの奥行きに入るもの）
@@ -2435,9 +2489,10 @@ function chassisRows(mb: MeshBuilder, g: LongLot, rng: Rng, den: number, front: 
     gq(mb, x - 0.08, z0, x + 0.08, side ? hd - 5 : z1 + 0.6, 0.11, K.yel);
   }
   if (side) gq(mb, X(0), hd - 5.08, X(U + 0.6), hd - 4.92, 0.11, K.yel);
-  // 通路で、シャーシをつないでいるトラクター（前の向き）
+  // 通路で、シャーシをつないでいるトラクター（前の向き）。1 本の通路に 2 台は置かない（すれ違って重なる）
+  const a0 = aisles.length ? rng.int(aisles.length) : 0;
   for (let i = 0; i < Math.min(2, aisles.length); i++) {
-    const ua = aisles[rng.int(aisles.length)];
+    const ua = aisles[(a0 + i) % aisles.length];
     vehicle(mb, X(ua) + (rng.next() < 0.5 ? -1.8 : 1.8), z0 + 4 + rng.next() * (z1 - z0 - 24), Math.PI / 2, rng.next() < 0.5 ? 'cont' : 'tractor', boxCol(rng, rng.int(LINES.length)), rng.pick(CABS));
   }
   if (side) vehicle(mb, X(U * 0.45), hd - 3.2, du > 0 ? 0 : Math.PI, 'cont', boxCol(rng, rng.int(LINES.length)), rng.pick(CABS));
@@ -2448,5 +2503,17 @@ function chassisRows(mb: MeshBuilder, g: LongLot, rng: Rng, den: number, front: 
   for (const ua of ms) mastT(mb, X(ua), z0 + 0.6, 24 + den, yp);
 }
 
-LOGI.coldStorage = coldStorage;
-LOGI.containerYard = containerYard;
+// 形を作り終えたら、ためた光だまりを描く
+function withPools(fn: LogiFn): LogiFn {
+  return (mb, f, rng, tf, den) => {
+    poolQ.length = 0;
+    try {
+      fn(mb, f, rng, tf, den);
+      poolFlush(mb);
+    } finally {
+      poolQ.length = 0;
+    }
+  };
+}
+LOGI.coldStorage = withPools(coldStorage);
+LOGI.containerYard = withPools(containerYard);
