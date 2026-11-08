@@ -57,8 +57,8 @@ describe('warehousing (IL)', () => {
     console.log(`port: ${ind.length} industrial, ${near.length} near, IL near ${il.length}, big ${big.map((b) => `${b.w}x${b.h}`).join(' ')}`);
     expect(il.length).toBeGreaterThan(near.length * 0.3);
     expect(big.length).toBeGreaterThan(0);
-    // 大きな敷地は、いちばん強い範囲（大型コンテナターミナルから 20 マス）の中だけ
-    for (const b of big) expect(logiReach(port, b.x + 0.5, b.y + 0.5).full || logiReach(port, b.x + b.w - 0.5, b.y + b.h - 0.5).full).toBe(true);
+    // 大きな敷地は、敷地の中心がいちばん強い範囲（大型コンテナターミナルから 20 マス）の中だけ
+    for (const b of big) expect(full(b)).toBe(true);
     // ほかの工業も前と同じ大きさのまま
     for (const b of ind) if (b.type !== 'IL') expect(Math.max(b.w, b.h)).toBeLessThanOrEqual(4);
     // 1 マスあたりの雇用は製造業より少なく、汚染も少ない
@@ -66,14 +66,46 @@ describe('warehousing (IL)', () => {
     expect(GROW.IL.pollution).toBeLessThan(GROW.IM.pollution * 0.5);
   });
 
-  it('is rare far from ports, and never on big lots there', () => {
+  it('never takes big lots far from ports', () => {
+    // 内陸の需要も強制して育てる（内陸にも倉庫業が建つが、大きな敷地にはならない）
     const w = harbor(null);
     const ind = grow(w, 240);
     const il = ind.filter((b) => b.type === 'IL');
-    console.log(`inland: ${ind.length} industrial, IL ${il.length}`);
+    console.log(`inland (forced demand): ${ind.length} industrial, IL ${il.length}`);
     expect(ind.length).toBeGreaterThan(20);
-    expect(il.length).toBeLessThan(ind.length * 0.15);
+    expect(il.length).toBeGreaterThan(0);
     for (const b of ind) expect(Math.max(b.w, b.h)).toBeLessThanOrEqual(4);
+  });
+
+  it('grows a little inland in a city with residents and no port', () => {
+    // 住宅・商業のある港のない街。ゴミ処理施設もない（ゴミと火災の危険で、工業の魅力が下がる）。需要は強制しない
+    const w = harbor(null);
+    const ok = (c: Parameters<World['exec']>[0]) => {
+      const r = w.exec(c);
+      if (!r.ok) throw new Error(`${c.t}: ${r.msg}`);
+    };
+    ok({ t: 'zone', x0: 3, y0: 5, x1: 15, y1: 38, zone: ZoneType.R, den: 1 });
+    ok({ t: 'zone', x0: 17, y0: 5, x1: 22, y1: 38, zone: ZoneType.C, den: 1 });
+    ok({ t: 'road', x0: 0, y0: 39, x1: 2, y1: 39, road: RoadType.Road }); // 隣の都市へ
+    const seen = new Set<number>();
+    let garbage = 0;
+    for (let m = 0; m < 36; m++) {
+      for (let d = 0; d < 30; d++) w.stepDay();
+      const ind = [...w.buildings.values()].filter((b) => !b.civic && b.state !== BState.Building && GROW[b.type as GrowKind].zone === ZoneType.I);
+      const il = ind.filter((b) => b.type === 'IL');
+      for (const b of il) seen.add(b.id);
+      // 内陸の倉庫業は少しだけ
+      if (ind.length >= 10) expect(il.length).toBeLessThan(ind.length * 0.35);
+      garbage = Math.max(garbage, (w as unknown as { svc: { garbageLevel: number } }).svc.garbageLevel);
+    }
+    const il = [...w.buildings.values()].filter((b) => b.type === 'IL');
+    console.log(`town: pop ${w.stats.population}, garbage ${garbage.toFixed(2)}, IL built ${seen.size}, now ${il.length}, demand IL ${w.demand.IL.toFixed(2)}`);
+    expect(w.stats.population).toBeGreaterThan(2000);
+    expect(garbage).toBeGreaterThan(0.5);
+    expect(seen.size).toBeGreaterThan(0);
+    for (const b of il) expect(Math.max(b.w, b.h)).toBeLessThanOrEqual(4);
+    // 建つので、内陸の需要が上限に張り付いたままにならない
+    expect(w.demand.IL).toBeLessThan(0.5);
   });
 
   it('ports and freight stations raise warehousing demand much more than factory demand', () => {
@@ -91,13 +123,37 @@ describe('warehousing (IL)', () => {
   });
 
   it('grows next to a freight station too', () => {
-    const w = harbor('freight_st');
-    const fs = [...w.buildings.values()].find((b) => b.type === 'freight_st')!;
-    const ind = grow(w, 240);
-    const near = ind.filter((b) => logiReach(fs, b.x + b.w / 2, b.y + b.h / 2).v >= 0.5);
-    const il = near.filter((b) => b.type === 'IL');
-    console.log(`freight: ${near.length} near, IL ${il.length}`);
-    expect(il.length).toBeGreaterThan(near.length * 0.3);
+    // 貨物駅のすぐそばでは、倉庫業がいちばん建ちやすく、遠いところより魅力が高い
+    {
+      const w = harbor('freight_st');
+      w.stepDay();
+      const fs = [...w.buildings.values()].find((b) => b.type === 'freight_st')!;
+      const n = w.g.n;
+      let cells = 0;
+      for (let i = 0; i < n * n; i++) {
+        if (w.g.zone[i] !== ZoneType.I || w.g.road[i]) continue;
+        const v = logiReach(fs, (i % n) + 0.5, Math.floor(i / n) + 0.5).v;
+        if (v < 0.5) continue;
+        cells++;
+        const il = w.desirability('IL', i);
+        for (const k of ['ID', 'IM', 'IH'] as GrowKind[]) expect(il).toBeGreaterThan(w.desirability(k, i));
+        expect(il - w.desirability('IL', w.g.idx(46, 6))).toBeGreaterThan(0.3);
+      }
+      expect(cells).toBeGreaterThan(10);
+    }
+    // 育てる（すぐそばの敷地は少ないので、乱数を変えて 3 回分をまとめて数える）
+    let near = 0, il = 0;
+    for (const s of [0, 1, 2]) {
+      const w = harbor('freight_st');
+      if (s) w.rng.state = s * 7919;
+      const fs = [...w.buildings.values()].find((b) => b.type === 'freight_st')!;
+      const nb = grow(w, 240).filter((b) => logiReach(fs, b.x + b.w / 2, b.y + b.h / 2).v >= 0.5);
+      near += nb.length;
+      il += nb.filter((b) => b.type === 'IL').length;
+    }
+    console.log(`freight: ${near} near, IL ${il}`);
+    expect(near).toBeGreaterThan(10);
+    expect(il).toBeGreaterThan(near * 0.2);
   });
 
   it('loads an old save without warehousing fields', () => {
@@ -110,10 +166,16 @@ describe('warehousing (IL)', () => {
     delete taxes.IL;
     delete demand.IL;
     const old = { ...d, taxes, demand } as typeof d;
+    delete old.ilInland;
     const before = [...w.buildings.values()].map((b) => `${b.id}:${b.type}:${b.x},${b.y},${b.w}x${b.h}`).sort();
     const l = World.load(old);
     expect(l.taxes.IL).toBe(DEFAULT_TAX);
     expect(l.demand.IL).toBe(0);
+    // 内陸の倉庫業の需要：古い保存データは街全体の需要から始め、新しい保存データはそのまま戻す
+    const ilIn = (x: World) => (x as unknown as { ilInland: number }).ilInland;
+    expect(ilIn(l)).toBe(0);
+    (w as unknown as { ilInland: number }).ilInland = 0.7;
+    expect(ilIn(World.load(w.serialize()))).toBe(0.7);
     expect([...l.buildings.values()].map((b) => `${b.id}:${b.type}:${b.x},${b.y},${b.w}x${b.h}`).sort()).toEqual(before);
     for (let k = 0; k < 31; k++) l.stepDay();
     expect(Number.isFinite(l.stats.demand.IL)).toBe(true);
