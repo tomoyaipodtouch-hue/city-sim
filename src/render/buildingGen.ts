@@ -9,6 +9,9 @@ import type { Grid } from '../sim/grid';
 import { BState } from '../sim/world';
 import { PondBuilder, cpLake, LAKE_T } from './parkPond';
 import { kyotoGarden } from './gardenGen';
+import { forcedLogi } from './logiRegistry';
+import './logisticsA';
+import './logisticsB';
 
 // 動くもの（煙、フレアの炎、トラックの道すじ）の位置。世界の座標
 export type FxSpot =
@@ -3056,12 +3059,16 @@ function recycling(mb: MeshBuilder, f: LotFrame, rng: Rng) {
 // 汚染型：大きい敷地は製鉄所か石油化学プラント、中くらいは石油化学か煙突の工場、小さい敷地は煙突の工場
 // 製造業：大きい敷地は自動車工場か多層の物流倉庫、ほかは現代の工場（のこぎり屋根の天窓）か倉庫
 function dirtyIndustry(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
+  const dbg = forcedLogi();
+  if (dbg) return dbg(mb, f, rng, tf, den);
   const cells = Math.round((f.W * f.D) / (CELL * CELL)), r = rng.next();
   if (cells >= 9) return r < 0.5 ? steelMill(mb, f, rng, den) : petrochem(mb, f, rng, den);
   if (cells >= 6) return r < 0.45 ? petrochem(mb, f, rng, den) : stackFactory(mb, f, rng, tf, den);
   return stackFactory(mb, f, rng, tf, den);
 }
 function mfgIndustry(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
+  const dbg = forcedLogi();
+  if (dbg) return dbg(mb, f, rng, tf, den);
   const cells = Math.round((f.W * f.D) / (CELL * CELL)), r = rng.next();
   if (cells >= 9) return r < 0.4 ? autoPlant(mb, f, rng, tf, den) : r < 0.75 ? logisticsHub(mb, f, rng, tf, den) : modernFactory(mb, f, rng, tf, den);
   if (cells >= 6) return r < 0.7 ? modernFactory(mb, f, rng, tf, den) : warehouse(mb, f, rng, den);
