@@ -2,15 +2,33 @@
 import * as THREE from 'three';
 import { Grid } from '../sim/grid';
 import { CELL, WATER_LEVEL } from '../sim/constants';
-import type { Buf } from './roadLayer';
+import { ROAD_LIFT, type Buf } from './roadLayer';
+import { createInfraMaterial, matColor, PbrBuf, RM } from './infraMaterial';
 
 export const BRIDGE_STYLES = ['桁橋', '吊り橋', '斜張橋', 'トラス橋', 'アーチ橋', 'ラーメン橋'] as const;
 
-const STEEL = new THREE.Color(0xc8473c); // 赤いトラス・アーチ
-const WHITE = new THREE.Color(0xe8e6df);
-const CABLE = new THREE.Color(0xd9d6cc);
-const CONC = new THREE.Color(0xb3afa6);
-const TOWER = new THREE.Color(0xd4d0c6);
+// 色と素材（PBR の粗さ・金属らしさ）
+const STEEL = matColor(0xc8473c, RM.paintSteel); // 赤く塗った鋼のトラス
+const WHITE = matColor(0xe8e6df, RM.whiteConc); // 斜張橋の白い主塔
+const ARCH = matColor(0xe8e6df, RM.whiteSteel); // 白く塗った鋼のアーチ
+const CABLE = matColor(0xd9d6cc, RM.cable);
+const CONC = matColor(0xb3afa6, RM.concrete);
+const TOWER = matColor(0xd4d0c6, RM.paintSteel); // 吊り橋の鋼の主塔
+
+// 道路の橋の構造物（橋脚・主塔・ケーブル・トラスなど）。道路を作り直すたびに作り直す
+export class BridgeLayer {
+  mesh = new THREE.Mesh(new THREE.BufferGeometry(), createInfraMaterial());
+  constructor() {
+    this.mesh.castShadow = true;
+    this.mesh.receiveShadow = true;
+  }
+  rebuild(g: Grid) {
+    const B = new PbrBuf();
+    addBridgeStructures(g, B, ROAD_LIFT);
+    this.mesh.geometry.dispose();
+    this.mesh.geometry = B.geometry();
+  }
+}
 
 // 橋の路面のマス（地上の道路で deck > 0）を、隣り合うものどうしでまとめる
 export function bridgeGroups(g: Grid): number[][] {
@@ -244,11 +262,11 @@ export function addBridgeStructures(g: Grid, O: Buf, lift: number, rail?: { heig
         for (const sd of [-1, 1]) {
           for (let j = 0; j < steps; j++) {
             const s0 = (L * j) / steps, s1 = (L * (j + 1)) / steps;
-            seg(s0, sd * 0.95, ay(s0), s1, sd * 0.95, ay(s1), 0.7, WHITE);
+            seg(s0, sd * 0.95, ay(s0), s1, sd * 0.95, ay(s1), 0.7, ARCH);
           }
           for (let s = 6; s < L - 4; s += 6) if (ay(s) - H > 2) seg(s, sd * 0.95, H + 0.3, s, sd * 0.95, ay(s), 0.1, CABLE);
         }
-        for (let s = L * 0.22; s < L * 0.79; s += Math.max(8, L * 0.09)) if (ay(s) - H > 7) seg(s, -0.95, ay(s), s, 0.95, ay(s), 0.35, WHITE);
+        for (let s = L * 0.22; s < L * 0.79; s += Math.max(8, L * 0.09)) if (ay(s) - H > 7) seg(s, -0.95, ay(s), s, 0.95, ay(s), 0.35, ARCH);
         break;
       }
       case 5: {

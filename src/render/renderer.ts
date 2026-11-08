@@ -6,6 +6,7 @@ import type { Building, Maps } from '../sim/world';
 import { TerrainLayer } from './terrainLayer';
 import { RoadLayer } from './roadLayer';
 import { RailLayer, StationLayer } from './railLayer';
+import { BridgeLayer } from './bridgeStyles';
 import { PropsLayer } from './propsLayer';
 import { BuildingLayer } from './buildingLayer';
 import { TreeLayer } from './treeLayer';
@@ -41,6 +42,7 @@ export class CityRenderer {
   terrain: TerrainLayer | null = null;
   roads = new RoadLayer();
   rails = new RailLayer();
+  roadBridges = new BridgeLayer(); // 道路の橋の構造物
   props = new PropsLayer();
   underground = false;
   buildings = new BuildingLayer();
@@ -106,7 +108,7 @@ export class CityRenderer {
     this.sun.shadow.bias = -0.0002;
     this.sun.shadow.normalBias = 0.3;
     this.scene.add(this.sun, this.sun.target);
-    this.scene.add(this.roads.group, this.rails.group, this.props.group, this.buildings.group, this.trees.group, this.cars.group, this.preview.mesh, this.preview.line);
+    this.scene.add(this.roads.group, this.roadBridges.mesh, this.rails.group, this.props.group, this.buildings.group, this.trees.group, this.cars.group, this.preview.mesh, this.preview.line);
     this.resize();
     window.addEventListener('resize', () => this.resize());
     requestAnimationFrame(this.loop);
@@ -255,6 +257,7 @@ export class CityRenderer {
       if (key !== this.lastRoadKey || heights) {
         this.lastRoadKey = key;
         this.roads.rebuild(g);
+        this.roadBridges.rebuild(g);
         const isl = findIslands(g, this.buildingList);
         this.rails.rebuild(g, this.stationCells(), isl);
         this.cars.setTurnbacks(g);

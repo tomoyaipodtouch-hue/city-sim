@@ -10,7 +10,6 @@ import { createMarkMaterial, createRoadSolidMaterial, createRoadSurfaceMaterial,
 import { Grid } from '../sim/grid';
 import { CELL, DX, DY, isDiag } from '../sim/constants';
 import { ROADS, RoadType, isHighway } from '../sim/defs';
-import { addBridgeStructures } from './bridgeStyles';
 
 export const ROAD_LIFT = 0.3;
 const DIAG_LANE_W = 10.7; // 斜めの区間の、2マス幅の道路の1車線分の幅
@@ -1119,7 +1118,7 @@ export class RoadLayer {
         M.tri(ids[0], ids[2], ids[3]);
       }
     }
-    addBridgeStructures(g, O, ROAD_LIFT);
+    // 橋の構造物は BridgeLayer（PBR のマテリアル）で描く
     for (const [mesh, buf] of [[this.surface, S], [this.marks, M], [this.solid, O]] as const) {
       mesh.geometry.dispose();
       mesh.geometry = buf.geometry();

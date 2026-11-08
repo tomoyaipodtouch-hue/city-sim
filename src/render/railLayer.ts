@@ -8,21 +8,24 @@ import { Buf, ROAD_LIFT } from './roadLayer';
 import { estopGroup } from '../sim/plan';
 import { addBridgeStructures } from './bridgeStyles';
 import { findTurnbacks, Island, islandSpread, ISLAND_GAP } from './turnback';
+import { createInfraGlassMaterial, createInfraMaterial, GlassBuf, matColor, PbrBuf, RM } from './infraMaterial';
 
+// 色と素材（PBR の粗さ・金属らしさ）
 const COL = {
-  ballast: new THREE.Color(0x8a8378),
-  sleeper: new THREE.Color(0x5b4634),
-  steel: new THREE.Color(0xc9ccd1),
-  concrete: new THREE.Color(0xb5b1a8),
-  beam: new THREE.Color(0xd6d3cc),
+  ballast: matColor(0x8a8378, RM.ballast),
+  sleeper: matColor(0x5b4634, RM.wood),
+  steel: matColor(0xc9ccd1, RM.rail), // レール（上の面は磨かれた鋼）
+  concrete: matColor(0xb5b1a8, RM.concrete),
+  beam: matColor(0xd6d3cc, RM.concrete),
   tube: new THREE.Color(0xff8a3d),
-  slab: new THREE.Color(0xa7a59f), // スラブ軌道の板
-  deck: new THREE.Color(0xc4c1b9),
-  pad: new THREE.Color(0x6f6c66),
-  barrierGlass: new THREE.Color(0x9cc9d4), // ガラスの防音壁
-  barrierFrame: new THREE.Color(0x8d969c),
-  pole: new THREE.Color(0x9aa1a7),
-  wire: new THREE.Color(0x2c2f33),
+  slab: matColor(0xa7a59f, RM.concrete), // スラブ軌道の板
+  deck: matColor(0xc4c1b9, RM.concrete),
+  pad: matColor(0x6f6c66, RM.rubber),
+  barrierGlass: matColor(0x9cc9d4, RM.glass), // ガラスの防音壁
+  barrierFrame: matColor(0x8d969c, RM.alu),
+  pole: matColor(0x9aa1a7, RM.steel),
+  wire: matColor(0x2c2f33, RM.wire),
+  stop: matColor(0xd9a400, RM.plastic), // 車止め
 };
 
 interface P {
@@ -40,11 +43,11 @@ export class RailLayer {
   group = new THREE.Group();
   private solid: THREE.Mesh;
   private underground: THREE.Mesh;
-  private glass: THREE.Mesh; // ガラスの防音壁（半透明）
+  private glass: THREE.Mesh; // ガラスの防音壁（透明）
   showSubway = false;
 
   constructor() {
-    this.solid = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }));
+    this.solid = new THREE.Mesh(new THREE.BufferGeometry(), createInfraMaterial({ polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }));
     this.solid.castShadow = true;
     this.solid.receiveShadow = true;
     // 地下鉄は、地下の画面のときだけ地面の上に透かして描く
@@ -54,7 +57,7 @@ export class RailLayer {
     );
     this.underground.renderOrder = 10;
     this.underground.visible = false;
-    this.glass = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.38, depthWrite: false, side: THREE.DoubleSide }));
+    this.glass = new THREE.Mesh(new THREE.BufferGeometry(), createInfraGlassMaterial(0.45));
     this.group.add(this.solid, this.underground, this.glass);
   }
 
@@ -108,7 +111,7 @@ export class RailLayer {
   // stationCells：駅のホームがあるマス（防音壁を開ける）
   rebuild(g: Grid, stationCells: Set<number> = new Set(), islands: Island[] = []) {
     const n = g.n, N = n * n;
-    const B = new Buf(), U = new Buf(), G = new Buf();
+    const B = new PbrBuf(), U = new Buf(), G = new GlassBuf();
     // 点ごとに横のずれと幅が変わる帯（島式の駅の前後で線路が広がるところ）
     const stripF = (buf: Buf, pts: P[], offF: (p: P) => number, wF: (p: P) => number, dy: number, c: THREE.Color) => {
       for (let k = 0; k + 1 < pts.length; k++) {
@@ -338,7 +341,7 @@ export class RailLayer {
         // 車止め（両方の線路の行き止まり）
         if (kind !== 'sub') for (const l of [T, -T]) {
           const p = at(-1.5, l);
-          B.box(p.x - 0.9, p.h, p.z - 0.9, p.x + 0.9, p.h + 1.2, p.z + 0.9, new THREE.Color(0xd9a400));
+          B.box(p.x - 0.9, p.h, p.z - 0.9, p.x + 0.9, p.h + 1.2, p.z + 0.9, COL.stop);
         }
       }
     }
@@ -355,30 +358,37 @@ export class RailLayer {
 // 駅に接する線路のマスに、上り・下りの両側のホーム、屋根、跨線橋を作る
 
 const PC = {
-  slab: new THREE.Color(0xc9c5bc),
-  edge: new THREE.Color(0xf0c419),
-  roof: new THREE.Color(0x6d7781),
-  post: new THREE.Color(0x8f969c),
-  bridge: new THREE.Color(0xd9dcdf),
-  glass: new THREE.Color(0x8fb4c9),
-  hallWall: new THREE.Color(0xeeeeea),
-  hallGlass: new THREE.Color(0x6f93ab),
-  hallBand: new THREE.Color(0x2f86d0),
+  slab: matColor(0xc9c5bc, RM.tile),
+  edge: matColor(0xf0c419, RM.plastic),
+  roof: matColor(0x6d7781, RM.metalRoof),
+  post: matColor(0x8f969c, RM.post),
+  bridge: matColor(0xd9dcdf, RM.panel),
+  glass: matColor(0x8fb4c9, RM.glass),
+  hallWall: matColor(0xeeeeea, RM.panel),
+  hallGlass: matColor(0x6f93ab, RM.glass),
+  hallBand: matColor(0x2f86d0, RM.panel),
+  bigRoof: matColor(0xeeeeea, RM.roof), // 大屋根の上の面（なめらかな白い金属）
+  roofUnder: matColor(0xe4e4e0, RM.roofUnder),
+  bench: matColor(0x8a6a4a, RM.wood),
+  board: matColor(0x1c1f22, RM.gloss), // 発車標
+  frame: matColor(0xc4c9ce, RM.alu), // ガラスの枠
 };
 
 export class StationLayer {
-  mesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true }));
+  mesh = new THREE.Mesh(new THREE.BufferGeometry(), createInfraMaterial());
+  // 透明なガラス（ホームドア、風よけ）
+  glass = new THREE.Mesh(new THREE.BufferGeometry(), createInfraGlassMaterial(0.36));
   // 夜だけ見える照明（屋根の下の灯り、看板、駅舎のガラスの明かり）
   lights = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ vertexColors: true }));
   constructor() {
     this.mesh.castShadow = true;
     this.mesh.receiveShadow = true;
-    this.mesh.add(this.lights);
+    this.mesh.add(this.lights, this.glass);
     this.lights.visible = false;
   }
 
   rebuild(g: Grid, list: Building[]) {
-    const B = new Buf(), LB = new Buf();
+    const B = new PbrBuf(), LB = new Buf(), GB = new GlassBuf();
     const n = g.n;
     // 向きのついた箱：中心 (cx, cz)、u = 線路の向き、p = 横の向き。a0..a1 は u 方向、o0..o1 は p 方向
     const oboxB = (buf: Buf, cx: number, cz: number, ux: number, uz: number, a0: number, a1: number, o0: number, o1: number, y0: number, y1: number, c: THREE.Color) => {
@@ -398,6 +408,11 @@ export class StationLayer {
     };
     const obox = (cx: number, cz: number, ux: number, uz: number, a0: number, a1: number, o0: number, o1: number, y0: number, y1: number, c: THREE.Color) => oboxB(B, cx, cz, ux, uz, a0, a1, o0, o1, y0, y1, c);
     const light = (cx: number, cz: number, ux: number, uz: number, a0: number, a1: number, o0: number, o1: number, y0: number, y1: number, c: THREE.Color) => oboxB(LB, cx, cz, ux, uz, a0, a1, o0, o1, y0, y1, c);
+    // 透明なガラスの板（線路の向きに a0..a1、横の位置 o、高さ y0..y1）
+    const pane = (cx: number, cz: number, ux: number, uz: number, a0: number, a1: number, o: number, y0: number, y1: number, c: THREE.Color) => {
+      const px = -uz, pz = ux;
+      GB.wall(cx + ux * a0 + px * o, cz + uz * a0 + pz * o, y0, y1, cx + ux * a1 + px * o, cz + uz * a1 + pz * o, y0, y1, c);
+    };
     // 駅：敷地のある駅（まわりの線路にホーム）と、線路の上だけの高架駅
     const groups: { kind: LineKind; cells: number[]; bx: number; bz: number; trackOnly: boolean }[] = [];
     for (const b of list) {
@@ -457,10 +472,16 @@ export class StationLayer {
           const doorO = island ? [-3.95, 3.95] : [-3.9, 3.9];
           for (const o of doorO) for (let a = -half; a < half - 0.1; a += 4) {
             obox(cx, cz, ux, uz, a, a + 2.3, o - 0.08, o + 0.08, top, top + 1.3, PC.hallWall);
-            obox(cx, cz, ux, uz, a + 2.3, Math.min(half, a + 4), o - 0.05, o + 0.05, top, top + 1.2, PC.hallGlass);
+            pane(cx, cz, ux, uz, a + 2.3, Math.min(half, a + 4), o, top + 0.05, top + 1.2, PC.hallGlass);
           }
           // 外側の風よけのガラス（相対式）
-          if (!island) for (const o of [-7.25, 7.25]) obox(cx, cz, ux, uz, -half, half, o - 0.06, o + 0.06, top, top + 2.6, PC.glass);
+          if (!island) for (const o of [-7.25, 7.25]) {
+            pane(cx, cz, ux, uz, -half, half, o, top + 0.15, top + 2.5, PC.glass);
+            // 下の枠と上の手すり、4m ごとの縦の枠（アルミ）
+            obox(cx, cz, ux, uz, -half, half, o - 0.06, o + 0.06, top, top + 0.15, PC.frame);
+            obox(cx, cz, ux, uz, -half, half, o - 0.07, o + 0.07, top + 2.5, top + 2.62, PC.frame);
+            for (let a = -half + 2; a < half - 0.5; a += 4) obox(cx, cz, ux, uz, a - 0.05, a + 0.05, o - 0.05, o + 0.05, top + 0.15, top + 2.5, PC.frame);
+          }
           // 大屋根：線路とホームをまとめて覆う弓なりの屋根（真ん中は天窓の帯）
           const R = 8.6, base = top + 5.6, rise = 2.2, NS = 20;
           {
@@ -471,17 +492,18 @@ export class StationLayer {
             const V = (a: number, o: number, y: number) => [cx + ux * a + px * o, y, cz + uz * a + pz * o] as const;
             for (let k = 0; k < NS; k++) {
               const o0 = -R + (2 * R * k) / NS, o1 = o0 + (2 * R) / NS;
-              const col = k === NS / 2 - 1 || k === NS / 2 ? PC.glass : PC.hallWall;
+              // 真ん中の2枚は天窓（空がよく映るガラス）
+              const sky = k === NS / 2 - 1 || k === NS / 2;
               const n0 = nAt(o0), n1 = nAt(o1);
               const q = [V(a0, o0, yAt(o0)), V(a1, o0, yAt(o0)), V(a1, o1, yAt(o1)), V(a0, o1, yAt(o1))];
-              const ids = q.map((v, j) => B.v(v[0], v[1], v[2], col, ...(j < 2 ? n0 : n1)));
+              const ids = q.map((v, j) => B.v(v[0], v[1], v[2], sky ? PC.glass : PC.bigRoof, ...(j < 2 ? n0 : n1)));
               B.I.push(ids[0], ids[2], ids[1], ids[0], ids[3], ids[2]);
-              const ub = q.map((v) => B.v(v[0], v[1] - 0.35, v[2], PC.hallWall, 0, -1, 0));
+              const ub = q.map((v) => B.v(v[0], v[1] - 0.35, v[2], sky ? PC.glass : PC.roofUnder, 0, -1, 0));
               B.I.push(ub[0], ub[1], ub[2], ub[0], ub[2], ub[3]);
             }
             for (const o of [-R, R]) {
               const [x0, , z0] = V(a0, o, 0), [x1, , z1] = V(a1, o, 0), y = yAt(o);
-              B.wall(x0, z0, y - 0.6, y, x1, z1, y - 0.6, y, PC.hallWall);
+              B.wall(x0, z0, y - 0.6, y, x1, z1, y - 0.6, y, PC.bigRoof);
               LB.wall(x0 + px * Math.sign(o) * 0.02, z0 + pz * Math.sign(o) * 0.02, y - 0.5, y - 0.3, x1 + px * Math.sign(o) * 0.02, z1 + pz * Math.sign(o) * 0.02, y - 0.5, y - 0.3, new THREE.Color(0xbfe0ff));
             }
           }
@@ -491,14 +513,14 @@ export class StationLayer {
           for (const [o0, o1] of pf) {
             const om = (o0 + o1) / 2;
             light(cx, cz, ux, uz, -half * 0.9, half * 0.9, om - 0.25, om + 0.25, base - 0.4, base - 0.25, new THREE.Color(0xfff3d0));
-            obox(cx, cz, ux, uz, -1, 1, om - 0.3, om + 0.3, top, top + 0.45, new THREE.Color(0x8a6a4a));
+            obox(cx, cz, ux, uz, -1, 1, om - 0.3, om + 0.3, top, top + 0.45, PC.bench);
           }
           // 駅名標と発車標（駅のいちばん真ん中のマス）
           if (c === bridgeCell) for (const [o0, o1] of pf) {
             const om = (o0 + o1) / 2;
             obox(cx, cz, ux, uz, -2, 2, om - 0.08, om + 0.08, top + 2.2, top + 3.0, PC.hallWall);
             obox(cx, cz, ux, uz, -2, 2, om - 0.1, om + 0.1, top + 2.2, top + 2.4, PC.hallBand);
-            obox(cx, cz, ux, uz, 3, 5.6, om - 0.15, om + 0.15, top + 3.0, top + 3.7, new THREE.Color(0x1c1f22));
+            obox(cx, cz, ux, uz, 3, 5.6, om - 0.15, om + 0.15, top + 3.0, top + 3.7, PC.board);
             light(cx, cz, ux, uz, 3.1, 5.5, om - 0.18, om + 0.18, top + 3.1, top + 3.6, new THREE.Color(0xffb84a));
           }
           void T; void TI;
@@ -562,5 +584,7 @@ export class StationLayer {
     this.mesh.geometry = B.geometry();
     this.lights.geometry.dispose();
     this.lights.geometry = LB.geometry();
+    this.glass.geometry.dispose();
+    this.glass.geometry = GB.geometry();
   }
 }
