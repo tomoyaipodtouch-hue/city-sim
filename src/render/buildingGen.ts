@@ -64,6 +64,12 @@ export interface LotFrame {
   W: number; // 正面の幅（m）
   D: number; // 奥行き（m）
   base: number; // 地面の高さ
+  // 物流施設の連結（となりの同じ大きさの敷地と 1 つの長い建物にする。buildingLayer で決める）
+  campus?: number; // 連結の種（形・色・高さをそろえる）
+  joinL?: boolean; // -x の側（敷地の座標）がとなりとつながる
+  joinR?: boolean; // +x の側がつながる
+  lead?: boolean; // 看板を描く敷地（連結の中で 1 つ）
+  cden?: number; // 連結の密度（高さをそろえる）
 }
 
 // 敷地の向きに合わせた変換を設定する

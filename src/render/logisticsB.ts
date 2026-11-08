@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { PAT } from './builder';
 import type { MeshBuilder } from './builder';
 import { MAT } from './textures';
-import type { Rng } from '../sim/rng';
+import { Rng } from '../sim/rng';
 import type { LotFrame, TF } from './buildingGen';
 import { LOGI } from './logiRegistry';
 
@@ -23,7 +23,7 @@ const K = {
   joint2: C(0xc4c9ce), panel: C(0xf3f4f5), ivory: C(0xf0ede4), pgrey: C(0xe6e9ec), silver: C(0xdcdfe3), joint: C(0xd5d9dd), annex: C(0xdadee2),
   cap: C(0xd2d6da), roof: C(0xcfd2d4), plinth: C(0x8e949b), conc: C(0xbcbab3), apron: C(0xb4b2aa), court: C(0x55585c), yard: C(0x5f6266),
   paint: C(0xefefe9), yel: C(0xf2c200), seal: C(0x26292d), door: C(0xe9ebed), glass: C(0x7aa6c9), glassG: C(0x6f9fa6),
-  slot: C(0xa9cbe0), steel: C(0x8a9097), steelDk: C(0x4a5057), fence: C(0x7f868d), solar: C(0x1d3354), lawn: C(0x6e9a4a), hedge: C(0x3f6a31),
+  slot: C(0xa9cbe0), steel: C(0x8a9097), steelDk: C(0x4a5057), fence: C(0x7f868d), solar: C(0x23344c), solarJ: C(0x7d8a99), lawn: C(0x6e9a4a), hedge: C(0x3f6a31),
   lamp: C(0xfff0cf), led: C(0xe9f2ff), tyre: C(0x1d1f22), chassis: C(0x2c2f33), cabGlass: C(0x1c2834), unit: C(0xc9cdd1), grille: C(0x3b4046),
   fan: C(0x2a2f34), cond: C(0xc6cbd0), condTop: C(0xb5bbc1), pipe: C(0xa0a7ae), white: C(0xf2f3f4), red: C(0xd0362b), trans: C(0xd9e6ec),
   sky: C(0x9db0ba), poolHi: C(0x9a9891), dockLit: C(0x74736f), litGround: C(0x6a6c6e), cargo: C(0xc8b28c), silverBody: C(0xd3d7db), vroof: C(0xe4e6e8), black: C(0x1e2023), shed: C(0xc9ced3), cream: C(0xe2ddcf),
@@ -111,12 +111,13 @@ function wbox(mb: MeshBuilder, d: number, w: number, a0: number, a1: number, o0:
   const [x0, z0] = wpt(d, w, a0, o0), [x1, z1] = wpt(d, w, a1, o1);
   bx(mb, x0, y0, z0, x1, y1, z1, col, pat, o);
 }
-// 四角い輪の帯（箱の 4 つの面に少し浮かせて貼る）
-function ring4(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y0: number, y1: number, col: Col, pat = 0, m: number | null = null, off = 0.04, v0 = y0) {
-  wq(mb, 0, z1 + off, x0 - off, x1 + off, y0, y1, col, pat, m, v0);
-  wq(mb, 2, z0 - off, x0 - off, x1 + off, y0, y1, col, pat, m, v0);
-  wq(mb, 1, x1 + off, z0 - off, z1 + off, y0, y1, col, pat, m, v0);
-  wq(mb, 3, x0 - off, z0 - off, z1 + off, y0, y1, col, pat, m, v0);
+// 四角い輪の帯（箱の 4 つの面に少し浮かせて貼る）。open = となりの敷地の建物につながる側（1 = -x、2 = +x。その面は貼らず、端で切る）
+function ring4(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y0: number, y1: number, col: Col, pat = 0, m: number | null = null, off = 0.04, v0 = y0, open = 0) {
+  const a = x0 - (open & 1 ? 0 : off), b = x1 + (open & 2 ? 0 : off);
+  wq(mb, 0, z1 + off, a, b, y0, y1, col, pat, m, v0);
+  wq(mb, 2, z0 - off, a, b, y0, y1, col, pat, m, v0);
+  if (!(open & 2)) wq(mb, 1, x1 + off, z0 - off, z1 + off, y0, y1, col, pat, m, v0);
+  if (!(open & 1)) wq(mb, 3, x0 - off, z0 - off, z1 + off, y0, y1, col, pat, m, v0);
 }
 // 上を向いた多角形（ファンの丸など）。n 角形
 function disc(mb: MeshBuilder, cx: number, cz: number, y: number, r: number, n: number, col: Col) {
@@ -370,18 +371,20 @@ function booth(mb: MeshBuilder, x: number, z: number, arm: number) {
   }
 }
 // 正面の植え込み（芝生、低い生け垣、木）と、その内側のフェンス。gaps = 出入口の x の範囲。
-// 横と裏のフェンスも引く（back = 裏も引く）
-function siteEdge(mb: MeshBuilder, rng: Rng, tf: TF, W: number, D: number, strip: number, gaps: [number, number][], back = true, treeGap = 9) {
+// 横と裏のフェンスも引く（back = 裏も引く）。open = となりの敷地とつながる側（1 = -x、2 = +x。横のフェンスなし、植え込みは端まで）
+function siteEdge(mb: MeshBuilder, rng: Rng, tf: TF, W: number, D: number, strip: number, gaps: [number, number][], back = true, treeGap = 9, open = 0) {
   const hw = W / 2, hd = D / 2, zs = hd - strip;
-  for (const [a, b] of cut(-hw + 0.3, hw - 0.3, gaps)) {
+  const oL = (open & 1) !== 0, oR = (open & 2) !== 0;
+  for (const [a, b] of cut(oL ? -hw : -hw + 0.3, oR ? hw : hw - 0.3, gaps)) {
+    const ea = oL && a <= -hw + 0.01, eb = oR && b >= hw - 0.01;
     gq(mb, a, zs + 0.1, b, hd - 0.3, 0.1, K.lawn);
-    if (b - a > 2.5) bx(mb, a + 0.3, 0.05, zs + 0.3, b - 0.3, 0.9, zs + 0.95, K.hedge, 0, { m: MAT.none });
+    if (b - a > 2.5) bx(mb, a + (ea ? 0 : 0.3), 0.05, zs + 0.3, b - (eb ? 0 : 0.3), 0.9, zs + 0.95, K.hedge, 0, { m: MAT.none });
     if (strip >= 2 && b - a > 4) for (let x = a + 2.2 + rng.next() * 2; x < b - 1.5; x += treeGap + rng.next() * 4) tf(x, (zs + hd) / 2 + 0.25, 0.62 + rng.next() * 0.25);
-    fence(mb, a + 0.1, zs, b - 0.1, zs);
+    fence(mb, a + (ea ? 0.07 : 0.1), zs, b - (eb ? 0.07 : 0.1), zs);
   }
-  fence(mb, -hw + 0.4, -hd + 0.4, -hw + 0.4, zs);
-  fence(mb, hw - 0.4, -hd + 0.4, hw - 0.4, zs);
-  if (back) fence(mb, -hw + 0.4, -hd + 0.4, hw - 0.4, -hd + 0.4);
+  if (!oL) fence(mb, -hw + 0.4, -hd + 0.4, -hw + 0.4, zs);
+  if (!oR) fence(mb, hw - 0.4, -hd + 0.4, hw - 0.4, zs);
+  if (back) fence(mb, oL ? -hw + 0.07 : -hw + 0.4, -hd + 0.4, oR ? hw - 0.07 : hw - 0.4, -hd + 0.4);
 }
 // 駐車場の列：x0..x1 に 2.6m ごとの区画（奥行き z0..z1）
 function carRow(mb: MeshBuilder, rng: Rng, x0: number, x1: number, z0: number, z1: number, fill = 0.65) {
@@ -410,15 +413,59 @@ function digit(mb: MeshBuilder, d: number, w: number, a0: number, y0: number, dw
   sg(5, 0, hh, t, dh);
   sg(6, 0, hh - t / 2, dw, hh + t / 2);
 }
-// 看板の文字に見える線（壁 d の面 w、a0..a1、y0..y1）。幅のちがう字と単語の切れ目、単語の頭は大文字で高い
+// 会社のマーク（壁 d の面 w、中心 ca, cy、半径 r）：丸（8 角形を 3 枚の面で）か、45° 回したひし形
+function mark(mb: MeshBuilder, d: number, w: number, ca: number, cy: number, r: number, col: Col, round: boolean) {
+  const keep = mb.matOverride;
+  mb.matOverride = MAT.none;
+  const flip = d === 2 || d === 1;
+  const Q = (p: [number, number][]) => {
+    const v = p.map(([u, y]): P3 => (d === 0 || d === 2 ? [ca + u, cy + y, w] : [w, cy + y, ca + u]));
+    if (flip) v.reverse();
+    mb.quad(v[0], v[1], v[2], v[3], col, PAT.lit);
+  };
+  if (round) {
+    const c = r * 0.924, s = r * 0.383;
+    Q([[-c, -s], [c, -s], [c, s], [-c, s]]);
+    Q([[-c, s], [c, s], [s, c], [-s, c]]);
+    Q([[-s, -c], [s, -c], [c, -s], [-c, -s]]);
+  } else Q([[0, -r], [r, 0], [0, r], [-r, 0]]);
+  mb.matOverride = keep;
+}
+// 字の形（細い線 2〜4 本）：0 = I、1 = L、2 = r、3 = F、4 = n、5 = U、6 = E、7 = o、8 = P。
+// st(a0, a1, y0, y1) = 線を 1 本描く。縦と横の線は重ねない（同じ面に重なる面をつくらない）
+const GLYPHS = [0, 1, 2, 3, 4, 4, 5, 5, 6, 7, 7, 8];
+function glyphW(k: number, h: number, r: number) {
+  return k === 0 ? h * 0.16 : k === 2 ? h * 0.4 : h * (0.5 + r * 0.12);
+}
+function glyph(st: (a0: number, a1: number, y0: number, y1: number) => void, k: number, a: number, w: number, y0: number, top: number, s: number) {
+  const ym = y0 + (top - y0) * 0.54, b = a + w;
+  st(a, a + s, y0, top);
+  if (k === 1) st(a + s, b, y0, y0 + s);
+  else if (k === 2) st(a + s, b, top - s, top);
+  else if (k === 3) { st(a + s, b, top - s, top); st(a + s, b - w * 0.15, ym - s / 2, ym + s / 2); }
+  else if (k === 4) { st(a + s, b - s, top - s, top); st(b - s, b, y0, top); }
+  else if (k === 5) { st(a + s, b - s, y0, y0 + s); st(b - s, b, y0, top); }
+  else if (k === 6) { st(a + s, b, top - s, top); st(a + s, b - w * 0.12, ym - s / 2, ym + s / 2); st(a + s, b, y0, y0 + s); }
+  else if (k === 7) { st(a + s, b - s, top - s, top); st(a + s, b - s, y0, y0 + s); st(b - s, b, y0, top); }
+  else if (k === 8) { st(a + s, b, top - s, top); st(a + s, b, ym - s, ym); st(b - s, b, ym, top - s); }
+}
+// 看板の文字（壁 d の面 w、a0..a1、y0..y1）：左に会社のマーク、続けて細い線で組んだ字。単語の頭は大文字で高い
 function letters(mb: MeshBuilder, rng: Rng, d: number, w: number, a0: number, a1: number, y0: number, y1: number, col: Col) {
-  const h = y1 - y0, xh = y0 + h * 0.74;
-  let a = a0, first = true;
+  const h = y1 - y0, s = h * 0.16, xh = y0 + h * 0.74;
+  // 壁の向きで左右が入れかわる（-z と +x の面は、敷地の座標の向きと逆に読む）
+  const flip = d === 2 || d === 1, F = (a: number) => (flip ? a0 + a1 - a : a);
+  const st = (p: number, q: number, ya: number, yb: number) => wq(mb, d, w, F(p), F(q), ya, yb, col, PAT.lit, MAT.none, 10);
+  let a = a0;
+  if (a1 - a0 > h * 4) {
+    mark(mb, d, w, F(a + h * 0.5), y0 + h * 0.5, h * 0.5, col, rng.next() < 0.55);
+    a += h * 1.45;
+  }
+  let first = true;
   while (a < a1) {
-    const lw = h * (first ? 0.62 + rng.next() * 0.2 : 0.42 + rng.next() * 0.34);
+    const k = rng.pick(GLYPHS), lw = glyphW(k, h, rng.next());
     if (a + lw > a1) break;
-    wq(mb, d, w, a, a + lw, y0, first ? y1 : xh, col, PAT.lit, MAT.none, 10);
-    a += lw + h * 0.13;
+    glyph(st, k, a, lw, y0, first ? y1 : xh, s);
+    a += lw + h * 0.2;
     first = false;
     if (rng.next() < 0.17) { a += h * 0.45; first = true; }
   }
@@ -449,13 +496,13 @@ function panelLines(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: num
     }
   }
 }
-// 屋上のふち（パラペット）の輪
-function rim(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, h: number, col: Col, t = 0.35) {
+// 屋上のふち（パラペット）の輪。open = その側の板を描かない（1 = -x、2 = +x。となりの敷地の建物につながる）
+function rim(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, h: number, col: Col, t = 0.35, open = 0) {
   const o: BO = { roof: K.cap, m: MAT.plaster };
   bx(mb, x0, y, z1 - t, x1, y + h, z1, col, 0, o);
   bx(mb, x0, y, z0, x1, y + h, z0 + t, col, 0, o);
-  bx(mb, x0, y, z0 + t, x0 + t, y + h, z1 - t, col, 0, o);
-  bx(mb, x1 - t, y, z0 + t, x1, y + h, z1 - t, col, 0, o);
+  if (!(open & 1)) bx(mb, x0, y, z0 + t, x0 + t, y + h, z1 - t, col, 0, o);
+  if (!(open & 2)) bx(mb, x1 - t, y, z0 + t, x1, y + h, z1 - t, col, 0, o);
 }
 // 屋上の冷凍機の室外機の列（暗い台の上に、ファンの丸のある箱を並べる）。alongX = 列が x の向き
 function condRow(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, alongX: boolean) {
@@ -507,14 +554,27 @@ function pipe(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y
     bx(mb, cx - 0.1, y, cz - 0.1, cx + 0.1, y + 0.9, cz + 0.1, K.steelDk, 0, { m: MAT.metal, v: 10, roof: null });
   }
 }
-// 屋上の太陽光パネル（x の向きの列。少し +z へ傾ける）
-function solar(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, pitch = 2.7) {
+// 屋上の太陽光パネル（x の向きの列。少し +z へ傾ける）。上のふちに明るい枠の線、まん中に横の継ぎ目、
+// 約 4m ごとに縦の継ぎ目を入れて、屋根が 1 枚の紺の板に見えないようにする。列の間からは屋根が見える
+function solar(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, pitch = 3.3) {
   if (x1 - x0 < 3) return;
   const keep = mb.matOverride;
   mb.matOverride = MAT.none;
-  for (let z = z0; z + 1.9 <= z1; z += pitch) {
-    mb.quad([x0, y + 0.35, z + 1.9], [x1, y + 0.35, z + 1.9], [x1, y + 0.95, z], [x0, y + 0.95, z], K.solar);
-    mb.quad([x1, y, z], [x0, y, z], [x0, y + 0.95, z], [x1, y + 0.95, z], K.steelDk);
+  const lo = y + 0.3, hi = y + 0.85, dz = 1.9;
+  // 傾いた面の上の点（t = 0 が下のふち、1 が上のふち）。継ぎ目の線は面から少し浮かせる
+  const nl = Math.hypot(dz, hi - lo), ny = (dz / nl) * 0.025, nz = ((hi - lo) / nl) * 0.025;
+  const n = Math.max(1, Math.round((x1 - x0) / 4)), sx = (x1 - x0) / n;
+  for (let z = z0; z + dz <= z1; z += pitch) {
+    const S = (x: number, t: number): P3 => [x, lo + (hi - lo) * t + ny, z + dz * (1 - t) + nz];
+    mb.quad([x0, lo, z + dz], [x1, lo, z + dz], [x1, hi, z], [x0, hi, z], K.solar);
+    mb.quad([x1, y, z], [x0, y, z], [x0, hi, z], [x1, hi, z], K.steelDk);
+    mb.quad([x0, y, z + dz], [x1, y, z + dz], [x1, lo, z + dz], [x0, lo, z + dz], K.steelDk);
+    mb.quad(S(x0, 0.955), S(x1, 0.955), S(x1, 1), S(x0, 1), K.cap);
+    mb.quad(S(x0, 0.48), S(x1, 0.48), S(x1, 0.52), S(x0, 0.52), K.solarJ);
+    for (let i = 1; i < n; i++) {
+      const x = x0 + i * sx;
+      mb.quad(S(x - 0.04, 0), S(x + 0.04, 0), S(x + 0.04, 0.955), S(x - 0.04, 0.955), K.solarJ);
+    }
   }
   mb.matOverride = keep;
 }
@@ -620,52 +680,69 @@ type CK = 'block' | 'twostep' | 'highbay';
 function coldStorage(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
   mb.flatRoofMat = MAT.membrane;
   if (f.W < 28 || f.D < 28) { coldMini(mb, f, rng, tf, den); return; }
+  // 連結した敷地どうしは、同じ選び方の乱数で形・色・高さをそろえる。つながる敷地は箱（block）だけ
+  const S = f.campus !== undefined ? new Rng(f.campus) : rng;
+  if (f.joinL || f.joinR) { coldBlock(mb, f, rng, tf, den, 'block', S); return; }
   const kinds: string[] = ['block', 'block', 'twostep'];
   if (f.W >= 48 || f.D >= 48) kinds.push('highbay', 'highbay');
   if (f.W >= 64 && f.D >= 48) kinds.push('cross', 'cross');
-  const kind = rng.pick(kinds);
+  const kind = S.pick(kinds);
   if (kind === 'cross') coldCross(mb, f, rng, tf, den);
-  else coldBlock(mb, f, rng, tf, den, kind as CK);
+  else coldBlock(mb, f, rng, tf, den, kind as CK, S);
 }
 
-function coldBlock(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, kind: CK) {
+function coldBlock(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, kind: CK, srng?: Rng) {
   const W = f.W, D = f.D, hw = W / 2, hd = D / 2;
-  const os = rng.next() < 0.5 ? -1 : 1; // 事務所の側（-1 = -x の端）
-  const lane = W >= 64 ? 7 : W >= 48 ? 5 : 2.5; // 事務所の反対の側の通路
-  const xb0 = os < 0 ? -hw + 2.5 : -hw + lane, xb1 = os < 0 ? hw - lane : hw - 2.5;
+  // 連結した敷地どうしでそろえる選び方（形・色・高さ）。連結がなければ rng そのもの
+  const S = srng ?? (f.campus !== undefined ? new Rng(f.campus) : rng);
+  const jl = !!f.joinL, jr = !!f.joinR, joined = jl || jr;
+  const open = (jl ? 1 : 0) | (jr ? 2 : 0);
+  const lead = f.campus === undefined || !!f.lead;
+  const edge = (sd: number) => (sd < 0 ? jl : jr); // その側（-1 = -x）がとなりにつながるか
+  // 奥行き 48m 未満は低い冷蔵倉庫：窓のない白い箱、正面いっぱいの黒いドックシェルター、屋上の室外機（事務所のビルに見えないように）
+  const short = D < 48;
+  // 事務所の側（-1 = -x の端）。連結したときは、つながっていない端（両方つながっていれば事務所なし）
+  const r0 = S.next();
+  const os = jl && !jr ? 1 : jr && !jl ? -1 : r0 < 0.5 ? -1 : 1;
+  const office = !(jl && jr);
+  // 横の通路の側（ふつうは事務所の反対。連結したときは外の端＝事務所と同じ側）と幅
+  const ls = joined ? os : -os;
+  const lane = jl && jr ? 0 : W >= 64 ? 7 : W >= 48 ? 5 : 2.5;
+  const xb0 = -hw + (jl ? 0 : ls < 0 ? lane : 2.5), xb1 = hw - (jr ? 0 : ls > 0 ? lane : 2.5);
   const strip = 3;
   const courtD = D >= 64 ? 21 : D >= 48 ? 16 : 13.5;
   const zF = hd - strip - courtD; // ドックの面
   const zB = -hd + (D >= 48 ? 3 : 2); // 建物の裏
   const annexD = D >= 64 ? 10 : D >= 48 ? 7 : 0;
   const zM = zF - annexD; // 高い棟の正面
-  const panel = rng.pick([K.panel, K.panel, K.ivory, K.pgrey]);
-  const accent = rng.pick(ACC);
-  // 奥行き 48m 未満は低い冷蔵倉庫（事務所のビルに見えないように）
-  const H = D >= 48 ? (D >= 64 ? 24 : 18) + den * 2.6 + rng.next() * 3 : 10 + den * 0.8 + rng.next() * 1.5;
-  const Ha = D >= 48 ? 8.4 + rng.next() * 0.9 : 6.5; // 荷捌き棟の高さ
-  const ow = W >= 48 ? 11 : 8; // 事務所の幅
+  const panel = S.pick([K.panel, K.panel, K.ivory, K.pgrey]);
+  const accent = S.pick(ACC);
+  const H = D >= 48 ? (D >= 64 ? 24 : 18) + den * 2.6 + S.next() * 3 : 10 + den * 0.8 + S.next() * 1.5;
+  const Ha = D >= 48 ? 8.4 + S.next() * 0.9 : 6.5; // 荷捌き棟の高さ
+  // 事務所の幅（短い敷地は 1 層の小さな箱）
+  const ow = short ? 5 : W >= 48 ? 11 : 8;
   // 事務所は建物の横の面より少し外へ出す（ガラスと板の壁が同じ面にならないように）
   const ox0 = os < 0 ? xb0 - 0.15 : xb1 - ow + 0.15, ox1 = ox0 + ow;
-  roofPick(rng);
-  const floors = D >= 48 && W >= 48 ? 3 : 2;
+  roofPick(S);
+  const floors = short ? 1 : D >= 48 && W >= 48 ? 3 : 2;
+  const sL = jl ? -hw : -hw + 0.6, sR = jr ? hw : hw - 0.6; // 舗装の端
 
   // ---- 敷地：コンクリートの下地、トラックの前庭（アスファルト）、ドックの前のコンクリート ----
-  gq(mb, -hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.07, K.apron);
-  gq(mb, -hw + 0.6, zF, hw - 0.6, hd - strip, 0.09, K.court, PAT.lit);
+  gq(mb, jl ? -hw : -hw + 0.2, -hd + 0.2, jr ? hw : hw - 0.2, hd - 0.2, 0.07, K.apron);
+  gq(mb, sL, zF, sR, hd - strip, 0.09, K.court, PAT.lit);
   const gx = -os * (hw - 8.5); // ゲートの中心
-  siteEdge(mb, rng, tf, W, D, strip, [[gx - 5, gx + 5]]);
+  siteEdge(mb, rng, tf, W, D, strip, [[gx - 5, gx + 5]], true, 9, open);
   if (W >= 48) booth(mb, gx + os * 6.6, hd - strip - 3.5, -os * 5.2);
 
   // ---- 建物の形（種類ごと）----
   // 高い棟（tall）の範囲と、低い棟（荷捌き棟と同じ高さの部分）の範囲
-  const tS = rng.next() < 0.5 ? -1 : 1; // 高い部分の側（twostep と highbay）
+  const tS = S.next() < 0.5 ? -1 : 1; // 高い部分の側（twostep と highbay）
   let tx0 = xb0, tx1 = xb1; // 高い棟の x の範囲
   let lowX: [number, number] | null = null; // 高い棟の横の低い棟
   let Hl = Ha; // 低い棟の高さ
   const span = xb1 - xb0;
   if (kind === 'twostep') {
-    const tw = Math.round(span * (0.5 + rng.next() * 0.12));
+    const tw = Math.round(span * (0.5 + S.next() * 0.12));
     if (tS < 0) { tx1 = xb0 + tw; lowX = [tx1, xb1]; } else { tx0 = xb1 - tw; lowX = [xb0, tx0]; }
     Hl = Math.max(Ha + 3, Math.round(H * 0.55));
   } else if (kind === 'highbay') {
@@ -673,21 +750,24 @@ function coldBlock(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, 
     if (tS < 0) { tx1 = xb0 + tw; lowX = [tx1, xb1]; } else { tx0 = xb1 - tw; lowX = [xb0, tx0]; }
     Hl = Ha + 0.6;
   }
-  const Ht = kind === 'highbay' ? (D >= 48 ? 27 : 22) + den * 1.6 + rng.next() * 2.5 : H;
+  const Ht = kind === 'highbay' ? (D >= 48 ? 27 : 22) + den * 1.6 + S.next() * 2.5 : H;
   const tz1 = kind === 'highbay' && annexD === 0 ? zF : zM; // 高い棟の正面
   const wall = kind === 'highbay' ? K.silver : panel;
   const wallMat = kind === 'highbay' ? MAT.metal : MAT.plaster;
+  // 高い棟の面のうち、となりにつながる面（block だけ。高い棟が敷地の端まであるとき）
+  const tOpen = lowX ? 0 : open;
+  const tFaces = 15 & ~(tOpen & 1 ? 8 : 0) & ~(tOpen & 2 ? 4 : 0);
 
   // 高い棟
   bx(mb, tx0, 0, zB, tx1, Ht, tz1, wall, 0, { roof: K.roof, m: wallMat, rm: MAT.membrane });
-  ring4(mb, tx0, zB, tx1, tz1, 0, 1.2, K.plinth, 0, MAT.concrete, 0.03);
+  ring4(mb, tx0, zB, tx1, tz1, 0, 1.2, K.plinth, 0, MAT.concrete, 0.03, 0, tOpen);
   if (kind === 'highbay') {
     // 自動倉庫：窓のない銀の箱、上のふちだけ少し明るい帯
     ring4(mb, tx0, zB, tx1, tz1, Ht - 0.7, Ht, K.white, 0, MAT.metal, 0.04, 10);
     rim(mb, tx0, zB, tx1, tz1, Ht, 0.5, K.white, 0.25);
   } else {
-    panelLines(mb, tx0, zB, tx1, tz1, 0, Ht, 2.4, 9.5, K.joint);
-    rim(mb, tx0, zB, tx1, tz1, Ht, 1.1, panel);
+    panelLines(mb, tx0, zB, tx1, tz1, 0, Ht, 2.4, 9.5, K.joint, tFaces);
+    rim(mb, tx0, zB, tx1, tz1, Ht, 1.1, panel, 0.35, tOpen);
   }
   // 低い棟（高い棟の横）
   if (lowX) {
@@ -700,16 +780,24 @@ function coldBlock(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, 
   // 荷捌き棟（前の低い棟）
   if (annexD > 0) {
     bx(mb, xb0, 0, zM, xb1, Ha, zF, K.annex, 0, { roof: K.roof, m: MAT.plaster, rm: MAT.membrane });
-    panelLines(mb, xb0, zM, xb1, zF, 0, Ha, 2.4, 0, K.joint, 1 | 4 | 8);
-    rim(mb, xb0, zM, xb1, zF, Ha, 0.9, K.annex);
+    panelLines(mb, xb0, zM, xb1, zF, 0, Ha, 2.4, 0, K.joint, 1 | (jr ? 0 : 4) | (jl ? 0 : 8));
+    rim(mb, xb0, zM, xb1, zF, Ha, 0.9, K.annex, 0.35, open);
   }
 
   // ---- 会社の色の帯と看板 ----
-  const bandT = rng.next();
+  // 文字は連結の中の 1 つだけ。短い敷地は事務所の側の横の面に書く（正面はドックの列だけにする）
+  const bandT = S.next();
   const sx0 = tx0 + 2, sx1 = tx0 + Math.min(20, (tx1 - tx0) * 0.55);
+  const sideSign = short && office;
+  const sd = os > 0 ? 1 : 3, sw = os > 0 ? tx1 : tx0, sz0 = zB + (tz1 - zB) * 0.18, sz1 = zB + (tz1 - zB) * 0.82;
+  const say = (y0: number, y1: number, col: Col, off: number) => {
+    if (!lead) return;
+    if (sideSign) letters(mb, rng, sd, sw + sgn(sd) * off, sz0, sz1, y0, y1, col);
+    else letters(mb, rng, 0, tz1 + off, sx0, sx1, y0, y1, col);
+  };
   if (kind === 'highbay') {
     // 縦長のロゴ（夜は自分の色で光る）
-    const lc = rng.pick(LOGO);
+    const lc = S.pick(LOGO);
     const lx = tS < 0 ? tx0 + 2.5 : tx1 - 6.5;
     const ly0 = Math.max(Hl + 2, Ht * 0.3), ly1 = Ht - 2.2;
     wq(mb, 0, tz1 + 0.05, lx, lx + 4, ly0, ly1, lc, PAT.lit, MAT.none, 10);
@@ -724,25 +812,28 @@ function coldBlock(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, 
   } else if (bandT < 0.55) {
     // 上の帯と、白い文字
     const b0 = Ht - 3.4, b1 = Ht - 0.4;
-    ring4(mb, tx0, zB, tx1, tz1, b0, b1, accent, 0, MAT.none, 0.05, 10);
-    letters(mb, rng, 0, tz1 + 0.08, sx0, sx1, b0 + 0.8, b1 - 0.8, K.white);
+    ring4(mb, tx0, zB, tx1, tz1, b0, b1, accent, 0, MAT.none, 0.05, 10, tOpen);
+    say(b0 + 0.6, b1 - 0.6, K.white, 0.08);
   } else if (bandT < 0.8) {
     // 細い 2 本の線
-    ring4(mb, tx0, zB, tx1, tz1, Ht - 2.6, Ht - 2.1, accent, 0, MAT.none, 0.05, 10);
-    ring4(mb, tx0, zB, tx1, tz1, Ht - 1.5, Ht - 1.15, accent, 0, MAT.none, 0.05, 10);
-    letters(mb, rng, 0, tz1 + 0.06, sx0, sx1, Ht - 5.6, Ht - 3.6, accent);
-  } else {
+    ring4(mb, tx0, zB, tx1, tz1, Ht - 2.6, Ht - 2.1, accent, 0, MAT.none, 0.05, 10, tOpen);
+    ring4(mb, tx0, zB, tx1, tz1, Ht - 1.5, Ht - 1.15, accent, 0, MAT.none, 0.05, 10, tOpen);
+    say(Ht - 5.6, Ht - 3.6, accent, 0.06);
+  } else if (lead) {
     // 帯なし：会社の色の看板の板
-    wq(mb, 0, tz1 + 0.06, sx0, sx1, Ht - 4.6, Ht - 1.6, accent, PAT.lit, MAT.none, 10);
-    letters(mb, rng, 0, tz1 + 0.08, sx0 + 1, sx1 - 1, Ht - 3.8, Ht - 2.4, K.white);
+    if (sideSign) wq(mb, sd, sw + sgn(sd) * 0.06, sz0 - 1, sz1 + 1, Ht - 4.6, Ht - 1.6, accent, PAT.lit, MAT.none, 10);
+    else wq(mb, 0, tz1 + 0.06, sx0, sx1, Ht - 4.6, Ht - 1.6, accent, PAT.lit, MAT.none, 10);
+    if (sideSign) letters(mb, rng, sd, sw + sgn(sd) * 0.08, sz0, sz1, Ht - 3.8, Ht - 2.4, K.white);
+    else letters(mb, rng, 0, tz1 + 0.08, sx0 + 1, sx1 - 1, Ht - 3.8, Ht - 2.4, K.white);
   }
   if (lowX && kind === 'twostep') ring4(mb, lowX[0], zB, lowX[1], tz1, Hl - 1.6, Hl - 1.1, accent, 0, MAT.none, 0.05, 10);
 
   // ---- 階段とエレベーターの塔（外に出た塔。縦のガラスのすき間は夜に光る）----
-  // 荷捌き棟がないときは、高い棟の端の面（低い棟のない側）に出す。横の通路の機械室と同じ側なら前寄りに
+  // 荷捌き棟がないときは、高い棟の端の面（低い棟のない側。ふつうは通路の側）に出す。横の通路の機械室と同じ側なら前寄りに。
+  // つながる側には出さない
   const machine = lane >= 4.5 && lane < 6.5 && kind !== 'highbay';
-  const coreS = lowX ? tS : -os; // 塔を出す側（+1 = +x の端）
-  const coreFront = annexD === 0 && machine && coreS === -os;
+  const coreS = lowX ? tS : ls; // 塔を出す側（+1 = +x の端）
+  const coreFront = annexD === 0 && machine && coreS === ls;
   const czc = coreFront ? tz1 - 3.3 : (zB + tz1) / 2;
   if (kind !== 'highbay') {
     const coreCol = bandT >= 0.8 ? accent : K.pgrey;
@@ -752,22 +843,26 @@ function coldBlock(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, 
         bx(mb, xc - 2.8, Ha, zM + 0.04, xc + 2.8, Ht + 3.5, zM + 3, coreCol, 0, { roof: K.cap, m: MAT.plaster, v: 10 });
         wq(mb, 0, zM + 3.03, xc - 0.55, xc + 0.55, Ha + 1, Ht + 2.6, K.slot, PAT.lit, MAT.none, 10);
       }
-    } else {
+    } else if (!edge(coreS)) {
       const xe = coreS > 0 ? tx1 : tx0, cd = Math.min(2.2, (coreS > 0 ? hw - tx1 : tx0 + hw) - 0.7);
-      bx(mb, xe, 0, czc - 2.8, xe + coreS * cd, Ht + 3, czc + 2.8, coreCol, 0, { roof: K.cap, m: MAT.plaster });
-      wq(mb, coreS > 0 ? 1 : 3, xe + coreS * (cd + 0.03), czc - 0.55, czc + 0.55, 1.5, Ht + 2.2, K.slot, PAT.lit, MAT.none, 10);
+      // 短い敷地で、事務所の側の横の面に看板があるときは、塔を後ろ寄りに
+      const cz = sideSign && coreS === os ? zB + 3.2 : czc;
+      bx(mb, xe, 0, cz - 2.8, xe + coreS * cd, Ht + (short ? 1.2 : 3), cz + 2.8, coreCol, 0, { roof: K.cap, m: MAT.plaster });
+      wq(mb, coreS > 0 ? 1 : 3, xe + coreS * (cd + 0.03), cz - 0.55, cz + 0.55, 1.5, Ht + (short ? 0.6 : 2.2), K.slot, PAT.lit, MAT.none, 10);
     }
   }
 
   // ---- 屋上 ----
   {
-    // 高い棟：機械室、配管、室外機の列
+    // 高い棟：機械室、配管、室外機の列（短い敷地は機械室なしで、屋上いっぱいに室外機）
     const m = 2.2;
     const pw = Math.min(12, (tx1 - tx0) * 0.35), pd = Math.min(8, (tz1 - zB) * 0.45);
     const pa = rng.next() < 0.5;
     const px0 = pa ? tx0 + m : tx1 - m - pw;
     if (kind === 'highbay') {
       condField(mb, tx0 + 3.5, zB + 3.5, tx1 - 3.5, tz1 - 3.5, Ht, 4);
+    } else if (short) {
+      condField(mb, tx0 + (tOpen & 1 ? 1 : 1.8), zB + 1.6, tx1 - (tOpen & 2 ? 1 : 1.8), tz1 - 1.4, Ht, 6);
     } else {
       penthouse(mb, px0, zB + m, px0 + pw, zB + m + pd, Ht, 4.2, panel);
       const fx0 = pa ? px0 + pw + 1.5 : tx0 + m, fx1 = pa ? tx1 - m : px0 - 1.5;
@@ -777,7 +872,11 @@ function coldBlock(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, 
       // 機械室の前は空ける（室外機の列が足りないときは、小さな空調の箱）
       if (rows < 2) hvac(mb, px0, tz1 - m - 2.5, Ht);
     }
-    if (Ht >= 26) for (const [x, z] of [[tx0 + 0.4, zB + 0.4], [tx1 - 0.4, zB + 0.4], [tx0 + 0.4, tz1 - 0.4], [tx1 - 0.4, tz1 - 0.4]]) bx(mb, x - 0.2, Ht + (kind === 'highbay' ? 0.5 : 1.1), z - 0.2, x + 0.2, Ht + (kind === 'highbay' ? 0.9 : 1.5), z + 0.2, K.red, PAT.lit, { m: MAT.none, v: 10 });
+    // 高い建物の角の赤い灯（つながる側の角はなし）
+    if (Ht >= 26) for (const [x, z] of [[tx0 + 0.4, zB + 0.4], [tx1 - 0.4, zB + 0.4], [tx0 + 0.4, tz1 - 0.4], [tx1 - 0.4, tz1 - 0.4]]) {
+      if ((x < 0 && tOpen & 1) || (x > 0 && tOpen & 2)) continue;
+      bx(mb, x - 0.2, Ht + (kind === 'highbay' ? 0.5 : 1.1), z - 0.2, x + 0.2, Ht + (kind === 'highbay' ? 0.9 : 1.5), z + 0.2, K.red, PAT.lit, { m: MAT.none, v: 10 });
+    }
     // 低い棟の屋上：twostep は室外機がびっしり、highbay は太陽光
     if (lowX) {
       const [l0, l1] = lowX;
@@ -788,64 +887,63 @@ function coldBlock(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, 
     }
     // 荷捌き棟の屋上：太陽光か、小さな空調の箱
     if (annexD > 0) {
-      const a0 = xb0 + 1.5, a1 = xb1 - 1.5;
-      if (kind === 'highbay' || rng.next() < 0.5) solar(mb, a0, zM + 1.2, a1, zF - 1.2, Ha);
+      const a0 = xb0 + (jl ? 0.5 : 1.5), a1 = xb1 - (jr ? 0.5 : 1.5);
+      if (kind === 'highbay' || S.next() < 0.5) solar(mb, a0, zM + 1.2, a1, zF - 1.2, Ha);
       else for (const x of slots(a0, a1, 12)) hvac(mb, x - 1.8, zM + 2.0, Ha);
     }
   }
 
   // ---- 事務所と、ドックの列 ----
   const oz1 = zF + (D >= 64 ? 5 : D >= 48 ? 3.5 : 2.5);
-  office(mb, rng, ox0, ox1, zF - Math.min(3, annexD + 1.5), oz1, floors);
-  // ドックの範囲（事務所の横から反対の端まで。highbay で荷捌き棟がないときは低い棟の前だけ）
-  let da = os < 0 ? ox1 + 1.2 : xb0 + 1.2, db = os < 0 ? xb1 - 1.2 : ox0 - 1.2;
+  if (office) office(mb, rng, ox0, ox1, zF - Math.min(3, annexD + 1.5), oz1, floors);
+  // ドックの範囲（事務所の横から反対の端まで。highbay で荷捌き棟がないときは低い棟の前だけ）。つながる端は敷地の端まで
+  let da = office && os < 0 ? ox1 + 1.2 : xb0 + 1.2, db = office && os > 0 ? ox0 - 1.2 : xb1 - 1.2;
   if (kind === 'highbay' && annexD === 0 && lowX) { da = Math.max(da, lowX[0] + 1); db = Math.min(db, lowX[1] - 1); }
-  const docks = slots(da, db, 4.2, 0.2);
+  const docks = slots(da, db, short ? 4.0 : 4.2, 0.2);
   const yd = 1.2;
-  dockFace(mb, 0, zF, da - 0.5, db + 0.5, docks, yd, yd + 4.5, D >= 48 ? 2.6 : 2.0, rng.next() < 0.6 ? accent : null);
+  dockFace(mb, 0, zF, jl ? -hw : da - 0.5, jr ? hw : db + 0.5, docks, yd, yd + 4.5, D >= 48 ? 2.6 : 2.0, S.next() < 0.6 ? accent : null);
   const room = hd - strip - 0.6 - (zF + 0.66);
   dockLines(mb, 0, zF, docks, Math.min(9, room - 1));
   dockTrucks(mb, rng, 0, zF, docks, room, 0.6, rng.next() < 0.5 ? accent : null);
 
-  // ---- 冷凍機の機械置き場（highbay：横の通路に、柵で囲んだ室外機）----
+  // ---- 横の通路（ls の側）：冷凍機の機械置き場（highbay）、機械室、電源柱につないだ冷凍コンテナ ----
   if (kind === 'highbay' && lane >= 5) {
-    const ex0 = os < 0 ? xb1 + 0.6 : xb0 - 0.6, ex1 = os < 0 ? hw - 1.0 : -hw + 1.0;
+    const ex0 = ls > 0 ? xb1 + 0.6 : xb0 - 0.6, ex1 = ls > 0 ? hw - 1.0 : -hw + 1.0;
     const ez0 = zB + 1, ez1 = Math.min(zM - 1, zB + 16);
     gq(mb, ex0, ez0, ex1, ez1, 0.11, K.conc);
     condField(mb, Math.min(ex0, ex1) + 0.4, ez0 + 0.6, Math.max(ex0, ex1) - 0.4, ez1 - 0.6, 0.1, 3);
     fence(mb, ex0, ez1, ex1, ez1, 1.8);
   } else if (machine) {
-    // 横の通路：冷凍機の機械室（自然冷媒）の低い棟と、上の室外機（階段の塔が前寄りにあるときは、その手前まで）
-    const mx0 = os < 0 ? xb1 : xb0, mx1 = os < 0 ? xb1 + 3.6 : xb0 - 3.6;
+    // 冷凍機の機械室（自然冷媒）の低い棟と、上の室外機（階段の塔が前寄りにあるときは、その手前まで）
+    const mx0 = ls > 0 ? xb1 : xb0, mx1 = ls > 0 ? xb1 + 3.6 : xb0 - 3.6;
     const mz0 = zB + 1.5, mz1 = Math.min(zM - 1, zB + 13, coreFront ? czc - 3.3 : Infinity);
     if (mz1 - mz0 >= 5) {
       bx(mb, mx0, 0, mz0, mx1, 5.2, mz1, K.pgrey, 0, { roof: K.roof, m: MAT.plaster });
-      wq(mb, os < 0 ? 1 : 3, mx1 + (os < 0 ? 0.03 : -0.03), mz0 + 1, mz1 - 1, 2.2, 4.4, K.grille, 0, MAT.metal, 10);
+      wq(mb, ls > 0 ? 1 : 3, mx1 + (ls > 0 ? 0.03 : -0.03), mz0 + 1, mz1 - 1, 2.2, 4.4, K.grille, 0, MAT.metal, 10);
       condRow(mb, Math.min(mx0, mx1) + 0.4, mz0 + 0.5, Math.max(mx0, mx1) - 0.4, mz1 - 0.5, 5.2, false);
       if (!coreFront) pipe(mb, Math.min(mx0, mx1) + 1.2, mz1 - 0.4, Math.min(mx0, mx1) + 1.6, zM - 0.5, 5.2);
     }
   } else if (lane >= 6.5 && D >= 48) {
-    // 横の通路：電源柱につないだ冷凍コンテナ（シャーシの上）
-    const xr = os < 0 ? hw - 2.2 : -hw + 2.2;
+    const xr = ls > 0 ? hw - 2.2 : -hw + 2.2;
     const n = Math.min(3, Math.floor((zF - zB - 2) / 13.5));
     for (let i = 0; i < n; i++) {
       const z = zB + 1 + i * 13.5;
       vehicle(mb, xr, z, Math.PI / 2, 'contDrop', rng.pick(REEF), K.white);
-      plug(mb, xr + os * 2.0, z + 13.0, xr + os * 0.95, z + 12.6, 2.6);
+      plug(mb, xr - ls * 2.0, z + 13.0, xr - ls * 0.95, z + 12.6, 2.6);
     }
   }
 
   // ---- 事務所の前の駐車場、照明 ----
-  if (D >= 48) {
+  if (office && D >= 48) {
     const px0 = os < 0 ? ox0 : ox0 - 0.5, px1 = os < 0 ? ox1 + 0.5 : ox1;
     const pz1 = hd - strip - 0.3;
     if (pz1 - 5.2 > oz1 + 3) carRow(mb, rng, Math.max(-hw + 1, px0), Math.min(hw - 1, px1), pz1 - 5.2, pz1, 0.7);
-  } else {
-    for (let i = 0; i < 2; i++) car(mb, ox0 + 2 + i * 3, hd - strip - 2.6, Math.PI / 2, rng.pick(CARS));
+  } else if (office) {
+    for (let i = 0; i < 2; i++) car(mb, ox0 + 1 + i * 2.8, hd - strip - 2.6, Math.PI / 2, rng.pick(CARS));
   }
-  const cp: PoolAt = { a: [-hw + 0.6, zF, hw - 0.6, hd - strip], base: K.court };
-  pole(mb, os < 0 ? hw - 1.4 : -hw + 1.4, hd - strip - 1.2, 11, cp);
-  if (W >= 48) pole(mb, (ox0 + ox1) / 2 - os * (ow / 2 + 4), hd - strip - 1.2, 11, cp);
+  const cp: PoolAt = { a: [sL, zF, sR, hd - strip], base: K.court };
+  if (!edge(ls)) pole(mb, ls > 0 ? hw - 1.4 : -hw + 1.4, hd - strip - 1.2, 11, cp);
+  if (office && W >= 48) pole(mb, (ox0 + ox1) / 2 - os * (ow / 2 + 4), hd - strip - 1.2, 11, cp);
 }
 
 // 平屋のクロスドック（長いドックの列）と、横の冷凍コンテナの棚（4×3 以上）
@@ -994,12 +1092,13 @@ function coldMini(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
 // 面ごとに、少し暗い枠の面と、少し内側に小さくした板を重ねて、1 つずつの箱に見せる
 // =====================================================================
 const CH = 2.59, CW = 2.44;
-// lit = 夜に照明塔に照らされる面（1 = 横の向きの - の面、2 = 横の向きの + の面、4 = 長さの向きの + の端）
+// lit = 夜に照明塔に照らされる面（1 = 横の向きの - の面、2 = 横の向きの + の面、4 = 長さの向きの + の端、8 = - の端）。
+// 照らされるのは下の 3 段だけ（上へ行くほど暗くなる。照明塔の光が届く高さ）
 interface Blk { alongX: boolean; a0: number; c0: number; lens: number[]; rows: number; hts: number[][]; cols: Col[][][]; pitch?: number; lit?: number }
-// コンテナの 1 つの面。pat = PAT.lit なら夜は照らされて明るい（照明塔に向いた壁）
+// コンテナの 1 つの面。pat = PAT.lit なら夜は照らされて明るい（内側の板だけ。箱の合わせ目の枠は暗いまま）
 function contFace(mb: MeshBuilder, d: number, w: number, a0: number, a1: number, y0: number, y1: number, col: Col, end = false, pat = 0) {
   tmpC.copy(col).multiplyScalar(0.62);
-  wq(mb, d, w, a0, a1, y0, y1, tmpC, pat, MAT.metal, y0);
+  wq(mb, d, w, a0, a1, y0, y1, tmpC, 0, MAT.metal, y0);
   wq(mb, d, w + sgn(d) * 0.025, a0 + 0.09, a1 - 0.09, y0 + 0.13, y1 - 0.09, col, pat, MAT.metal, y0 + 0.13);
   // 端の面：扉の合わせ目（縦の暗い線）
   if (end) {
@@ -1028,16 +1127,16 @@ function contBlock(mb: MeshBuilder, b: Blk) {
   // すき間があるとき（pitch > CW）は、横の向きのとなりにふさがれない
   const gapC = pitch > CW + 0.05;
   const lit = b.lit ?? 0;
-  const pC0 = lit & 1 ? PAT.lit : 0, pC1 = lit & 2 ? PAT.lit : 0, pA1 = lit & 4 ? PAT.lit : 0;
+  const pC0 = lit & 1 ? PAT.lit : 0, pC1 = lit & 2 ? PAT.lit : 0, pA1 = lit & 4 ? PAT.lit : 0, pA0 = lit & 8 ? PAT.lit : 0;
   for (let i = 0; i < n; i++) for (let r = 0; r < rows; r++) {
     const h = hts[i][r];
     const A0 = as[i], A1 = as[i] + lens[i], C0 = c0 + r * pitch, C1 = C0 + CW;
     for (let k = 0; k < h; k++) {
-      const y0 = k * CH, y1 = y0 + CH, col = cols[i][r][k];
-      if (Hh(i + 1, r) <= k) contFace(mb, dA(true), A1, C0, C1, y0, y1, col, true, pA1);
-      if (Hh(i - 1, r) <= k) contFace(mb, dA(false), A0, C0, C1, y0, y1, col, true);
-      if (gapC || Hh(i, r + 1) <= k) contFace(mb, dC(true), C1, A0, A1, y0, y1, col, false, pC1);
-      if (gapC || Hh(i, r - 1) <= k) contFace(mb, dC(false), C0, A0, A1, y0, y1, col, false, pC0);
+      const y0 = k * CH, y1 = y0 + CH, col = cols[i][r][k], lo = k <= 2;
+      if (Hh(i + 1, r) <= k) contFace(mb, dA(true), A1, C0, C1, y0, y1, col, true, lo ? pA1 : 0);
+      if (Hh(i - 1, r) <= k) contFace(mb, dA(false), A0, C0, C1, y0, y1, col, true, lo ? pA0 : 0);
+      if (gapC || Hh(i, r + 1) <= k) contFace(mb, dC(true), C1, A0, A1, y0, y1, col, false, lo ? pC1 : 0);
+      if (gapC || Hh(i, r - 1) <= k) contFace(mb, dC(false), C0, A0, A1, y0, y1, col, false, lo ? pC0 : 0);
     }
     if (h > 0) {
       const y = h * CH;
@@ -1160,10 +1259,9 @@ function depot(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
       blk.cols[farI][r] = Array.from({ length: h }, () => rng.pick(REEF));
     }
   }
-  // 通路に面した壁は夜に照明塔で照らされる（区画が 1 つなら、照明塔のある前の側）
-  blocks.forEach((blk, bI) => {
-    const lit = nb === 1 ? (alongX ? 2 : 4) : (bI > 0 ? 1 : 0) | (bI < nb - 1 ? 2 : 0);
-    contBlock(mb, { alongX, a0: aStart, c0: blk.c0, lens, rows: blk.rows, hts: blk.hts, cols: blk.cols, lit });
+  // 壁の下の段は夜に照明塔で照らされる（4 つの面とも。上の段は暗いまま）
+  blocks.forEach((blk) => {
+    contBlock(mb, { alongX, a0: aStart, c0: blk.c0, lens, rows: blk.rows, hts: blk.hts, cols: blk.cols, lit: 1 | 2 | 4 | 8 });
   });
 
   // ---- 地面の白線（区画のふち）と、区画の番号 ----
