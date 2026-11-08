@@ -138,6 +138,7 @@ export interface SaveData {
   ordinances?: OrdinanceId[];
   loans?: Loan[];
   rating?: number;
+  ilInland?: number; // 内陸の倉庫業の需要（古い保存データにはない）
 }
 
 export interface CmdResult {
@@ -305,6 +306,7 @@ export class World {
       ordinances: [...this.ordinances],
       loans: this.loans.map((l) => ({ ...l })),
       rating: this.rating,
+      ilInland: this.ilInland,
     };
   }
 
@@ -332,6 +334,7 @@ export class World {
     w.nextId = d.nextId;
     w.rng.state = d.rng;
     w.demand = { ...emptyKinds(0), ...d.demand };
+    w.ilInland = d.ilInland ?? w.demand.IL; // 古い保存データは街全体の需要から始める
     if (d.congestion && d.congestion.length === w.maps.congestion.length) w.maps.congestion.set(d.congestion);
     if (d.traffic && d.traffic.length === w.maps.traffic.length) w.maps.traffic.set(d.traffic);
     w.history = d.history || [];
@@ -866,8 +869,8 @@ export class World {
       case 'IA': return 0.75 - 0.6 * lv - 0.5 * res;
       case 'ID': return 0.7 - 0.2 * lv - water * 0.5;
       case 'IM': return 0.5 + 0.1 * lv - 0.3 * pol - water;
-      // 倉庫業は港・貨物駅から遠いと建ちにくい（近さの分は desirability で足す）
-      case 'IL': return 0.25 + 0.1 * lv - 0.1 * pol - water * 0.8;
+      // 倉庫業：内陸では製造業より少し低い（港・貨物駅の近さの分は desirability で足す。内陸に建つ量は内陸の需要で決まる）
+      case 'IL': return 0.45 + 0.1 * lv - 0.1 * pol - water * 0.8;
       // 汚れた工場の近くはきらうが、工業地域でも建てられるくらいに（汚染の少ない工業地域ほど建ちやすい）
       case 'IH': return 0.52 + 0.5 * lv - 0.45 * pol - water * 1.2 + Math.max(0, (eq - 50) / 100);
     }
@@ -1123,20 +1126,23 @@ export class World {
     // 倉庫業は、港・貨物駅のすぐ近くでは大きな敷地（6×4 まで）になりやすい。入らなければ、ふつうの大きさでもう一度ためす
     if (kind === 'IL' && watered && this.logiField().full[i] && this.rng.next() < 0.6) {
       const [bw, bh] = IL_BIG_SIZES[this.rng.int(IL_BIG_SIZES.length)];
-      if (this.spawnLot(kind, x0, y0, bw, bh, den, watered, pop, replace, old)) return true;
+      if (this.spawnLot(kind, x0, y0, bw, bh, den, watered, pop, replace, old, true)) return true;
     }
     return this.spawnLot(kind, x0, y0, sw, sh, den, watered, pop, replace, old);
   }
 
-  // (x0, y0) を含む sw×sh の敷地を探して建てる
-  private spawnLot(kind: GrowKind, x0: number, y0: number, sw: number, sh: number, den: number, watered: boolean, pop: number, replace: number, old: Building | undefined): boolean {
+  // (x0, y0) を含む sw×sh の敷地を探して建てる。big = 倉庫業の大きな敷地
+  private spawnLot(kind: GrowKind, x0: number, y0: number, sw: number, sh: number, den: number, watered: boolean, pop: number, replace: number, old: Building | undefined, big = false): boolean {
     const g = this.g, n = g.n;
     const def = GROW[kind];
     // この位置を含む敷地を探す
     const tries: [number, number][] = [];
     for (let oy = 0; oy < sh; oy++) for (let ox = 0; ox < sw; ox++) tries.push([x0 - ox, y0 - oy]);
+    // 大きな敷地は、敷地の中心が港・貨物駅のいちばん強い範囲の中のときだけ（描画の近さと同じく中心ではかる）
+    const ports = big ? [...this.buildings.values()].filter((b) => b.civic && LOGI_REACH[b.type as CivicId]) : [];
     for (const [x, y] of tries) {
       if (x < 0 || y < 0 || x + sw > n || y + sh > n) continue;
+      if (big && !ports.some((p) => logiReach(p, x + sw / 2, y + sh / 2).full)) continue;
       let ok = true;
       let lo = Infinity, hi = -Infinity;
       for (let yy = y; yy < y + sh && ok; yy++)
