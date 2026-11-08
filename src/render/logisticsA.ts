@@ -17,7 +17,7 @@ const TAU = Math.PI * 2;
 const K = {
   white: C(0xeef0f1), white2: C(0xe3e6e9), ribbed: C(0xdfe3e6), joint: C(0xc3c8cd), cap: C(0xd5d8db), roof: C(0xcfd2d4),
   plinth: C(0x6b7178), conc: C(0xbab8b1), apron: C(0xb0aea6), litGround: C(0x8f8d87), slab: C(0xe8eaeb), under: C(0xc7c9ca),
-  deck: C(0x929599), court: C(0x55585c), lane: C(0x606367), ramp: C(0x8a8d90), paint: C(0xeeeee8), yel: C(0xf2c200),
+  deck: C(0x7a7d81), court: C(0x55585c), lane: C(0x606367), ramp: C(0x8a8d90), paint: C(0xeeeee8), yel: C(0xf2c200),
   shutter: C(0xb9bec3), seal: C(0x1c1f23), glass: C(0x6f9cc2), glassT: C(0x5f9aa2), glassDk: C(0x2c4864), slot: C(0xa9cbe0),
   steel: C(0x8a9097), steelDk: C(0x464c53), fence: C(0x7d848b), solar: C(0x23344c), solarJ: C(0x7d8a99), lawn: C(0x6e9a4a), hedge: C(0x3f6a31),
   lamp: C(0xfff0cf), led: C(0xe9f2ff), tyre: C(0x1d1f22), chassis: C(0x2b2e32), cabGlass: C(0x1c2834), cage: C(0x9aa3ab),
@@ -28,7 +28,7 @@ const ACCENT = [0x1f4e8c, 0x0f8a8a, 0xe2452d, 0x2e9e5b, 0x1f6fd0, 0x6fb7d9].map(
 // 運転台の色（白が多い）
 const CABS = [0xf2f2f2, 0xf2f2f2, 0xf2f2f2, 0xf2f2f2, 0xe8e9ea, 0xd9d9d9, 0x1d3f8a, 0x9a1d1d, 0x2e6b3a, 0x2b2b2b, 0x1f5fae].map(C);
 // デッキに並ぶトラックの運転台（ほとんど白）
-const DECK_CABS = [0xf2f2f2, 0xf2f2f2, 0xf2f2f2, 0xeceeef, 0xdfe2e5, 0x1d3f8a, 0x2e6b3a].map(C);
+const DECK_CABS = [0xf2f2f2, 0xf2f2f2, 0xf2f2f2, 0xeceeef, 0xeceeef, 0xdfe2e5, 0xdfe2e5, 0x1d3f8a].map(C);
 const CARS = [0xf2f2f2, 0x2b2b2b, 0x9a1d1d, 0x1d3f8a, 0x8a8f96, 0xd8d8d8, 0x3b5d3a, 0x101820, 0xb8bcc0].map(C);
 // 屋根の仕上げ（白い防水シート、明るい灰色、うすい緑がかった灰色）と、壁の色合い（青みの白、アイボリー、明るい灰色）
 const ROOFS = [0xe6e8e9, 0xcfd2d4, 0xc3cbc5].map(C);
@@ -654,6 +654,9 @@ function mtDeck(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, kin
     // 倉庫の壁の暗い帯（バースの列が遠くから見える）とシャッター、止まっている 10t のウイング車（荷台は白か銀、会社の色は細い線だけ）
     Wz(0, zc + 0.02, xd0 + 0.6, x1 - 0.6, y + 0.05, y + 4.75, K.seal, 0, MAT.none, 10);
     const sl = slots(xd0 + 1, x1 - (helix ? 1 : 0.5), 4.5, 0.5), on = pickSome(rng, sl.length, 0.85);
+    // 床のバースの白線と、通路の黄色い線
+    for (const xs of sl.slice(1)) G(xs - 2.31, zc + 0.6, xs - 2.19, zc + 12.8, y + 0.02, K.paint);
+    G(xd0 + 1, zc + 13.4, x1 - 1, zc + 13.55, y + 0.02, K.yel);
     sl.forEach((xs, i) => {
       Wz(0, zc + 0.05, xs - 1.7, xs + 1.7, y + 0.15, y + 4.4, K.shutter, 0, MAT.metal, 10);
       const r = rng.next(), body = rng.next() < 0.3 ? accent : rng.next() < 0.8 ? K.white : K.silver;
@@ -696,7 +699,12 @@ function mtDeck(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, kin
   // ---- 上のふちを包む会社の色の太い帯（横長に見せる）と、帯に直接書いた白い大きな文字（正面と横）----
   // 直線ランプの塔は、奥を半円に丸めた帯で別に包む（下のランプのところ）
   if (helix) band(mb, xm0, z0, xm1, z1, H - 2.8, H + 0.6, accent);
-  else band(mb, Math.min(X(x0), X(x1)), z0, Math.max(X(x0), X(x1)), z1, H - 2.8, H + 0.6, accent);
+  else {
+    // ランプの塔の側は帯を開けて、塔の帯へそのまま続ける（奥の半円までの短い区間だけ横の板）
+    band(mb, Math.min(X(x0), X(x1)), z0, Math.max(X(x0), X(x1)), z1, H - 2.8, H + 0.6, accent, side < 0, side > 0);
+    B(x1 - 0.25, H - 2.8, z0 + 0.25, x1 + 0.15, H + 0.6, z0 + 6, accent, 0, { roof: K.cap, m: MAT.metal });
+    Wx(1, x1 + 0.18, z0 - 0.15, z0 + 6, H - 2.7, H - 2.5, K.led, PAT.glow, MAT.none);
+  }
   {
     const sa = x0 + 3, sb = x0 + 3 + Math.min(26, (x1 - x0) * 0.6);
     letters(mb, rng, Math.min(X(sa), X(sb)), Math.max(X(sa), X(sb)), H - 2.2, H + 0.1, z1 + 0.17, K.white);
@@ -743,10 +751,10 @@ function mtDeck(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, kin
     const xt = xo + 0.65, tc = X((x1 + xt) / 2), tr = (xt - x1) / 2;
     B(x1, H - 0.9, zr0, xt, H, z1, K.slab, 0, { roof: K.roof, bot: K.under, m: MAT.concrete, rm: MAT.membrane });
     halfDisc(mb, tc, zr0, tr, H - 0.9, H, K.slab, K.roof);
-    B(x1 + 0.15, H - 2.8, z1 - 0.25, xt + 0.15, H + 0.6, z1 + 0.15, accent, 0, { roof: K.cap, m: MAT.metal });
+    B(x1, H - 2.8, z1 - 0.25, xt + 0.15, H + 0.6, z1 + 0.15, accent, 0, { roof: K.cap, m: MAT.metal });
     B(xt - 0.25, H - 2.8, zr0, xt + 0.15, H + 0.6, z1 - 0.25, accent, 0, { roof: K.cap, m: MAT.metal });
     arcBand(mb, tc, zr0, tr + 0.15, 0.4, Math.PI, TAU, 14, H - 2.8, H + 0.6, accent);
-    Wz(0, z1 + 0.18, x1 + 0.15, xt + 0.15, H - 2.7, H - 2.5, K.led, PAT.glow, MAT.none);
+    Wz(0, z1 + 0.18, x1, xt + 0.18, H - 2.7, H - 2.5, K.led, PAT.glow, MAT.none);
     Wx(1, xt + 0.18, zr0, z1 + 0.15, H - 2.7, H - 2.5, K.led, PAT.glow, MAT.none);
     for (let i = 0; i < 2; i++) hvac(mb, X((x1 + xo) / 2) - 2.2, zr0 + 1 + i * 5, H, 4.4, 2.4);
     // 外の柱（まっすぐな側と、半円のまわりの丸い柱）

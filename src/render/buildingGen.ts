@@ -3046,9 +3046,11 @@ function dirtyIndustry(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: numb
   return stackFactory(mb, f, rng, tf, den);
 }
 function mfgIndustry(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, seed: number, port: number) {
+  // 連結した敷地（buildingLayer で決める）は、連結の種と密度で決める（物流施設にするか・種類・高さがそろう）
+  const cs = f.campus ?? seed, cden = f.cden ?? den;
   const dbg = forcedLogi();
-  if (dbg) return dbg(mb, f, rng, tf, den);
-  if (seedRoll(seed, 1) < 0.2 + 0.7 * port && logiPick(mb, f, rng, tf, den, seed, port, false)) return;
+  if (dbg) return dbg(mb, f, rng, tf, cden);
+  if (seedRoll(cs, 1) < 0.2 + 0.7 * port && logiPick(mb, f, rng, tf, cden, cs, port, false)) return;
   const cells = Math.round((f.W * f.D) / (CELL * CELL)), r = rng.next();
   if (cells >= 9) return r < 0.6 ? autoPlant(mb, f, rng, tf, den) : modernFactory(mb, f, rng, tf, den);
   return modernFactory(mb, f, rng, tf, den);

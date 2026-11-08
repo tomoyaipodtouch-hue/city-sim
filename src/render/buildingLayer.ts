@@ -1,9 +1,10 @@
 // 建物の描画（16×16マスごとにまとめて1つのメッシュにする）
 import * as THREE from 'three';
 import { Grid } from '../sim/grid';
-import type { Building } from '../sim/world';
+import { BState, type Building } from '../sim/world';
 import { MeshBuilder } from './builder';
 import { generateBuilding, setupLot, TreeSpot, farmFields, FxSpot } from './buildingGen';
+import { forcedLogi } from './logiRegistry';
 import { createBuildingMaterial } from './materials';
 import { PondBuilder, createPondMaterial, createGlowMaterial, createFallMaterial } from './parkPond';
 import { CIVIC, CivicId, FARM_TILE, ZoneType } from '../sim/defs';
@@ -32,6 +33,50 @@ export function portLevel(b: Building, ports: Building[]): number {
     v = Math.max(v, r[0] * (d <= r[1] ? 1 : d >= r[2] ? 0 : (r[2] - d) / (r[2] - r[1])));
   }
   return Math.round(v * PORT_STEPS);
+}
+
+// 物流施設の連結：港の近くで、同じ向き・同じ大きさの工業（IM）の敷地が、道路にそった横の辺をぴったり共有して並んでいれば、
+// 1 つの長い建物として描く（実際の大型物流施設は 150〜350m の長さがある）。seed = 連結の種（いちばん小さい種）、
+// L / R = 敷地の -x / +x の側がつながる、lead = 看板を描く敷地、port・den = 連結の中でいちばん大きい値
+export interface Campus { seed: number; den: number; port: number; L: boolean; R: boolean; lead: boolean }
+// 向きごとの、敷地の +x の向き（マスの x, y）
+const RIGHT: Record<number, [number, number]> = { 2: [1, 0], 6: [-1, 0], 0: [0, -1], 4: [0, 1] };
+export function campuses(list: Building[], lv: Map<number, number>, any = false): Map<number, Campus> {
+  const ok = (b: Building) => !b.civic && b.type === 'IM' && b.state !== BState.Building && RIGHT[b.face] !== undefined && (any || (lv.get(b.id) ?? 0) >= 2);
+  const at = new Map<string, Building>();
+  for (const b of list) if (ok(b)) at.set(`${b.x},${b.y}`, b);
+  const parent = new Map<number, number>();
+  const find = (i: number): number => {
+    let r = i;
+    while (parent.get(r) !== r) r = parent.get(r)!;
+    return r;
+  };
+  const L = new Set<number>(), R = new Set<number>(), byId = new Map<number, Building>();
+  for (const b of at.values()) {
+    const [dx, dy] = RIGHT[b.face];
+    const nb = at.get(`${b.x + dx * b.w},${b.y + dy * b.h}`);
+    if (!nb || nb.face !== b.face || nb.w !== b.w || nb.h !== b.h) continue;
+    for (const q of [b, nb]) if (!parent.has(q.id)) { parent.set(q.id, q.id); byId.set(q.id, q); }
+    R.add(b.id);
+    L.add(nb.id);
+    parent.set(find(b.id), find(nb.id));
+  }
+  // 連結ごとに、種・密度・近さをまとめる
+  const groups = new Map<number, Building[]>();
+  for (const id of parent.keys()) {
+    const r = find(id);
+    let g = groups.get(r);
+    if (!g) groups.set(r, (g = []));
+    g.push(byId.get(id)!);
+  }
+  const out = new Map<number, Campus>();
+  for (const g of groups.values()) {
+    let head = g[0];
+    for (const b of g) if (b.seed < head.seed || (b.seed === head.seed && b.id < head.id)) head = b;
+    const den = Math.max(...g.map((b) => b.den)), port = Math.max(...g.map((b) => lv.get(b.id) ?? 0));
+    for (const b of g) out.set(b.id, { seed: head.seed, den, port, L: L.has(b.id), R: R.has(b.id), lead: b === head });
+  }
+  return out;
 }
 
 interface Chunk {
@@ -83,8 +128,21 @@ export class BuildingLayer {
     const cparkIds = new Set<number>();
     for (const b of list) if (b.civic && CIVIC[b.type as CivicId]?.cpark) cparkIds.add(b.id);
     const isCpark = (x: number, y: number) => g.inb(x, y) && cparkIds.has(g.bldg[g.idx(x, y)]);
-    // 港・貨物駅（工業の建物の形を選ぶのに使う）
+    // 港・貨物駅（工業の建物の形を選ぶのに使う）と、建物ごとの近さの段階、物流施設の連結
     const ports = list.filter((b) => b.civic && PORT_REACH[b.type]);
+    const plv = new Map<number, number>();
+    if (ports.length) for (const b of list) if (!b.civic && (b.type === 'IM' || b.type === 'ID')) plv.set(b.id, portLevel(b, ports));
+    // 確認用に物流施設の形を強制しているときは、港から遠くてもつなげる
+    const camp = campuses(list, plv, !!forcedLogi());
+    // 連結した建物は同じ高さの地面に建てる（敷地ごとに地面の高さが違うと、つなぎ目に段ができる）
+    const cbase = new Map<number, number>();
+    for (const b of list) {
+      const cp = camp.get(b.id);
+      if (!cp) continue;
+      let h = cbase.get(cp.seed) ?? -Infinity;
+      for (let y = b.y; y < b.y + b.h; y++) for (let x = b.x; x < b.x + b.w; x++) h = Math.max(h, groundAt(x, y));
+      cbase.set(cp.seed, h);
+    }
     const all = new Set<number>([...byChunk.keys(), ...this.chunks.keys()]);
     for (const c of all) {
       const bs = byChunk.get(c) || [];
@@ -93,9 +151,11 @@ export class BuildingLayer {
       const lv: number[] = []; // 建物ごとの港への近さの段階
       for (const b of bs) {
         key += `${b.id}.${b.state}.${b.face};`;
-        const p = ports.length && !b.civic && (b.type === 'IM' || b.type === 'ID') ? portLevel(b, ports) : 0;
+        const cp = camp.get(b.id);
+        const p = cp ? cp.port : plv.get(b.id) ?? 0;
         lv.push(p);
         if (p) key += `p${p};`;
+        if (cp) key += `j${cp.seed}.${cp.den}.${cp.L ? 1 : 0}${cp.R ? 1 : 0}${cp.lead ? 1 : 0}.${Math.round((cbase.get(cp.seed) ?? 0) * 10)};`;
         if (b.type === 'IA') key += `f${farmEmpty(g, b).length};`;
         if (cparkIds.has(b.id)) {
           let m = 0;
@@ -139,7 +199,9 @@ export class BuildingLayer {
       const fx: FxSpot[] = [];
       for (let i = 0; i < bs.length; i++) {
         const b = bs[i];
-        const f = setupLot(mb, b, groundAt, minAt);
+        const cp = camp.get(b.id), cb = cp ? cbase.get(cp.seed) : undefined;
+        const f = setupLot(mb, b, cb !== undefined ? () => cb : groundAt, minAt);
+        if (cp) Object.assign(f, { campus: cp.seed, joinL: cp.L, joinR: cp.R, lead: cp.lead, cden: cp.den });
         const v0 = mb.pos.length;
         generateBuilding(mb, b, f, trees, isCpark, pb, fx, lv[i] / PORT_STEPS);
         // 農家：同じ区画（8×8）の空いた農地を、ぜんぶ畑にする

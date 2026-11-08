@@ -704,7 +704,7 @@ function coldBlock(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, 
   // 事務所の側（-1 = -x の端）。連結したときは、つながっていない端（両方つながっていれば事務所なし）
   const r0 = S.next();
   const os = jl && !jr ? 1 : jr && !jl ? -1 : r0 < 0.5 ? -1 : 1;
-  const office = !(jl && jr);
+  const hasOff = !(jl && jr);
   // 横の通路の側（ふつうは事務所の反対。連結したときは外の端＝事務所と同じ側）と幅
   const ls = joined ? os : -os;
   const lane = jl && jr ? 0 : W >= 64 ? 7 : W >= 48 ? 5 : 2.5;
@@ -788,7 +788,7 @@ function coldBlock(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, 
   // 文字は連結の中の 1 つだけ。短い敷地は事務所の側の横の面に書く（正面はドックの列だけにする）
   const bandT = S.next();
   const sx0 = tx0 + 2, sx1 = tx0 + Math.min(20, (tx1 - tx0) * 0.55);
-  const sideSign = short && office;
+  const sideSign = short && hasOff;
   const sd = os > 0 ? 1 : 3, sw = os > 0 ? tx1 : tx0, sz0 = zB + (tz1 - zB) * 0.18, sz1 = zB + (tz1 - zB) * 0.82;
   const say = (y0: number, y1: number, col: Col, off: number) => {
     if (!lead) return;
@@ -895,9 +895,9 @@ function coldBlock(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, 
 
   // ---- 事務所と、ドックの列 ----
   const oz1 = zF + (D >= 64 ? 5 : D >= 48 ? 3.5 : 2.5);
-  if (office) office(mb, rng, ox0, ox1, zF - Math.min(3, annexD + 1.5), oz1, floors);
+  if (hasOff) office(mb, rng, ox0, ox1, zF - Math.min(3, annexD + 1.5), oz1, floors);
   // ドックの範囲（事務所の横から反対の端まで。highbay で荷捌き棟がないときは低い棟の前だけ）。つながる端は敷地の端まで
-  let da = office && os < 0 ? ox1 + 1.2 : xb0 + 1.2, db = office && os > 0 ? ox0 - 1.2 : xb1 - 1.2;
+  let da = hasOff && os < 0 ? ox1 + 1.2 : xb0 + 1.2, db = hasOff && os > 0 ? ox0 - 1.2 : xb1 - 1.2;
   if (kind === 'highbay' && annexD === 0 && lowX) { da = Math.max(da, lowX[0] + 1); db = Math.min(db, lowX[1] - 1); }
   const docks = slots(da, db, short ? 4.0 : 4.2, 0.2);
   const yd = 1.2;
@@ -934,16 +934,16 @@ function coldBlock(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, 
   }
 
   // ---- 事務所の前の駐車場、照明 ----
-  if (office && D >= 48) {
+  if (hasOff && D >= 48) {
     const px0 = os < 0 ? ox0 : ox0 - 0.5, px1 = os < 0 ? ox1 + 0.5 : ox1;
     const pz1 = hd - strip - 0.3;
     if (pz1 - 5.2 > oz1 + 3) carRow(mb, rng, Math.max(-hw + 1, px0), Math.min(hw - 1, px1), pz1 - 5.2, pz1, 0.7);
-  } else if (office) {
+  } else if (hasOff) {
     for (let i = 0; i < 2; i++) car(mb, ox0 + 1 + i * 2.8, hd - strip - 2.6, Math.PI / 2, rng.pick(CARS));
   }
   const cp: PoolAt = { a: [sL, zF, sR, hd - strip], base: K.court };
   if (!edge(ls)) pole(mb, ls > 0 ? hw - 1.4 : -hw + 1.4, hd - strip - 1.2, 11, cp);
-  if (office && W >= 48) pole(mb, (ox0 + ox1) / 2 - os * (ow / 2 + 4), hd - strip - 1.2, 11, cp);
+  if (hasOff && W >= 48) pole(mb, (ox0 + ox1) / 2 - os * (ow / 2 + 4), hd - strip - 1.2, 11, cp);
 }
 
 // 平屋のクロスドック（長いドックの列）と、横の冷凍コンテナの棚（4×3 以上）
