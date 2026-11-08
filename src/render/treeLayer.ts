@@ -9,6 +9,7 @@ import { ROADS, RoadType } from '../sim/defs';
 import { hash2 } from '../sim/rng';
 import { shared, AMB_IRR_GLSL, AMB_IRR_PARS, ambUniforms } from './materials';
 import type { TreeSpot } from './buildingGen';
+import { GARDEN_LIGHT_PARS, gardenUniforms } from './gardenLight';
 
 const MAX_TREES = 64000;
 
@@ -517,6 +518,7 @@ function treeMaterial(lod: number, conifer: boolean, cards = false) {
     sh.uniforms.uSkyC = shared.uSkyHz;
     sh.uniforms.uNight = shared.uNight;
     ambUniforms(sh.uniforms);
+    gardenUniforms(sh.uniforms);
     sh.vertexShader = sh.vertexShader
       .replace(
         '#include <common>',
@@ -526,7 +528,10 @@ function treeMaterial(lod: number, conifer: boolean, cards = false) {
         uniform vec3 uRing;
         uniform float uFarS;
         varying float vLeaf;
-        varying vec3 vLeafP;`,
+        varying vec3 vLeafP;
+        // 夜の庭の明かり（ライトアップ・灯籠・街灯）に照らされる量。頂点ごとに求める
+        varying vec3 vGL;
+        ${GARDEN_LIGHT_PARS}`,
       )
       .replace(
         '#include <color_vertex>',
@@ -544,6 +549,8 @@ function treeMaterial(lod: number, conifer: boolean, cards = false) {
         ${conifer ? '' : MORPH}
         // 模様の位置（世界の座標。ゆれる前の位置なので、模様は葉といっしょに動く）
         vLeafP = (instanceMatrix * vec4(transformed, 1.0)).xyz;
+        vGL = vec3(0.0);
+        if (uGLn > 0) vGL = gardenLight(vLeafP, normalize(mat3(instanceMatrix) * objectNormal), 0.2 + 0.3 * aLeaf);
         ${lod < 2 ? WIND : ''}
         ${lod >= 1 ? '{ vec2 dd = instanceMatrix[3].xz - uRing.xy; if (dot(dd, dd) < uRing.z) transformed = vec3(0.0); }' : ''}
         ${lod === 2 ? 'transformed *= uFarS;' : ''}`,
@@ -554,6 +561,7 @@ function treeMaterial(lod: number, conifer: boolean, cards = false) {
         `#include <common>
         varying float vLeaf;
         varying vec3 vLeafP;
+        varying vec3 vGL;
         uniform highp sampler3D uLeafTex;
         uniform vec3 uSkyC;
         uniform float uNight;
@@ -643,7 +651,9 @@ function treeMaterial(lod: number, conifer: boolean, cards = false) {
         float rimF = pow(1.0 - saturate(dot(normal, normalize(vViewPosition))), 3.0);
         reflectedLight.indirectDiffuse += max(uSkyC, vec3(0.05, 0.06, 0.09) * uNight) * diffuseColor.rgb * rimF * 0.7 * vLeaf;
         // 夜：街あかりや月明かりの照り返しで、木が真っ黒の固まりにならないように少し持ち上げる
-        reflectedLight.indirectDiffuse += diffuseColor.rgb * vec3(0.07, 0.08, 0.11) * uNight;`,
+        reflectedLight.indirectDiffuse += diffuseColor.rgb * vec3(0.07, 0.08, 0.11) * uNight;
+        // 庭のライトアップや灯籠の明かり
+        reflectedLight.directDiffuse += vGL * diffuseColor.rgb;`,
       );
   };
   m.customProgramCacheKey = () => 'tree2-' + lod + (conifer ? 'c' : 'b') + (cards ? 'L' : '');
@@ -946,7 +956,7 @@ export class TreeLayer {
     const v = new THREE.Vector3(), sc = new THREE.Vector3();
     const col = new THREE.Color();
     // src: 0=自然の林, 1=公園や庭, 2=街路樹。sp を決めると樹種をそろえる（同じ通りの街路樹）
-    const put = (kind: number, x: number, y: number, z: number, s: number, seed: number, src: number, sp = -1) => {
+    const put = (kind: number, x: number, y: number, z: number, s: number, seed: number, src: number, sp = -1, colHex?: number, shape?: number) => {
       const cx = Math.min(cn - 1, Math.max(0, Math.floor(x / CELL / CHUNK))), cz = Math.min(cn - 1, Math.max(0, Math.floor(z / CELL / CHUNK)));
       const L = lists[cz * cn + cx][kind];
       if (L.seed.length >= MAX_TREES) return;
@@ -954,6 +964,9 @@ export class TreeLayer {
       const h1 = hash2(ix, iz, 21), h2 = hash2(ix, iz, 22), h3 = hash2(ix, iz, 23), h4 = hash2(ix, iz, 24);
       // 街路樹は通りごとに色もそろえる
       const pk = pickSpecies(kind, src, sp >= 0 ? sp : h1, sp >= 0 ? (sp * 9.73 + h2 * 0.04) % 1 : h2);
+      // 庭の木などは、形と色を決めて植える（青もみじなど）
+      if (shape !== undefined) pk.shape = shape;
+      if (colHex !== undefined) pk.color = new THREE.Color(colHex);
       const sh = SHAPE[kind][pk.shape];
       // 少しだけ傾ける（自然の木らしく）
       const tilt = src === 2 ? 0.012 : 0.035;
@@ -983,7 +996,7 @@ export class TreeLayer {
           put(kind, wx, wy, wz, 0.8 + hs * 0.6, hs, 0);
         }
       }
-    for (const t of extra) put(t.kind, t.x, t.y, t.z, t.s, hash2(Math.floor(t.x), Math.floor(t.z), 4), 1);
+    for (const t of extra) put(t.kind, t.x, t.y, t.z, t.s, hash2(Math.floor(t.x), Math.floor(t.z), 4), 1, -1, t.col, t.shape);
     // 街路樹：まっすぐな一般道・一方通行・大通り・街路の歩道に、街灯と1マスずつ交互に植える
     for (let y = 0; y < n; y++)
       for (let x = 0; x < n; x++) {

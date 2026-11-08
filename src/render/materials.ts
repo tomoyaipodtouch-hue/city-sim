@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { detailTexture, MAT_TILE_M } from './textures';
 import { surfaceNoise } from './surfaceNoise';
+import { GARDEN_LIGHT_PARS, gardenUniforms } from './gardenLight';
 
 export const shared = {
   uNight: { value: 0 },
@@ -65,6 +66,7 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
     sh.uniforms.uDetail = { value: detailTexture() };
     sh.uniforms.uTile = { value: MAT_TILE_M };
     sh.uniforms.uSurf = { value: surfaceNoise() };
+    gardenUniforms(sh.uniforms);
     sh.vertexShader = sh.vertexShader
       .replace(
         '#include <common>',
@@ -114,6 +116,11 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
         float gRough = 0.8;
         float gMetal = 0.0;
         float gAO = 1.0;
+        // 庭（苔・小石・石・葉の房）と、夜にともる灯籠の火袋
+        float gGarden = 0.0;
+        float gFol = 0.0;
+        float gGlowG = 0.0;
+        ${GARDEN_LIGHT_PARS}
         uniform highp sampler2DArray uDetail;
         uniform sampler2D uSurf;
         uniform float uTile[10];
@@ -314,6 +321,53 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
             gGlow = 1.0;
             diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.8, 0.82, 0.85), 0.5);
             metalPart = 0.5;
+          } else if (pat > 13.5 && pat < 17.5) { // 庭（14 = 石や木、15 = 地面、16 = 葉の房、17 = 夜にともる面）
+            gGarden = 1.0;
+            vec2 gp = vWp.xz;
+            if (pat > 16.5) {
+              // 灯籠の火袋・行灯の紙（夜にともる）
+              gGlowG = 1.0;
+            } else if (pat > 14.5 && pat < 15.5) {
+              // 地面：苔・土・小石
+              float moss = clamp(vUvm.x, 0.0, 1.0), peb = clamp(vUvm.y, 0.0, 1.0);
+              vec4 n1 = texture2D(uSurf, gp * (1.0 / 13.0));
+              vec4 n2 = texture2D(uSurf, mat2(0.8, -0.6, 0.6, 0.8) * gp * (1.0 / 3.1) + 0.31);
+              vec3 c = diffuseColor.rgb * (0.86 + 0.28 * n2.r);
+              // 苔：こんもりした株は明るい黄緑、すき間は暗い
+              float cush = smoothstep(0.32, 0.72, n2.g * 0.65 + n1.a * 0.35);
+              vec3 mc = diffuseColor.rgb * mix(vec3(0.74, 0.8, 0.76), vec3(1.14, 1.12, 0.88), cush) * (0.9 + 0.2 * n1.g);
+              c = mix(c, mc, moss);
+              if (peb > 0.01) {
+                // 小石（州浜）。遠くでは平均の色にする（ちらつかないように）
+                vec2 q = gp * 5.5;
+                vec2 iq = floor(q), fq = fract(q);
+                float d1 = 8.0, d2 = 8.0;
+                vec2 id = vec2(0.0);
+                for (int j = -1; j <= 1; j++)
+                  for (int i = -1; i <= 1; i++) {
+                    vec2 o = vec2(float(i), float(j));
+                    vec2 hh = vec2(h21(iq + o), h21(iq + o + 17.3));
+                    vec2 rr = o + 0.15 + 0.7 * hh - fq;
+                    float dd = dot(rr, rr);
+                    if (dd < d1) { d2 = d1; d1 = dd; id = iq + o; } else if (dd < d2) d2 = dd;
+                  }
+                float edge = sqrt(d2) - sqrt(d1);
+                float fade = 1.0 - smoothstep(0.08, 0.3, length(fwidth(q)));
+                float tone = h21(id + 3.7);
+                vec3 pc = diffuseColor.rgb * mix(0.74, 1.16, tone) * mix(vec3(1.0), vec3(1.07, 1.0, 0.9), step(0.7, h21(id + 9.1)));
+                pc *= mix(0.55, 1.0, smoothstep(0.02, 0.14, edge));
+                pc = mix(diffuseColor.rgb * 0.93, pc, fade);
+                c = mix(c, pc, peb);
+              }
+              diffuseColor.rgb = c;
+              gRough = mix(mix(0.9, 1.0, moss), 0.62, peb);
+            } else if (pat > 15.5) {
+              // 刈り込みの木・松の葉の房：細かい房のむら
+              gFol = 1.0;
+              vec4 n1 = texture2D(uSurf, vec2(gp.x + vWp.y * 0.7, gp.y - vWp.y * 0.5) * (1.0 / 1.7));
+              diffuseColor.rgb *= 0.7 + 0.6 * n1.r;
+              gRough = 0.95;
+            }
           } else { // 搬入口
             float f = mod(uv.x, 6.0);
             float door = step(1.0, f) * step(f, 5.0) * step(uv.y, 4.2);
@@ -358,7 +412,7 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
         }
         // 壁の根元の陰（地面や下の屋根との境目）。まわりからの光ほど強くさえぎられる
         // 壁の座標を持たない面（円柱やドーム、斜めの部材など）は高さがわからないので、陰をつけない
-        if (vNy < 0.5 && abs(vUvm.x) + abs(vUvm.y) > 1e-4) {
+        if (vNy < 0.5 && gGarden < 0.5 && abs(vUvm.x) + abs(vUvm.y) > 1e-4) {
           float k = smoothstep(0.0, 5.0, vUvm.y);
           gAO = mix(0.5, 1.0, k);
           diffuseColor.rgb *= mix(0.86, 1.0, k);
@@ -419,6 +473,12 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
         }`,
       )
       .replace(
+        '#include <lights_fragment_end>',
+        `#include <lights_fragment_end>
+        // 庭：灯籠やライトアップの明かり
+        if (gGarden > 0.5 && uGLn > 0) reflectedLight.directDiffuse += gardenLight(vWp, inverseTransformDirection(normal, viewMatrix), gFol * 0.45) * material.diffuseColor;`,
+      )
+      .replace(
         '#include <aomap_fragment>',
         `#include <aomap_fragment>
         reflectedLight.indirectDiffuse *= gAO;
@@ -430,7 +490,8 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
         totalEmissiveRadiance += vec3(1.0, 0.82, 0.5) * lit * uNight * 0.9;
         totalEmissiveRadiance += vec3(0.75, 0.88, 1.0) * gGlow * uNight * 1.4;
         totalEmissiveRadiance += gLed * uNight * 1.3;
-        totalEmissiveRadiance += diffuseColor.rgb * gLit * uNight * 1.1;`,
+        totalEmissiveRadiance += diffuseColor.rgb * gLit * uNight * 1.1;
+        totalEmissiveRadiance += vec3(1.0, 0.68, 0.36) * gGlowG * uNight * 2.2;`,
       );
   };
   m.customProgramCacheKey = () => 'bld-pbr-' + (bldQuality.hq ? 1 : 0);

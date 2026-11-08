@@ -18,7 +18,18 @@ export const PAT = {
   glow: 11, // 夜に光る帯（頂部のライトアップ）
   lit: 12, // 夜に照明で明るくなる面（スタジアムのフィールド）。色はそのまま明るくなる
   led: 13, // 夜に色がゆっくり変わる LED の面（光の冠）
+  // 庭の石や木（夜は灯籠やライトアップの明かりに照らされる）
+  garden: 14,
+  // 庭の地面：面の座標 (u, v) = (苔の割合, 小石の割合)
+  gardenGround: 15,
+  // 刈り込みの木や松の葉の房（細かい房のむら）
+  gardenLeaf: 16,
+  // 夜にともる面（灯籠の火袋、行灯の紙）
+  gardenGlow: 17,
 } as const;
+
+// 庭の模様（石・地面・葉・灯籠）なら、上の面にも「庭の石や木」の模様をつける（窓の模様などは上の面にはつけない）
+const gardenPat = (p: number) => (p >= PAT.garden && p <= PAT.gardenGlow ? PAT.garden : 0);
 
 export class MeshBuilder {
   pos: number[] = [];
@@ -137,7 +148,7 @@ export class MeshBuilder {
     }
   }
 
-  tri(a: [number, number, number], b: [number, number, number], c: [number, number, number], color: THREE.Color) {
+  tri(a: [number, number, number], b: [number, number, number], c: [number, number, number], color: THREE.Color, pat = 0) {
     const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     const e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
     let nx = e1[1] * e2[2] - e1[2] * e2[1];
@@ -145,10 +156,10 @@ export class MeshBuilder {
     let nz = e1[0] * e2[1] - e1[1] * e2[0];
     const l = Math.hypot(nx, ny, nz) || 1;
     nx /= l; ny /= l; nz /= l;
-    this.curMat = this.autoMat(ny, color, 0);
-    const i0 = this.vtx(...a, nx, ny, nz, color, 0, 0, 0);
-    const i1 = this.vtx(...b, nx, ny, nz, color, 0, 0, 0);
-    const i2 = this.vtx(...c, nx, ny, nz, color, 0, 0, 0);
+    this.curMat = this.autoMat(ny, color, pat);
+    const i0 = this.vtx(...a, nx, ny, nz, color, 0, 0, pat);
+    const i1 = this.vtx(...b, nx, ny, nz, color, 0, 0, pat);
+    const i2 = this.vtx(...c, nx, ny, nz, color, 0, 0, pat);
     this.idx.push(i0, i1, i2);
   }
 
@@ -168,9 +179,10 @@ export class MeshBuilder {
     this.quad([x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1], wall, pat, wz, h);
     // 西（-x）
     this.quad([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], wall, pat, wz, h);
-    // 上
-    this.quad([x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0], r, 0);
-    if (bottom) this.quad([x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], r, 0);
+    // 上（庭の石や木は、上の面も夜の明かりに照らされる）
+    const tp = gardenPat(pat);
+    this.quad([x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0], r, tp);
+    if (bottom) this.quad([x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], r, tp);
   }
 
   // 切妻屋根（棟は x 方向）
@@ -263,7 +275,7 @@ export class MeshBuilder {
     for (let i = 0; i < n; i++) { tx += t[i][0] / n; tz += t[i][1] / n; tyc += (ty ? ty[i] : y1) / n; }
     for (let i = 0; i < n; i++) {
       const j = (i + 1) % n;
-      this.tri([tx, tyc, tz], [t[i][0], ty ? ty[i] : y1, t[i][1]], [t[j][0], ty ? ty[j] : y1, t[j][1]], rc);
+      this.tri([tx, tyc, tz], [t[i][0], ty ? ty[i] : y1, t[i][1]], [t[j][0], ty ? ty[j] : y1, t[j][1]], rc, gardenPat(pat));
     }
   }
 
@@ -283,6 +295,28 @@ export class MeshBuilder {
     const i2 = this.vtx(x1, y, z0, 0, 1, 0, c10, 0, 0, 0);
     const i3 = this.vtx(x0, y, z0, 0, 1, 0, c00, 0, 0, 0);
     this.idx.push(i0, i1, i2, i0, i2, i3);
+  }
+
+  // 格子の面（頂点を共有する）。nx×nz マス、頂点は (nx+1)×(nz+1) 個で k = j*(nx+1)+i の順。
+  // P = 位置、N = 法線（3つずつ）、Cl = 色（3つずつ）、U = 面の座標（2つずつ）。keep(i, j) が false のマスは描かない
+  gridSurface(nx: number, nz: number, P: Float32Array, N: Float32Array, Cl: Float32Array, U: Float32Array, pat: number, mat: number, keep: (i: number, j: number) => boolean) {
+    const base = this.pos.length / 3;
+    this.curMat = mat;
+    const col = new THREE.Color();
+    const nv = (nx + 1) * (nz + 1);
+    for (let k = 0; k < nv; k++) {
+      col.setRGB(Cl[k * 3], Cl[k * 3 + 1], Cl[k * 3 + 2]);
+      this.vtx(P[k * 3], P[k * 3 + 1], P[k * 3 + 2], N[k * 3], N[k * 3 + 1], N[k * 3 + 2], col, U[k * 2], U[k * 2 + 1], pat);
+    }
+    const V = (i: number, j: number) => j * (nx + 1) + i;
+    for (let j = 0; j < nz; j++)
+      for (let i = 0; i < nx; i++) {
+        if (!keep(i, j)) continue;
+        const a = V(i, j + 1), b = V(i + 1, j + 1), c = V(i + 1, j), d = V(i, j);
+        // 対角線は高さの差が小さい方で切る（尾根や谷の線がなめらかになる）
+        if (Math.abs(P[a * 3 + 1] - P[c * 3 + 1]) <= Math.abs(P[b * 3 + 1] - P[d * 3 + 1])) this.idx.push(base + a, base + b, base + c, base + a, base + c, base + d);
+        else this.idx.push(base + b, base + c, base + d, base + b, base + d, base + a);
+      }
   }
 
   get vertexCount() {

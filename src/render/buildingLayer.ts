@@ -5,7 +5,7 @@ import type { Building } from '../sim/world';
 import { MeshBuilder } from './builder';
 import { generateBuilding, setupLot, TreeSpot, farmFields, FxSpot } from './buildingGen';
 import { createBuildingMaterial } from './materials';
-import { PondBuilder, createPondMaterial, createGlowMaterial } from './parkPond';
+import { PondBuilder, createPondMaterial, createGlowMaterial, createFallMaterial } from './parkPond';
 import { CIVIC, CivicId, FARM_TILE, ZoneType } from '../sim/defs';
 
 const CHUNK = 16;
@@ -15,6 +15,9 @@ interface Chunk {
   mesh: THREE.Mesh | null;
   pond: THREE.Mesh | null; // 大公園の池の水面
   glow: THREE.Mesh | null; // 夜の街灯の光だまり
+  fall: THREE.Mesh | null; // 庭園の滝の水と、滝つぼの泡
+  lights: number[]; // 夜の明かり（庭の灯籠・ライトアップ・公園の街灯）
+  falls: number[]; // 滝つぼ（水面の波紋）
   trees: TreeSpot[];
   beacons: number[]; // 航空障害灯の位置（x, y, z の並び）
   fx: FxSpot[]; // 煙、炎、トラックの道すじ
@@ -25,6 +28,11 @@ export class BuildingLayer {
   material = createBuildingMaterial();
   pondMaterial = createPondMaterial();
   glowMaterial = createGlowMaterial();
+  fallMaterial = createFallMaterial();
+  // 全部の区画の明かりと滝つぼ（区画が変わったら集め直す）
+  private lightsAll: number[] = [];
+  private fallsAll: number[] = [];
+  private gatherDirty = true;
   // 夜の明るさ（0..1）に合わせて、街灯の光だまりを出す
   setNight(v: number) {
     this.glowMaterial.opacity = v;
@@ -83,7 +91,8 @@ export class BuildingLayer {
         this.group.remove(old.mesh);
         old.mesh.geometry.dispose();
       }
-      for (const m of [old?.pond, old?.glow]) {
+      this.gatherDirty = true;
+      for (const m of [old?.pond, old?.glow, old?.fall]) {
         if (!m) continue;
         this.group.remove(m);
         m.geometry.dispose();
@@ -126,9 +135,37 @@ export class BuildingLayer {
         glow.renderOrder = 2;
         this.group.add(glow);
       }
-      this.chunks.set(c, { key, mesh, pond, glow, trees, beacons, fx });
+      let fall: THREE.Mesh | null = null;
+      const fg = pb.fallGeometry();
+      if (fg) {
+        fall = new THREE.Mesh(fg, this.fallMaterial);
+        fall.renderOrder = 3;
+        // 地下を見るときは、透かさずに隠す
+        fall.userData.fx = true;
+        this.group.add(fall);
+      }
+      this.chunks.set(c, { key, mesh, pond, glow, fall, trees, beacons, fx, lights: pb.lights, falls: pb.falls });
     }
     return treesChanged;
+  }
+
+  private gather() {
+    if (!this.gatherDirty) return;
+    this.gatherDirty = false;
+    this.lightsAll = [];
+    this.fallsAll = [];
+    for (const c of this.chunks.values()) {
+      for (const v of c.lights) this.lightsAll.push(v);
+      for (const v of c.falls) this.fallsAll.push(v);
+    }
+  }
+  gardenLights(): number[] {
+    this.gather();
+    return this.lightsAll;
+  }
+  gardenFalls(): number[] {
+    this.gather();
+    return this.fallsAll;
   }
 
   allBeacons(): number[] {

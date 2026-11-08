@@ -22,6 +22,7 @@ import { SkyEnv } from './env';
 import { shared, bldQuality } from './materials';
 import { findIslands } from './turnback';
 import { pondUniforms } from './parkPond';
+import { updateGardenLights } from './gardenLight';
 
 export interface Quality {
   shadows: boolean;
@@ -214,7 +215,11 @@ export class CityRenderer {
       }
     };
     if (this.terrain) fade((this.terrain.mesh as THREE.Mesh).material, on ? 0.35 : 1);
-    this.buildings.group.traverse((o) => fade((o as THREE.Mesh).material, on ? 0.2 : 1));
+    this.buildings.group.traverse((o) => {
+      // 滝の水（もともと透けている）は、地下を見るときは隠す
+      if (o.userData.fx) { o.visible = !on; return; }
+      fade((o as THREE.Mesh).material, on ? 0.2 : 1);
+    });
     fade(this.buildings.material, on ? 0.2 : 1);
     this.roads.group.traverse((o) => fade((o as THREE.Mesh).material, on ? 0.35 : 1));
     // 道路の橋の構造物（橋脚・塔・ケーブルなど）も、路面と同じように薄くする
@@ -362,6 +367,8 @@ export class CityRenderer {
       pondUniforms.uSky.value.copy(wu.uSky.value);
       pondUniforms.uNight.value = this.night;
     }
+    // 庭園の灯籠・ライトアップ・公園の街灯（画面の中心に近いもの）と、滝つぼの波紋
+    updateGardenLights(this.buildings.gardenLights(), this.buildings.gardenFalls(), this.rig.target.x, this.rig.target.z, shared.uNight.value);
     this.sky.follow(this.rig.camera);
     this.lights.update(now / 1000);
     this.trees.setLod(this.rig.dist);

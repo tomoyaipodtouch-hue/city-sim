@@ -8,6 +8,7 @@ import type { Building } from '../sim/world';
 import type { Grid } from '../sim/grid';
 import { BState } from '../sim/world';
 import { PondBuilder, cpLake, LAKE_T } from './parkPond';
+import { kyotoGarden } from './gardenGen';
 
 // 動くもの（煙、フレアの炎、トラックの道すじ）の位置。世界の座標
 export type FxSpot =
@@ -26,6 +27,8 @@ export interface TreeSpot {
   z: number;
   s: number;
   kind: number; // 0=広葉樹, 1=針葉樹
+  col?: number; // 葉の色を決める（庭の青もみじなど）
+  shape?: number; // 形を決める（treeLayer の SHAPE の番号）
 }
 
 const C = (hex: number) => new THREE.Color(hex);
@@ -100,12 +103,12 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
   // 工場・発電所などの斜めの屋根は金属
   mb.slopeRoofMat = b.civic || b.type === 'ID' || b.type === 'IM' || b.type === 'IH' ? MAT.metal : MAT.shingle;
   mb.abandoned = b.state === BState.Abandoned;
-  const tf = (lx: number, lz: number, s = 1, kind = 0, ly = 0) => {
+  const tf = (lx: number, lz: number, s = 1, kind = 0, ly = 0, col?: number, shape?: number) => {
     // ローカル座標から世界座標へ（MeshBuilder と同じ変換）
     const a = b.face === 0 ? -Math.PI / 2 : b.face === 4 ? Math.PI / 2 : b.face === 6 ? Math.PI : 0;
     const cos = Math.cos(a), sin = Math.sin(a);
     const cx = (b.x + b.w / 2) * CELL, cz = (b.y + b.h / 2) * CELL;
-    trees.push({ x: lx * cos - lz * sin + cx, y: f.base + ly, z: lx * sin + lz * cos + cz, s, kind });
+    trees.push({ x: lx * cos - lz * sin + cx, y: f.base + ly, z: lx * sin + lz * cos + cz, s, kind, col, shape });
   };
   if (b.state === BState.Building) {
     construction(mb, f, rng);
@@ -151,7 +154,7 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     case 'playground': playground(mb, f, rng, tf); break;
     case 'greenway': greenway(mb, f, rng, tf); break;
     case 'sports': sportsPark(mb, f, rng, tf); break;
-    case 'garden': pondGarden(mb, f, rng, tf); break;
+    case 'garden': kyotoGarden(mb, f, rng, tf, pond); break;
     case 'cpark_a': case 'cpark_b': centralPark(mb, b, f, trees, isCpark, pond); break;
     case 'busstop': busStop(mb, f); break;
     case 'station': station(mb, f, 0); break;
@@ -191,7 +194,7 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
   mb.abandoned = false;
 }
 
-type TF = (lx: number, lz: number, s?: number, kind?: number, y?: number) => void;
+export type TF = (lx: number, lz: number, s?: number, kind?: number, y?: number, col?: number, shape?: number) => void;
 
 function lawn(mb: MeshBuilder, f: LotFrame, rng: Rng) {
   mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.06, rng.next() < 0.5 ? PALETTE.lawn : PALETTE.lawn2);
@@ -1201,6 +1204,8 @@ function centralPark(mb: MeshBuilder, b: Building, f: LotFrame, trees: TreeSpot[
     mb.box(lx - 0.17, 3.7, lz - 0.17, lx + 0.17, 4.15, lz + 0.17, CP.lamp, PAT.lit);
     mb.box(lx - 0.22, 4.15, lz - 0.22, lx + 0.22, 4.25, lz + 0.22, CP.pole);
     pond?.addGlow(lx, f.base + 0.16, lz);
+    // 街灯の明かりは、まわりの木や池の水面にも届く
+    pond?.addLight(lx, f.base + 4.0, lz, 9, 1.0, 0.8, 0.52);
   }
   // 池のまわり：岸の石や岩、水ぎわの葦
   for (let z = Z0 + 1; z < Z1 - 1; z += 2.2)
@@ -1297,52 +1302,6 @@ function centralPark(mb: MeshBuilder, b: Building, f: LotFrame, trees: TreeSpot[
       const dens = m > 0.45 ? 0.025 : m > 0.1 ? 0.18 : 0.42 + 0.4 * Math.max(0, -m);
       if (h < dens) tree(tx, tz, 0.8 + cpHash(x + 3, z) * 0.7, cpHash(x, z + 9) < 0.22 ? 1 : 0);
     }
-}
-
-// 池のある庭園（2×3）：池、太鼓橋、東屋、灯籠、飛び石
-function pondGarden(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
-  const L = longAxis(mb, f, tf);
-  const A = L.A / 2, Cw = L.Cw / 2;
-  L.ground(-A + 0.2, -Cw + 0.2, A - 0.2, Cw - 0.2, 0.08, C(0x6f9a4c));
-  // 池（いくつかの板を重ねて、まるみのある形に）
-  const water = PALETTE.water, shore = C(0xb7ab92);
-  const pond: [number, number, number, number][] = [[-14, -9, 6, 3], [-17, -6, -11, 1], [2, -7, 9, -1], [-10, 3, -2, 6]];
-  for (const [a0, c0, a1, c1] of pond) L.ground(a0 - 0.8, c0 - 0.8, a1 + 0.8, c1 + 0.8, 0.1, shore);
-  for (const [a0, c0, a1, c1] of pond) L.ground(a0, c0, a1, c1, 0.13, water);
-  // 太鼓橋（朱色）
-  const red = C(0xb8402e);
-  const steps = 6;
-  for (let k = 0; k < steps; k++) {
-    const t = (k + 0.5) / steps;
-    const h = 0.4 + Math.sin(t * Math.PI) * 1.4;
-    L.box(-4.5 + k * 1.1, h - 0.2, -4.4, -4.5 + (k + 1) * 1.1, h, -2.6, red);
-  }
-  for (const c of [-4.5, -2.5]) L.box(-4.5, 1.6, c - 0.06, 2.1, 1.75, c + 0.06, red);
-  // 東屋
-  L.box(A - 10, 0, Cw - 9, A - 4, 0.4, Cw - 3, PALETTE.wood);
-  for (const [a, c] of [[A - 9.6, Cw - 8.6], [A - 4.4, Cw - 8.6], [A - 9.6, Cw - 3.4], [A - 4.4, Cw - 3.4]]) L.box(a - 0.15, 0.4, c - 0.15, a + 0.15, 2.8, c + 0.15, PALETTE.wood);
-  {
-    const alongX = f.W >= f.D;
-    const [x0, z0] = alongX ? [A - 10.6, Cw - 9.6] : [Cw - 9.6, A - 10.6];
-    const [x1, z1] = alongX ? [A - 3.4, Cw - 2.4] : [Cw - 2.4, A - 3.4];
-    mb.hip(Math.min(x0, x1), Math.min(z0, z1), Math.max(x0, x1), Math.max(z0, z1), 2.8, 2.2, C(0x4a4d52), 0.3);
-  }
-  // 石灯籠と飛び石
-  for (const [a, c] of [[8, 2], [-16, 5]]) {
-    L.box(a - 0.3, 0, c - 0.3, a + 0.3, 0.9, c + 0.3, PALETTE.concrete);
-    L.box(a - 0.5, 0.9, c - 0.5, a + 0.5, 1.4, c + 0.5, PALETTE.concrete);
-    L.box(a - 0.6, 1.4, c - 0.6, a + 0.6, 1.6, c + 0.6, PALETTE.concrete);
-  }
-  for (let k = 0; k < 7; k++) L.ground(4 + k * 1.6, 3 + Math.sin(k) * 0.8, 4.9 + k * 1.6, 3.9 + Math.sin(k) * 0.8, 0.14, PALETTE.concrete);
-  // 木（もみじ風の赤い木を少し）
-  for (let k = 0; k < 16; k++) {
-    const a = -A + 2 + rng.next() * (L.A - 4), c = -Cw + 2 + rng.next() * (L.Cw - 4);
-    if (pond.some(([a0, c0, a1, c1]) => a > a0 - 2 && a < a1 + 2 && c > c0 - 2 && c < c1 + 2)) continue;
-    if (a > A - 11 && c > Cw - 10) continue;
-    L.tree(a, c, 0.7 + rng.next() * 0.6, rng.next() < 0.35 ? 1 : 0);
-  }
-  // 生け垣
-  L.box(-A + 0.4, 0, -Cw + 0.4, A - 0.4, 1.1, -Cw + 1.2, PALETTE.hedge);
 }
 
 // ---------------- 中密度・高密度 ----------------
