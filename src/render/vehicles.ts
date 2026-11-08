@@ -598,11 +598,14 @@ export function person() {
 // kind：rail（鉄道）、erail（高架鉄道）、sub（地下鉄）、mono（モノレール）。head = 運転台つき（前が +z）
 export const TRAIN_SPEC = {
   rail: { L: 18, gap: 0.8, cars: 5, stripe: 0x2e9e5b, stripe2: 0xf08a24 },
-  erail: { L: 18, gap: 0.8, cars: 3, stripe: 0x1f6fd0, stripe2: 0x9ad0ff },
+  // 高架鉄道は短めの車両の4両編成（全体の長さは 18m の3両と同じ 55.6m。カーブで車体が線路からはみ出しにくい）
+  erail: { L: 13.3, gap: 0.8, cars: 4, stripe: 0x1f6fd0, stripe2: 0x9ad0ff },
   sub: { L: 17, gap: 0.8, cars: 5, stripe: 0xd23a3a, stripe2: 0xf2f2f2 },
   mono: { L: 13, gap: 0.6, cars: 4, stripe: 0x1aa38a, stripe2: 0x0f6f60 },
 } as const;
 export type TrainKind = keyof typeof TRAIN_SPEC;
+// 台車（前後の車輪）の位置：車体の中心から、車体の半分の長さのこの割合だけ前後
+export const BOGIE = 0.7;
 
 type P2 = [number, number];
 // 横から見た輪郭（[前後, 高さ]）を、幅 w に押し出す
@@ -621,7 +624,7 @@ export function trainCar(kind: TrainKind, head: boolean) {
   const mono = kind === 'mono';
   const W = mono ? 2.7 : 2.9;
   const y0 = mono ? -0.5 : 0.95, y1 = mono ? 2.9 : 4.0; // 車体の下と上
-  // 高架鉄道は通勤電車：ステンレスの銀色の車体に色の帯、片側4ドア、平らな前面
+  // 高架鉄道は通勤電車：ステンレスの銀色の車体に色の帯、片側3ドア、平らな前面
   const commuter = kind === 'erail';
   const BODY = mono ? 0xf2f4f6 : commuter ? 0xc9ced3 : 0xe4e7ea;
   const bodyPart = commuter ? PART.alu : PART.plain;
@@ -643,8 +646,8 @@ export function trainCar(kind: TrainKind, head: boolean) {
   parts.push(box(W + 0.04, winH, wl, 0, winY, wz, WIN));
   parts.push(box(W + 0.05, 0.28, L - 0.4, 0, winY - winH / 2 - 0.25, 0, S.stripe));
   parts.push(box(W + 0.05, 0.12, L - 0.4, 0, winY - winH / 2 - 0.5, 0, S.stripe2));
-  // ドア（片側 3〜4 か所、暗い色）
-  const doors = mono ? [-3.5, 2.0] : commuter ? [-6.4, -2.15, 2.15, 6.4] : [-6.0, -1.5, 3.0];
+  // ドア（片側 2〜3 か所、暗い色）。通勤電車は車体の長さに合わせて等間隔に3か所
+  const doors = mono ? [-3.5, 2.0] : commuter ? [-0.65 * hl, 0, 0.65 * hl] : [-6.0, -1.5, 3.0];
   for (const z of doors) {
     const dz = z + (head && !commuter ? -0.8 : head ? -0.6 : 0);
     if (commuter) {
@@ -665,10 +668,12 @@ export function trainCar(kind: TrainKind, head: boolean) {
     // 軌道けたを包むスカート
     parts.push(box(W - 0.2, 0.9, L - 1.0, 0, -0.75, 0, 0x7d848b));
   } else {
-    // 台車と床下の機器
-    for (const z of [hl - 3.2, -hl + 3.2]) parts.push(box(2.3, 0.75, 2.8, 0, 0.55, z, 0x2a2d31));
-    parts.push(box(2.2, 0.45, L - 9, 0, 0.75, 0, 0x3a3d42));
-    if (kind !== 'sub') {
+    // 台車と床下の機器（通勤電車の台車は、線路に沿って並べるときの台車の位置に合わせる）
+    const bz = commuter ? hl * BOGIE : hl - 3.2;
+    for (const z of [bz, -bz]) parts.push(box(2.3, 0.75, 2.8, 0, 0.55, z, 0x2a2d31));
+    parts.push(box(2.2, 0.45, commuter ? 2 * bz - 4.4 : L - 9, 0, 0.75, 0, 0x3a3d42));
+    // 通勤電車は、運転台のある車両にはパンタグラフを載せない（中間の電動車だけ）
+    if (kind !== 'sub' && !(commuter && head)) {
       // パンタグラフ（低い台と、細い枠）
       const pz = head ? -3.5 : 2.5, py = y1 + 0.2;
       parts.push(box(1.0, 0.14, 0.7, 0, py, pz, 0x5a5f66));
