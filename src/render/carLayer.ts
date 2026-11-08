@@ -16,6 +16,9 @@ const MAX_CARS = 1500;
 const MAX_TRUCKS = 300;
 const MAX_PEOPLE = 700;
 const MAX_LIGHTS = (MAX_CARS + MAX_TRUCKS + 200) * 2;
+// カーブで減速する割合（乗用車・列車、バス・大きいトラック、トレーラー）
+const TURN_CAR = 0.8, TURN_BIG = 0.75, TURN_TRAILER = 0.7;
+const JACKKNIFE = (80 * Math.PI) / 180; // トレーラーが折れ曲がる角度の上限
 const KINGPIN = 1.6; // トラクターの中心から連結部までの距離
 const TRAILER_AXLE = 12.2; // 連結部から後ろの車輪までの距離
 const TRAILER_REAR = KINGPIN + 14.2; // トラクターの中心から荷台の後ろの端までの距離
@@ -46,6 +49,10 @@ interface Car extends Cell {
   tbSide?: 0 | 1; // 終点のどちらのホームに入るか（0 = 分岐器で渡った先、1 = 渡らずにそのまま）
   tbDep?: Turnback | null; // 渡らずに入った終点から出ていくところ（出るときに分岐器で渡る）
   vs?: number; // 見た目の乱数（人の背の高さ・歩く周期）
+  sk?: number; // 今の速さの割合（カーブに入る・出るところでなめらかに変える）
+  lo?: number; // 今の車線の横の位置（道路の種類が変わるところで、横に跳ばずに移る）
+  rx?: number; // トレーラーの後ろの車軸の位置（連結部に引かれて動く）
+  rz?: number;
 }
 
 // 走る場所：道路（車・トラック・バス）、歩道、線路（鉄道・高架鉄道・モノレール・地下鉄）
@@ -71,6 +78,8 @@ class Fleet {
   carsPer = 1;
   spacing = 0;
   trailerColors: THREE.Color[] = [];
+  axle = 0; // トレーラーの連結部から後ろの車軸（2軸の真ん中）までの距離
+  lamp: [number, number] = [0, 0]; // 尾灯の位置（連結部から後ろへの距離、高さ）
   cars: Car[] = [];
   cdf = new Float32Array(0);
   nodes = new Int32Array(0);
@@ -104,10 +113,12 @@ class Fleet {
     this.halfLen = S.L / 2;
     return this;
   }
-  withTrailer(geo: THREE.BufferGeometry, palette: number[]) {
+  withTrailer(geo: THREE.BufferGeometry, palette: number[], axle: number, lamp: [number, number]) {
     this.trailer = this.makeMesh(geo, this.max);
     this.trailerColors = palette.map((h) => new THREE.Color(h));
     this.tfoot = footOf(geo);
+    this.axle = axle;
+    this.lamp = lamp;
     return this;
   }
 }
@@ -164,6 +175,7 @@ export class CarLayer {
   private cong: Float32Array | null = null;
   private mtx = new THREE.Matrix4();
   private q = new THREE.Quaternion();
+  private eu = new THREE.Euler(0, 0, 0, 'YXZ');
   private v = new THREE.Vector3();
   private s = new THREE.Vector3(1, 1, 1);
   private up = new THREE.Vector3(0, 1, 0);
@@ -225,10 +237,11 @@ export class CarLayer {
       new Fleet(taxi(), 186, TAXI_COLORS, 'road', 2.2, 0.1),
     ];
     // トラック：箱型、箱型のトレーラー、タンクのトレーラー
+    // （後ろの車軸は形の車輪の真ん中：箱 z = -11.6/-12.8、タンク -11.2/-12.4。尾灯は箱 z = -14.1・高さ 1.05、タンク -13.5・1.32）
     this.trucks = [
       new Fleet(boxTruck(), 160, CAB_COLORS, 'road', 4.4, 0.45),
-      new Fleet(tractor(), 140, CAB_COLORS, 'road', 3.1, 0.4).withTrailer(trailerBox(), [0xf0f1f0, 0xe2e4e6, 0xcfd3d7, 0xa8432f, 0x2d5f9a]),
-      new Fleet(tractor(), 60, CAB_COLORS, 'road', 3.1, 0.15).withTrailer(trailerTank(), [0xd8dce0, 0xc8ccd0, 0xe8eaec]),
+      new Fleet(tractor(), 140, CAB_COLORS, 'road', 3.1, 0.4).withTrailer(trailerBox(), [0xf0f1f0, 0xe2e4e6, 0xcfd3d7, 0xa8432f, 0x2d5f9a], TRAILER_AXLE, [14.1, 1.05]),
+      new Fleet(tractor(), 60, CAB_COLORS, 'road', 3.1, 0.15).withTrailer(trailerTank(), [0xd8dce0, 0xc8ccd0, 0xe8eaec], 11.8, [13.5, 1.32]),
     ];
     this.packers = new Fleet(garbageTruck(), 60, [0x2e7d4f, 0x2e6da4, 0x3f7f3f, 0x5b6067], 'road', 3.7);
     this.bus = new Fleet(cityBus(), 200, [0x1f7a4a, 0x1f5fa8, 0xc8702a, 0xa3262e, 0x2f3a4a], 'bus', 6.0);
@@ -516,11 +529,23 @@ export class CarLayer {
     }
   }
 
+  // node へ向き d で入ったあと、出ていける向きが 135° の折り返しだけか
+  private sharpOnly(node: number, d: number) {
+    let any = false, ok = false;
+    this.grid!.forEachOut(node, (_, d2) => {
+      const t = (d2 - d) & 7;
+      if (t === 4) return;
+      any = true;
+      if (t !== 3 && t !== 5) ok = true;
+    });
+    return any && !ok;
+  }
   // 次のノードを、交通量の多い方を選びやすくして決める（Uターンはしない）
   private pickNext(f: Fleet, node: number, din: number): [number, number] | null {
     const g = this.grid!, tr = f.track === 'road' && f !== this.packers ? this.traffic! : f.vol;
     const opts: [number, number][] = [];
     const ws: number[] = [];
+    const sharp: [number, number, number][] = [];
     let total = 0;
     const add = (v: number, d: number) => {
       if (din >= 0 && d === opp(din)) return;
@@ -531,6 +556,13 @@ export class CarLayer {
         if (fromRamp || g.nodeType(v) === RoadType.Ramp) return;
       }
       const w = (tr[v] || 0) + 2;
+      // トレーラーは、ほかに行けるところがあれば 135° の急な折り返しを通らない（荷台が大きく振られて、後ろの車輪が横にすべるので）。
+      // その先が急な折り返ししかないマスにも入らない
+      const turn = (d - din) & 7;
+      if (f.trailer && ((din >= 0 && (turn === 3 || turn === 5)) || this.sharpOnly(v, d))) {
+        sharp.push([v, d, w]);
+        return;
+      }
       opts.push([v, d]);
       ws.push(w);
       total += w;
@@ -554,6 +586,12 @@ export class CarLayer {
       const x = node % n, y = (node / n) | 0;
       for (let d = 0; d < 8; d++) if (m & (1 << d) && g.inb(x + DX[d], y + DY[d])) add((y + DY[d]) * n + x + DX[d], d);
     }
+    if (!opts.length)
+      for (const [v, d, w] of sharp) {
+        opts.push([v, d]);
+        ws.push(w);
+        total += w;
+      }
     if (!opts.length) return null;
     // 列車は分かれ道で、行き先を順番に変える（どちらの路線にも列車が行くように）
     if (f.mid && opts.length > 1 && din >= 0) {
@@ -822,7 +860,12 @@ export class CarLayer {
         const len = CarLayer.cellLen(c);
         const cg = line || walk ? 1 : Math.max(this.cong![c.from], 1);
         const kmh = walk ? 4.5 + (c.col % 3) * 0.6 : line ? LINES[f.track as LineKind].speedKmh * 1.2 : (merging ? ROADS[tt].speedKmh : def.speedKmh) * (f.track === 'bus' ? 0.8 : f.trailer ? 0.85 : 1);
-        const speed = (((kmh / 3.6) * 0.9) / cg) * (turning ? 0.6 : 1);
+        // カーブの速さの割合は車の種類ごと。マスの境目で急に変わらないよう、なめらかに近づける（一時停止中は変わらない）
+        const turnK = walk ? 0.6 : line || f.halfLen <= 3 ? TURN_CAR : f.trailer ? TURN_TRAILER : TURN_BIG;
+        const sk = turning ? turnK : 1;
+        if (walk || c.sk === undefined) c.sk = sk;
+        else c.sk += (sk - c.sk) * (1 - Math.exp(-dt * 3));
+        const speed = (((kmh / 3.6) * 0.9) / cg) * c.sk;
         let adv = (dt * speed) / len;
         if (f.mid && occ) {
           const st = this.stations.get(f.track);
@@ -872,6 +915,7 @@ export class CarLayer {
             if (c.wait < 6) adv = room / len;
           } else c.wait = 0;
         }
+        const moved = adv * len; // このコマで進んだ道のり（m）
         c.t += adv;
         let guard = 0;
         while (c.t >= 1 && guard++ < 3) {
@@ -879,7 +923,11 @@ export class CarLayer {
           // ときどき入れ替えて、交通量の分布を保つ（トレーラーは途中で消えると目立つので、少なめに）
           if (!f.mid && Math.random() < (f.trailer ? 0.008 : 0.03)) {
             const nc = this.spawn(f);
-            if (nc) Object.assign(c, nc);
+            if (nc) {
+              Object.assign(c, nc);
+              // 別の場所へ移ったので、車線の位置・トレーラーの向き・速さは新しく決め直す
+              c.sk = c.lo = c.rx = c.rz = undefined;
+            }
             continue;
           }
           const nx = this.pickNext(f, c.to, c.d);
@@ -911,7 +959,14 @@ export class CarLayer {
         if (!c.alive) continue;
         this.place(f, c, c.t);
         // 右側通行。一方通行・大通り・高速道路は2車線を使い分ける。電車は複線の、進む向きの右側の線路を走る
-        const lane = walk ? (def.width / 2 + 0.9) * (c.lane ? 1 : -1) : line ? TRACK_GAP : def.oneWay ? (c.lane ? 1 : -1) * def.width * 0.2 : (def.width / 2) * 0.48;
+        const rd = line || walk ? def : ROADS[g.nodeType(c.from)] || ROADS[1]; // マスが変わったときは新しいマスの道路
+        let lane = walk ? (def.width / 2 + 0.9) * (c.lane ? 1 : -1) : line ? TRACK_GAP : rd.oneWay ? (c.lane ? 1 : -1) * rd.width * 0.2 : (rd.width / 2) * 0.48;
+        if (!walk && !line) {
+          // 道路の種類が変わるところ（2車線と1車線など）では、横に跳ばずに少しずつ移る（1 m 進むあいだに 0.3 m まで）
+          if (c.lo === undefined) c.lo = lane;
+          else c.lo += Math.max(-0.3 * moved, Math.min(0.3 * moved, (lane - c.lo) * (1 - Math.exp(-moved / 3))));
+          lane = c.lo;
+        }
         const x = P.x - P.tz * lane, z = P.z + P.tx * lane, h = P.h, tx = P.tx, tz = P.tz;
         if (f.mid) {
           // 列車：車両ごとに、前と後ろの台車の位置から向きを決めて並べる
@@ -960,6 +1015,44 @@ export class CarLayer {
           if (k >= f.max) break;
           continue;
         }
+        // トレーラー：連結部はトラクターの第五輪（中心から KINGPIN 後ろ）。後ろの車軸は連結部に引かれて、車軸の向きにだけ転がる（横にすべらない）。
+        // カーブでは後ろの車軸が内側を通る。ただし狭い曲がり角では内側へ入りすぎるので、道の上の点
+        // （道に沿って後ろにある、連結部から車軸の長さだけ離れた点）の向きへ、離れた量と進んだ道のりに応じて少しずつ回す。
+        // 向き（角度）で動かすので、連結部から車軸までの長さはいつも同じ。画面の外でも動きを続ける
+        let rh = h;
+        if (f.trailer) {
+          const ax = f.axle, kx = x - tx * KINGPIN, kz = z - tz * KINGPIN;
+          let sb = KINGPIN + ax, px = 0, pz = 0;
+          for (let it = 0; it < 3; it++) {
+            this.placeBack(f, c, sb);
+            px = P.x - P.tz * lane;
+            pz = P.z + P.tx * lane;
+            // カーブでは道のりより直線の距離が短いので、その分だけ後ろを探す（きつい折り返しで遠くへ行かないよう範囲を決める）
+            sb = Math.max(ax * 0.5, Math.min(KINGPIN + ax * 1.5, sb + ax - Math.hypot(px - kx, pz - kz)));
+          }
+          rh = P.h; // 坂・橋・ランプでは、後ろの車軸の高さは道の上の点の高さ
+          const toPath = Math.atan2(kx - px, kz - pz);
+          // 前のコマの後ろの車軸から、今の連結部への向き。初めて置くとき・別の場所へ移ったとき
+          // （連結部からの長さが大きく変わったとき）・数がおかしくなったときは、道の上の点から
+          const d0 = c.rx === undefined ? NaN : Math.hypot(kx - c.rx, kz - c.rz!);
+          let a0 = d0 > ax * 0.5 && d0 < ax * 1.5 ? Math.atan2(kx - c.rx!, kz - c.rz!) : toPath;
+          let da = toPath - a0;
+          da -= Math.round(da / (2 * Math.PI)) * 2 * Math.PI;
+          // 道の上の点から 60° 以上（車軸の長さ以上）ずれたときも、道の上へ戻す（道路が作り直されたときなど）
+          if (!(Math.abs(da) < Math.PI / 3)) {
+            a0 = toPath;
+            da = 0;
+          }
+          // 戻す割合：進んだ道のり × √(離れた量) ÷ (道路の幅 × 0.7)。大きく進んだコマでも行き過ぎない形にする
+          const u = (moved * Math.sqrt(2 * ax * Math.abs(Math.sin(da / 2)))) / (0.7 * rd.width);
+          let a = a0 + (da * u) / (1 + u);
+          // 折れ曲がりは 80° まで（きつい折り返しでも、トラクターに重なるほど折れない）
+          let bend = a - Math.atan2(tx, tz);
+          bend -= Math.round(bend / (2 * Math.PI)) * 2 * Math.PI;
+          if (Math.abs(bend) > JACKKNIFE) a += Math.sign(bend) * JACKKNIFE - bend;
+          c.rx = kx - Math.sin(a) * ax;
+          c.rz = kz - Math.cos(a) * ax;
+        }
         // 画面の外の車・人は描かない（トレーラーは後ろへ長いので広めに見る）
         if (!this.seen(x, h, z, f.halfLen + (f.trailer ? 18 : 4))) {
           if (k >= f.max) break;
@@ -976,22 +1069,23 @@ export class CarLayer {
         f.mesh.setColorAt(k, f.colors[c.col]);
         f.mesh.setMatrixAt(k, this.mtx);
         if (!walk) this.addBlob(x, h, z, tx, tz, f.foot);
-        // トレーラー：連結部から後ろの車輪へ向けて置く（カーブで折れ曲がる）
+        // トレーラー：連結部から後ろの車軸へ向けて置く。坂では後ろの車軸の高さに合わせて傾ける
         if (f.trailer) {
-          this.placeBack(f, c, KINGPIN);
-          const kx = P.x - P.tz * lane, kz = P.z + P.tx * lane, kh = P.h;
-          this.placeBack(f, c, KINGPIN + TRAILER_AXLE);
-          const rx = P.x - P.tz * lane, rz = P.z + P.tx * lane;
-          this.v.set(kx, kh, kz);
-          this.q.setFromAxisAngle(this.up, Math.atan2(kx - rx, kz - rz));
+          const ax = f.axle, kx = x - tx * KINGPIN, kz = z - tz * KINGPIN;
+          const bx = (kx - c.rx!) / ax, bz = (kz - c.rz!) / ax; // トレーラーの向き（長さ 1）
+          const yaw = Math.atan2(bx, bz);
+          this.v.set(kx, h, kz);
+          this.eu.set(Math.asin(Math.max(-0.4, Math.min(0.4, (rh - h) / ax))), yaw, 0);
+          this.q.setFromEuler(this.eu);
           this.mtx.compose(this.v, this.q, this.s);
           f.trailer.setMatrixAt(k, this.mtx);
           f.trailer.setColorAt(k, f.trailerColors[c.col2 % f.trailerColors.length]);
-          const al = Math.hypot(kx - rx, kz - rz) || 1;
-          this.addBlob(kx, kh, kz, (kx - rx) / al, (kz - rz) / al, f.tfoot);
+          this.q.setFromAxisAngle(this.up, yaw);
+          this.addBlob(kx, h - ((rh - h) * f.tfoot[2]) / ax, kz, bx, bz, f.tfoot);
           if (lit && nt < MAX_LIGHTS - 2) {
-            const bx = (kx - rx) / TRAILER_AXLE, bz = (kz - rz) / TRAILER_AXLE;
-            for (const sd of [-0.9, 0.9]) tp.setXYZ(nt++, rx - bx * 1.8 - bz * sd, kh + 1.0, rz - bz * 1.8 + bx * sd);
+            const tb = f.lamp[0], th = h + ((rh - h) * tb) / ax + f.lamp[1];
+            tp.setXYZ(nt++, kx - bx * tb + bz * 0.9, th, kz - bz * tb - bx * 0.9);
+            tp.setXYZ(nt++, kx - bx * tb - bz * 0.9, th, kz - bz * tb + bx * 0.9);
           }
         }
         k++;
