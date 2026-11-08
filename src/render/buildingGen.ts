@@ -3054,14 +3054,17 @@ function seedRoll(seed: number, k: number) {
   h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
-// 物流施設の種類を選んで建てる（形は logisticsA・B）。港に近いほどコンテナヤードと冷凍・冷蔵倉庫が増え、
-// 少し離れたところと内陸は配送センターとマルチテナント型が多い。短い辺が 44m 以上ならスロープ付きの大型倉庫を多めに。
-// 汚染型の敷地ではコンテナヤードが中心。登録がなければ false
+// 物流施設の種類を選んで建てる（形は logisticsA・B）。近さで帯に分ける：岸壁のすぐそばはコンテナヤード、
+// その外に冷凍・冷蔵倉庫、さらに外に配送センターと背の高いマルチテナント型（岸壁から外へ、低い→高いの順に並ぶ）。
+// マルチテナント型は 3×3 以上だけ（4×4 は多め）。汚染型の敷地ではコンテナヤードが中心。登録がなければ false
 function logiPick(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, seed: number, port: number, dirty: boolean): boolean {
-  const wide = Math.min(f.W, f.D) >= 44;
+  const wide = Math.min(f.W, f.D) >= 60;
+  const big = Math.round((f.W * f.D) / (CELL * CELL)) >= 9;
+  const ss = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  const bell = (c: number, s: number) => Math.exp(-(((port - c) / s) ** 2));
   const w: [string, number][] = dirty
-    ? [['containerYard', 0.6 + 2.4 * port], ['coldStorage', 0.8], ['distCenter', 0.9], ['multiTenant', 0.4]]
-    : [['containerYard', 2.6 * port * Math.sqrt(port)], ['coldStorage', 0.5 + 1.5 * port], ['distCenter', 1.5 - 0.7 * port], ['multiTenant', (wide ? 1.7 : 1) - 0.6 * port]];
+    ? [['containerYard', 0.5 + 3 * ss(0.7, 1, port)], ['coldStorage', 0.3 + bell(0.65, 0.2)], ['distCenter', 0.2 + 0.5 * bell(0.4, 0.3)], ['multiTenant', big ? 0.4 * bell(0.35, 0.25) : 0]]
+    : [['containerYard', 3 * ss(0.8, 1, port)], ['coldStorage', 0.4 + 2.2 * bell(0.65, 0.2)], ['distCenter', 0.5 + 1.2 * bell(0.45, 0.3)], ['multiTenant', big ? (wide ? 1.8 : 0.6) * bell(0.35, 0.25) : 0]];
   const ok = w.filter(([k, v]) => v > 0 && LOGI[k]);
   if (!ok.length) return false;
   let u = seedRoll(seed, 2) * ok.reduce((s, [, v]) => s + v, 0);

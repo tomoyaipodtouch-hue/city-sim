@@ -11,11 +11,12 @@ import { CIVIC, CivicId, FARM_TILE, ZoneType } from '../sim/defs';
 const CHUNK = 16;
 
 // 港・貨物駅のまわりの工業は物流施設になりやすい。
-// 施設ごとに [いちばん強いときの近さ, その強さのままの距離, 0 になる距離]（距離はマス）
+// 施設ごとに [いちばん強いときの近さ, その強さのままの距離, 0 になる距離]（距離はマス）。
+// 岸壁のすぐそばだけ強く、離れるほどまっすぐ弱くなる（近さで建つものが変わり、岸壁から輪の形に並ぶ）
 const PORT_REACH: Partial<Record<string, [number, number, number]>> = {
-  seaport_l: [1, 20, 48], // 大型コンテナターミナル
-  seaport: [0.6, 10, 28], // 港
-  freight_st: [0.7, 8, 24], // 貨物駅
+  seaport_l: [1, 3, 40], // 大型コンテナターミナル
+  seaport: [0.6, 2, 24], // 港
+  freight_st: [0.7, 2, 20], // 貨物駅
 };
 export const PORT_STEPS = 8; // 近さの段階の数（段階を区画のキーに入れる）
 
