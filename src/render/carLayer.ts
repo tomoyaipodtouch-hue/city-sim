@@ -25,6 +25,7 @@ const TRAILER_REAR = KINGPIN + 14.2; // トラクターの中心から荷台の�
 const TRAIN_ACC = 1.5; // 終点を出る列車の加速（m/s²）
 const LEFT_TERMINAL = -2; // lastStop：終点の駅で向きを変えて、その駅を出ていくところ（駅を出るまで止まらない）
 const FIX_LEN = 16; // 向きを変えたときの横のずれを、この道のり（m）でなくす
+const A_LAT = 8; // 道路の曲がり角で、横にかかる加速度の上限（m/s²）
 
 // 車は「今いるマス（from）」の中を、入ってきた辺の中点から出ていく辺の中点まで、
 // マスの中心を制御点にした曲線（2次ベジェ曲線）に沿って進む。道路の描き方と同じ形になる。
@@ -52,6 +53,11 @@ interface Car extends Cell {
   tbSide?: 0 | 1; // 終点のどちらのホームに入るか（0 = 分岐器で渡った先、1 = 渡らずにそのまま）
   // 向きを変えて出ていくときに反対側の線路へ移るところ（止まった点からの道のりで d1〜d0）と、先頭のいまの道のり s
   dep?: { d0: number; d1: number; s: number } | null;
+  // 終点で向きを変えて出ていく途中、ふさいでいる区間（ホームと分岐器）。最後尾がそこを出たら null。
+  // 着く列車は、ぶつかる向きならその手前で待つ（tb がないのは分岐器のない行き止まり。cells はマスと出ていく向き）
+  leave?: { tb: Turnback | null; side: 0 | 1; cells: Map<number, number>; s: number; d0: number } | null;
+  hw?: number; // 終点の分岐器の手前で待っている秒数（長く待ったら進む）
+  served?: number; // 最後に止まった駅のマス（終点で向きを変えるとき、その駅にもう止まったかを見る）
   acc?: number; // 終点で向きを変えて出ていく列車のいまの速さ（m/s）。止まった位置からゆっくり加速する
   flip?: boolean; // 中間の車両が逆向き（向きを変えるたびに入れ替わる）
   lanes?: Float32Array; // 台車ごとの、線路の中心からの横の位置（前のコマ。前の車両の前の台車から順に）
@@ -62,6 +68,9 @@ interface Car extends Cell {
   lo?: number; // 今の車線の横の位置（道路の種類が変わるところで、横に跳ばずに移る）
   rx?: number; // トレーラーの後ろの車軸の位置（連結部に引かれて動く）
   rz?: number;
+  rs?: number; // 後ろの車軸にいちばん近い道の上の点の、トラクターからの道のり（後ろの車との間隔に使う）
+  nx?: [number, number] | null; // 道路の車：次に進むノードと向き（マスの後半で先に決めておく）
+  ly?: number; // 車線を移るあいだの、車体の向きのずれ（ラジアン）
 }
 
 // 走る場所：道路（車・トラック・バス）、歩道、線路（鉄道・高架鉄道・モノレール・地下鉄）
@@ -189,6 +198,8 @@ export class CarLayer {
   private s = new THREE.Vector3(1, 1, 1);
   private up = new THREE.Vector3(0, 1, 0);
   private pt = { x: 0, z: 0, h: 0, tx: 0, tz: 1 };
+  private ptNode = 0; // pt があるマスのノード
+  private ptCell: Cell | null = null; // pt があるマス
   enabled = true;
   showSubway = false;
   viewDist = 500;
@@ -347,6 +358,8 @@ export class CarLayer {
     this.grid = g;
     this.traffic = traffic;
     this.cong = cong;
+    // 道路が変わったかもしれないので、先に決めた行き先は決め直す
+    for (const f of this.fleets) for (const c of f.cars) c.nx = undefined;
     const N = g.n * g.n;
     const walkable = (v: number) => v < N && g.road[v] !== 0 && !isHighway(g.road[v]) && g.road[v] !== RoadType.Ramp;
     const exists = (f: Fleet, v: number) => (f.track === 'road' ? g.nodeType(v) !== 0 : f.track === 'bus' ? v < N && g.road[v] !== 0 : f.track === 'walk' ? walkable(v) : g[f.track][v] !== 0);
@@ -505,6 +518,14 @@ export class CarLayer {
     const from = nodes[lo];
     const nx = this.pickNext(f, from, -1);
     if (!nx) return null;
+    if (f.trailer) {
+      // トレーラーは、まっすぐ後ろにつながる道のある場所にだけ出す（荷台が道の外へ突き出さないように）
+      const g = this.grid!, n = g.n, N = n * n, cc = from % N, bx = (cc % n) - DX[nx[1]], by = ((cc / n) | 0) - DY[nx[1]];
+      if (!g.inb(bx, by)) return null;
+      let ok = false;
+      for (const lv of [0, 1]) g.forEachOut(lv * N + by * n + bx, (v, d) => { if (v === from && d === nx[1]) ok = true; });
+      if (!ok) return null;
+    }
     const car: Car = {
       from, to: nx[0], din: nx[1], d: nx[1], t: Math.random(), hA: this.trackH(f, from), alive: true, lane: Math.random() < 0.5 ? 0 : 1,
       col: (Math.random() * f.colors.length) | 0, col2: (Math.random() * Math.max(1, f.trailerColors.length)) | 0, hist: [],
@@ -548,6 +569,18 @@ export class CarLayer {
     }
   }
 
+  // node へ向き d で入ると、2 マス先までに 135° の折り返しを通るしかないか（トレーラーが避ける）
+  private hairpinAhead(node: number, d: number) {
+    if (this.sharpOnly(node, d)) return true;
+    let any = false, ok = false;
+    this.grid!.forEachOut(node, (v2, d2) => {
+      const t = (d2 - d) & 7;
+      if (t === 4) return;
+      any = true;
+      if (t !== 3 && t !== 5 && !this.sharpOnly(v2, d2)) ok = true;
+    });
+    return any && !ok;
+  }
   // node へ向き d で入ったあと、出ていける向きが 135° の折り返しだけか
   private sharpOnly(node: number, d: number) {
     let any = false, ok = false;
@@ -578,7 +611,7 @@ export class CarLayer {
       // トレーラーは、ほかに行けるところがあれば 135° の急な折り返しを通らない（荷台が大きく振られて、後ろの車輪が横にすべるので）。
       // その先が急な折り返ししかないマスにも入らない
       const turn = (d - din) & 7;
-      if (f.trailer && ((din >= 0 && (turn === 3 || turn === 5)) || this.sharpOnly(v, d))) {
+      if (f.trailer && ((din >= 0 && (turn === 3 || turn === 5)) || this.hairpinAhead(v, d))) {
         sharp.push([v, d, w]);
         return;
       }
@@ -660,9 +693,7 @@ export class CarLayer {
         const cx = ((c.to % n) + 0.5) * CELL, cz = (((c.to / n) | 0) + 0.5) * CELL;
         if (c.tbFor !== tb || (tb.ex - cx) * tb.ux + (tb.ez - cz) * tb.uz > tb.d0 + CELL) {
           c.tbFor = tb;
-          const used = [false, false];
-          for (const o of f.cars) if (o !== c && o.tbFor === tb && o.tbSide !== undefined) used[o.tbSide] = true;
-          c.tbSide = !used[0] ? 0 : !used[1] ? 1 : 0;
+          c.tbSide = this.freeSide(f, c, tb) ?? 0;
         }
         return tb;
       }
@@ -670,7 +701,56 @@ export class CarLayer {
       x += DX[d]; y += DY[d];
       if (!g.inb(x, y)) break;
     }
+    // 折り返しへ向かっていたが、分かれ道でそれた
+    if (c.tbFor && !c.revPending) { c.tbFor = null; c.tbSide = undefined; }
     return null;
+  }
+  // 先頭の台車から、折り返しの止まる点までの道のり（まっすぐな区間として）
+  private headDist(o: Car, tb: Turnback) {
+    const n = this.grid!.n, ox = ((o.from % n) + 0.5) * CELL, oz = (((o.from / n) | 0) + 0.5) * CELL;
+    return (tb.ex - ox) * tb.ux + (tb.ez - oz) * tb.uz - (o.t - 0.5) * Math.hypot(DX[o.d], DY[o.d]) * CELL;
+  }
+  // 終点の空いているホーム（0 = 渡った先、1 = そのまま）。先に着いた列車・出ていく途中の列車がいるホームは使わない。
+  // 渡らずに入ったホームから出ていく列車は分岐器を斜めに渡るので、出終わるまでどちらにも入れない
+  private freeSide(f: Fleet, c: Car, tb: Turnback): 0 | 1 | null {
+    const used = [false, false], me = this.headDist(c, tb);
+    for (const o of f.cars) {
+      if (o === c) continue;
+      if (o.tbFor === tb && o.tbSide !== undefined && (o.revPending || this.headDist(o, tb) < me)) used[o.tbSide] = true;
+      if (o.leave && o.leave.tb === tb) { used[o.leave.side] = true; if (o.leave.side === 1) used[0] = true; }
+    }
+    return !used[0] ? 0 : !used[1] ? 1 : null;
+  }
+  // 終点へ着く列車 c が、分岐器の手前で待つか（入るホームがふさがっている・出ていく列車とぶつかる）。
+  // c 自身がまだ反対側の終点を出ていく途中なら待たない（ごく短い路線で、両端で待ち合って動けなくならないように）
+  private throatHold(f: Fleet, c: Car, tb: Turnback) {
+    if (c.tbSide === undefined || c.leave) return false;
+    const me = this.headDist(c, tb);
+    for (const o of f.cars) {
+      if (o === c) continue;
+      if (o.tbFor === tb && o.tbSide === c.tbSide && (o.revPending || this.headDist(o, tb) < me)) return true;
+      // 渡った先から出ていく列車と、渡らずに入る列車だけは、別の線路なのでそのまま行ける
+      if (o.leave && o.leave.tb === tb && !(c.tbSide === 1 && o.leave.side === 0)) return true;
+    }
+    return false;
+  }
+  // 終点で向きを変えて出ていく列車 c の道に、もう分岐器の中まで来ている着く列車がいるか
+  // （入るホームに止まっている列車がいて先へ進めない列車は待たない。待ち合って動けなくならないように）
+  private departHold(f: Fleet, c: Car, tb: Turnback) {
+    const side = c.tbFor === tb && c.tbSide !== 1 ? 0 : 1;
+    for (const o of f.cars) {
+      if (o === c || o.tbFor !== tb || o.revPending || o.tbSide === undefined || (o.tbSide === 1 && side === 0) || this.headDist(o, tb) >= tb.d0) continue;
+      if (f.cars.some((q) => q !== o && q.revPending && q.tbFor === tb && q.tbSide === o.tbSide)) continue;
+      return true;
+    }
+    return false;
+  }
+  // 分岐器のない行き止まりから出ていく列車 o の区間へ、c が向かい合って入ろうとしているか
+  private static intoLeave(o: Car, c: Car, cell: number) {
+    const d = o.leave!.cells.get(cell);
+    if (d === undefined) return false;
+    const t = (c.d - d) & 7;
+    return t >= 3 && t <= 5;
   }
   // 先の列車 o が、終点の別のホームへ入っていて、後ろの列車 c の線路をもうふさいでいないか
   // （分岐器を最後尾まで渡り終えていれば、走っていても止まっていても、c はそのまま空いているホームへ入れる）
@@ -704,10 +784,18 @@ export class CarLayer {
     // 分岐器で渡って入ったホームなら、そのまま右側の線路。渡らずに入ったホームや分岐器のない行き止まりからは、
     // 出ていく途中で反対側の線路へ移る（止まっていた線路から少しずつ）
     const tb = this.turnbacks.get(f.track)?.get(c.to);
-    c.dep = tb && c.tbFor === tb && c.tbSide !== 1 ? null : tb ? { d0: tb.d0, d1: tb.d1, s: len } : { d0: len + CELL * 1.6, d1: len, s: len };
-    // 先頭がホームにいれば（その駅にはもう止まった）、出ていくときにその駅ではもう止まらない
-    const served = !!this.stations.get(f.track)?.has(c.from);
+    const side: 0 | 1 = tb && c.tbFor === tb && c.tbSide !== 1 ? 0 : 1;
+    c.dep = side === 0 ? null : tb ? { d0: tb.d0, d1: tb.d1, s: len } : { d0: len + CELL * 1.6, d1: len, s: len };
     const segs: Cell[] = [c, ...c.hist];
+    // 出ていくあいだふさぐ区間：止まった点から分岐器の終わりまでのマス（出ていく向きつき）。
+    // 分岐器のない行き止まりでは、線路を移り終えたあと 2 マス先まで（着く列車がすぐ手前のカーブで待って、すれ違う列車と重ならないように）
+    const zone = tb ? tb.d0 : len + CELL * 3.6;
+    const cells = new Map<number, number>([[c.to, opp(c.d)]]);
+    for (let j = 0, acc = 0; j < segs.length && acc < zone; j++) {
+      cells.set(segs[j].from, opp(segs[j].din));
+      acc += CarLayer.cellLen(segs[j]);
+    }
+    c.leave = { tb: tb ?? null, side, cells, s: len, d0: zone };
     let rem = len;
     let k = 0, tf = 0;
     for (; k < segs.length; k++) {
@@ -716,6 +804,14 @@ export class CarLayer {
       if (rem <= avail || k === segs.length - 1) { tf = Math.max(0, (avail - Math.min(rem, avail)) / L); break; }
       rem -= avail;
     }
+    // その駅にもう止まったか：先頭がホームにいる、または止まった駅のマスに列車がまだかかっていて、列車の 2 割以上がホームの上にある
+    // （ホームの先の短い行き止まりで向きを変えたとき）。それなら、出ていくときにその駅ではもう止まらない（新しい先頭がそのホームにいるとき）。
+    // 行き止まりからホームまで離れていれば（途中の駅）、反対向きでもう一度止まる
+    const st = this.stations.get(f.track);
+    let onSt = 0;
+    if (st) for (let j = 0; j <= k; j++) if (st.has(segs[j].from)) onSt += j === k ? (1 - tf) * CarLayer.cellLen(segs[j]) : (j === 0 ? c.t : 1) * CarLayer.cellLen(segs[j]);
+    const served = !!st && (st.has(c.from) || (c.served !== undefined && onSt >= 0.2 * len && segs.slice(0, k + 1).some((q) => q.from === c.served)));
+    c.served = undefined;
     const head = rev(segs[k]);
     const hist: Cell[] = [];
     for (let j = k - 1; j >= 0; j--) hist.push(rev(segs[j]));
@@ -726,7 +822,8 @@ export class CarLayer {
     c.tbSide = undefined;
     c.tbKey = -1;
     // 駅にいれば、駅を出るまでもう止まらない。止まった位置から加速する。中間の車両は向きを変えない
-    c.lastStop = served ? LEFT_TERMINAL : -1;
+    c.lastStop = served && st!.has(c.from) ? LEFT_TERMINAL : -1;
+    c.hw = 0;
     c.acc = 0;
     c.flip = !c.flip;
     // 横の位置も向きを変える前のまま（台車の並びは前後が逆になる）。計算とのずれは次に並べるときに求める
@@ -777,6 +874,8 @@ export class CarLayer {
   private place(f: Fleet, c: Cell, t: number) {
     const g = this.grid!, n = g.n, NC = n * n;
     const fc = c.from % NC;
+    this.ptNode = c.from;
+    this.ptCell = c;
     const cx = ((fc % n) + 0.5) * CELL, cz = (((fc / n) | 0) + 0.5) * CELL;
     // 入口 A、中心 C、出口 B
     const ax = cx - DX[c.din] * CELL * 0.5, az = cz - DY[c.din] * CELL * 0.5;
@@ -859,7 +958,8 @@ export class CarLayer {
       if (f.track !== 'road' && f.track !== 'bus') continue;
       for (const c of f.cars) {
         const len = CarLayer.cellLen(c);
-        const rear = f.trailer ? TRAILER_REAR : f.halfLen;
+        // トレーラーの荷台の後ろの端：カーブでは荷台が遅れてついてくるので、後ろの車軸の位置から求める
+        const rear = f.trailer ? Math.max(TRAILER_REAR, c.rs !== undefined ? c.rs + f.lamp[0] - f.axle : 0) : f.halfLen;
         addLane((c.from * 8 + c.d) * 2 + laneOf(c), { c, t: c.t, r: rear, L: len });
         if (f.trailer) {
           let rem = rear - c.t * len;
@@ -897,20 +997,33 @@ export class CarLayer {
         const def = ROADS[line ? 1 : g.nodeType(c.from)] || ROADS[1];
         // 曲がるときは減速する。ただし高速道路（都市高速を含む）の本線のカーブはそのままの速さ
         // ランプから本線への合流・本線からランプへの分岐も、減速しない（合流は本線の速さまで加速する）
+        const road = !line && !walk;
+        // 道路の車は、マスの後半で次の行き先を先に決めておく（曲がり角の手前から減速できるように）
+        if (road && c.t >= 0.5 && c.nx === undefined) c.nx = this.pickNext(f, c.to, c.d);
         const tf = line || walk ? 0 : g.nodeType(c.from), tt = line || walk ? 0 : g.nodeType(c.to);
         const fast = (q: number) => isHighway(q) || q === RoadType.Ramp;
+        const hwCurve = (a: number, b: number) => fast(a) && fast(b) && (isHighway(a) || isHighway(b));
         // 高架鉄道はカーブでも減速しない
-        const turning = c.din !== c.d && !(fast(tf) && fast(tt) && (isHighway(tf) || isHighway(tt))) && f.track !== 'erail';
+        const turning = c.din !== c.d && !hwCurve(tf, tt) && f.track !== 'erail';
+        // 次のマスで曲がる（マスの後半から減速を始める）
+        const nextTurn = road && !!c.nx && c.nx[1] !== c.d && !hwCurve(tt, g.nodeType(c.nx[0]));
         const merging = tf === RoadType.Ramp && isHighway(tt);
         const len = CarLayer.cellLen(c);
         const cg = line || walk ? 1 : Math.max(this.cong![c.from], 1);
         const kmh = walk ? 4.5 + (c.col % 3) * 0.6 : line ? LINES[f.track as LineKind].speedKmh * 1.2 : (merging ? ROADS[tt].speedKmh : def.speedKmh) * (f.track === 'bus' ? 0.8 : f.trailer ? 0.85 : 1);
         // カーブの速さの割合は車の種類ごと。マスの境目で急に変わらないよう、なめらかに近づける（一時停止中は変わらない）
         const turnK = walk ? 0.6 : line || f.halfLen <= 3 ? TURN_CAR : f.trailer ? TURN_TRAILER : TURN_BIG;
-        const sk = turning ? turnK : 1;
+        const vNom = ((kmh / 3.6) * 0.9) / cg;
+        let sk = turning || nextTurn ? turnK : 1;
+        if (road && (turning || nextTurn)) {
+          // 道路の曲がり角は、横にかかる加速度が A_LAT までの速さにする（きつく曲がるほど遅く。曲がり具合からおよその半径を決める）
+          const rad = (tr: number) => (tr === 1 || tr === 7 ? 22 : tr === 2 || tr === 6 ? 5.7 : 3);
+          const r = Math.min(turning ? rad((c.d - c.din) & 7) : 99, nextTurn ? rad((c.nx![1] - c.d) & 7) : 99);
+          sk = Math.min(sk, Math.sqrt(A_LAT * r) / vNom);
+        }
         if (walk || c.sk === undefined) c.sk = sk;
         else c.sk += (sk - c.sk) * (1 - Math.exp(-dt * 3));
-        const speed = (((kmh / 3.6) * 0.9) / cg) * c.sk;
+        const speed = vNom * c.sk;
         let adv = (dt * speed) / len;
         if (f.mid && occ) {
           const st = this.stations.get(f.track);
@@ -929,19 +1042,39 @@ export class CarLayer {
                 c.t = stopT;
                 adv = 0;
                 c.stop = 5;
-                c.lastStop = c.from;
+                c.lastStop = c.served = c.from;
               }
             }
             // 前の列車との間隔：先の 2 マスに別の列車がいたら、マスの手前で待つ（長く詰まったら進む）
             const n = this.grid!.n;
             const ahead2 = (() => { const x = (c.to % n) + DX[c.d], y = ((c.to / n) | 0) + DY[c.d]; return this.grid!.inb(x, y) ? y * n + x : -1; })();
-            const block = [c.to, ahead2].some((cell) => { if (cell < 0) return false; const o = occ!.get(CarLayer.occKey(cell, c.d)); return o && o !== c && !this.otherPlatform(f, o, c); });
+            const block = [c.to, ahead2].some((cell) => {
+              if (cell < 0) return false;
+              const o = occ!.get(CarLayer.occKey(cell, c.d));
+              // 分岐器のない行き止まりから出ていく列車とは、同じ線路で向かい合う
+              return (o && o !== c && !this.otherPlatform(f, o, c)) || f.cars.some((q) => q !== c && q.leave && !q.leave.tb && CarLayer.intoLeave(q, c, cell));
+            });
             if (block && (c.wait ?? 0) < 25) {
               if (c.t + adv > 0.8) {
                 adv = Math.max(0, 0.8 - c.t);
                 c.wait = (c.wait ?? 0) + dt;
               }
             } else c.wait = 0;
+            // 終点に着く列車は、入るホームがふさがっているとき・出ていく列車とぶつかるときは、分岐器の手前で待つ
+            const tb = !c.revPending ? this.endAhead(f, c) : null;
+            if (tb && c.tbFor === tb) {
+              const hd = this.headDist(c, tb);
+              if (hd > tb.d0) {
+                // 分岐器に入るまでは、空いたホームを選び直す
+                const fs = this.freeSide(f, c, tb);
+                if (fs !== null) c.tbSide = fs;
+                const want = hd - adv * len < tb.d0 + 4 && this.throatHold(f, c, tb);
+                if (want && (c.hw ?? 0) < 60) {
+                  adv = Math.max(0, (hd - tb.d0 - 4) / len);
+                  c.hw = (c.hw ?? 0) + dt;
+                } else if (!want) c.hw = 0;
+              }
+            }
             // 終点で向きを変えたあとは、止まった位置からゆっくり加速する（線路の速さに届いたら終わり）
             if (c.acc !== undefined && dt > 0) {
               const v = Math.min((adv * len) / dt, c.acc + TRAIN_ACC * dt);
@@ -954,6 +1087,7 @@ export class CarLayer {
             c.dep.s += adv * len;
             if (c.dep.s - CarLayer.trainBogies(f) > c.dep.d0) c.dep = null;
           }
+          if (c.leave && (c.leave.s += adv * len) - CarLayer.trainBack(f) > c.leave.d0 + 2) c.leave = null;
           if (c.fix && c.fix.set && (c.fix.s += adv * len) >= FIX_LEN) c.fix = null;
         }
         if (!line && !walk && adv > 0) {
@@ -984,16 +1118,25 @@ export class CarLayer {
             if (nc) {
               Object.assign(c, nc);
               // 別の場所へ移ったので、車線の位置・トレーラーの向き・速さは新しく決め直す
-              c.sk = c.lo = c.rx = c.rz = undefined;
+              c.sk = c.lo = c.rx = c.rz = c.rs = c.ly = c.nx = undefined;
             }
             continue;
           }
-          const nx = this.pickNext(f, c.to, c.d);
+          const nx = c.nx !== undefined ? c.nx : this.pickNext(f, c.to, c.d);
+          c.nx = undefined;
           if (!nx) {
             // 列車は行き止まりで止まり、しばらくして向きを変える（マップの端なら隣の都市へ出ていく）
             const g2 = this.grid!, ex = c.to % g2.n, ey = (c.to / g2.n) | 0;
             const edge = ex === 0 || ey === 0 || ex === g2.n - 1 || ey === g2.n - 1;
             if (f.mid && !edge) {
+              const tbE = this.turnbacks.get(f.track)?.get(c.to);
+              if (c.revPending && (c.stop ?? 0) <= 0 && tbE && (c.hw ?? 0) < 20 && this.departHold(f, c, tbE)) {
+                // 着く列車がもう分岐器の中にいれば、通り過ぎるまで待つ（長く待ったら出る）
+                c.hw = (c.hw ?? 0) + 0.2;
+                c.stop = 0.2;
+                c.t = 1;
+                break;
+              }
               if (c.revPending && (c.stop ?? 0) <= 0) {
                 // 止まっていた位置（マスの終わり）から向きを変える
                 c.t = 1;
@@ -1024,10 +1167,20 @@ export class CarLayer {
         if (!walk && !line) {
           // 道路の種類が変わるところ（2車線と1車線など）では、横に跳ばずに少しずつ移る（1 m 進むあいだに 0.3 m まで）
           if (c.lo === undefined) c.lo = lane;
-          else c.lo += Math.max(-0.3 * moved, Math.min(0.3 * moved, (lane - c.lo) * (1 - Math.exp(-moved / 3))));
+          else {
+            const dl = Math.max(-0.3 * moved, Math.min(0.3 * moved, (lane - c.lo) * (1 - Math.exp(-moved / 3))));
+            c.lo += dl;
+            // 横へ移るあいだは、車体を移る向きへ少し向ける（向きはそのままで横へすべって見えないように）。なめらかに変える
+            if (moved > 1e-4) c.ly = (c.ly ?? 0) + (-Math.atan2(dl, moved) - (c.ly ?? 0)) * (1 - Math.exp(-moved / 0.6));
+          }
           lane = c.lo;
         }
-        const x = P.x - P.tz * lane, z = P.z + P.tx * lane, h = P.h, tx = P.tx, tz = P.tz;
+        const x = P.x - P.tz * lane, z = P.z + P.tx * lane, h = P.h;
+        let tx = P.tx, tz = P.tz;
+        if (!line && !walk && c.ly) {
+          const cs = Math.cos(c.ly), sn = Math.sin(c.ly);
+          [tx, tz] = [tx * cs + tz * sn, tz * cs - tx * sn];
+        }
         if (f.mid) {
           // 列車：車両ごとに、前と後ろの台車の位置から向きを決めて並べる（c は先頭の車両の前の台車）
           const nCar = f.carsPer, sp = f.spacing, half = f.halfLen * BOGIE;
@@ -1093,15 +1246,16 @@ export class CarLayer {
         let rh = h;
         if (f.trailer) {
           const ax = f.axle, kx = x - tx * KINGPIN, kz = z - tz * KINGPIN;
-          let sb = KINGPIN + ax, px = 0, pz = 0;
+          let sb = KINGPIN + ax, sp = sb, px = 0, pz = 0;
           for (let it = 0; it < 3; it++) {
             this.placeBack(f, c, sb);
+            sp = sb;
             px = P.x - P.tz * lane;
             pz = P.z + P.tx * lane;
             // カーブでは道のりより直線の距離が短いので、その分だけ後ろを探す（きつい折り返しで遠くへ行かないよう範囲を決める）
             sb = Math.max(ax * 0.5, Math.min(KINGPIN + ax * 1.5, sb + ax - Math.hypot(px - kx, pz - kz)));
           }
-          rh = P.h; // 坂・橋・ランプでは、後ろの車軸の高さは道の上の点の高さ
+          const ptx = P.tx, ptz = P.tz;
           const toPath = Math.atan2(kx - px, kz - pz);
           // 前のコマの後ろの車軸から、今の連結部への向き。初めて置くとき・別の場所へ移ったとき
           // （連結部からの長さが大きく変わったとき）・数がおかしくなったときは、道の上の点から
@@ -1117,12 +1271,45 @@ export class CarLayer {
           // 戻す割合：進んだ道のり × √(離れた量) ÷ (道路の幅 × 0.7)。大きく進んだコマでも行き過ぎない形にする
           const u = (moved * Math.sqrt(2 * ax * Math.abs(Math.sin(da / 2)))) / (0.7 * rd.width);
           let a = a0 + (da * u) / (1 + u);
+          // 高速道路・ランプでは道の端からはみ出さない（両側に壁がある）：後ろの車軸の、道の上の点からの横のずれを、
+          // そこの道の幅の余裕（タイヤの外側まで）にとどめる。一般の道路は、引き戻す力だけで足りる。
+          // ずれは向きの差にほぼ比例するので、向きの差を縮める（道の幅が変わるところで跳ばないよう、進んだ道のりに応じて少しずつ）
+          const pty = g.nodeType(this.ptNode), pc = this.ptCell!;
+          if (isHighway(pty) || pty === RoadType.Ramp) {
+            // 本線とランプが分かれる・合わさるマスでは、曲がって通る車はランプの幅の上を走る
+            let w = (ROADS[pty] || rd).width;
+            if (pc.din !== pc.d) {
+              const NN = g.n * g.n, pcc = pc.from % NN, bx = (pcc % g.n) - DX[pc.din], bz = ((pcc / g.n) | 0) - DY[pc.din];
+              const back = g.inb(bx, bz) ? g.idx(bx, bz) : -1;
+              if (g.nodeType(pc.to) === RoadType.Ramp || (back >= 0 && (g.road[back] === RoadType.Ramp || g.up[back] === RoadType.Ramp))) w = Math.min(w, ROADS[RoadType.Ramp].width);
+            }
+            const m = Math.max(0, w / 2 - Math.abs(lane) - 1.45);
+            const off = Math.abs((kx - Math.sin(a) * ax - px) * -ptz + (kz - Math.cos(a) * ax - pz) * ptx);
+            if (off > m) {
+              const to = Math.max(m, off - 1.2 * moved);
+              let dd = a - toPath;
+              dd -= Math.round(dd / (2 * Math.PI)) * 2 * Math.PI;
+              a = toPath + (dd * to) / off;
+            }
+          }
           // 折れ曲がりは 80° まで（きつい折り返しでも、トラクターに重なるほど折れない）
           let bend = a - Math.atan2(tx, tz);
           bend -= Math.round(bend / (2 * Math.PI)) * 2 * Math.PI;
           if (Math.abs(bend) > JACKKNIFE) a += Math.sign(bend) * JACKKNIFE - bend;
           c.rx = kx - Math.sin(a) * ax;
           c.rz = kz - Math.cos(a) * ax;
+          // 後ろの車軸の高さ（坂・橋・ランプ）と道のりは、車軸にいちばん近い道の上の点から（カーブでは車軸が内側を通るので、sb の点とずれる）
+          let sr = sp, qx = px, qz = pz, qtx = ptx, qtz = ptz;
+          for (let it = 0; it < 2; it++) {
+            sr = Math.max(ax * 0.5, Math.min(KINGPIN + ax * 1.5, sr - ((c.rx - qx) * qtx + (c.rz - qz) * qtz)));
+            this.placeBack(f, c, sr);
+            qx = P.x - P.tz * lane;
+            qz = P.z + P.tx * lane;
+            qtx = P.tx;
+            qtz = P.tz;
+          }
+          rh = P.h;
+          c.rs = sr;
         }
         // 画面の外の車・人は描かない（トレーラーは後ろへ長いので広めに見る）
         if (!this.seen(x, h, z, f.halfLen + (f.trailer ? 18 : 4))) {

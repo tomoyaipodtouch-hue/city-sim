@@ -23,7 +23,7 @@ export const RM = {
   paintSteel: [0.44, 0.3, 0], // 塗った鋼（赤いトラスなど）
   whiteSteel: [0.34, 0.25, 0], // 白く塗った鋼（アーチ）
   whiteConc: [0.6, 0, 0], // 白く塗ったコンクリート
-  roof: [0.3, 0.18, 0], // 白い金属の大屋根（なめらかな塗装）
+  roof: [0.5, 0.1, 0], // 白い金属の大屋根（塗装。建物の金属と同じくらいの粗さで、日の光が白く飛ばないように）
   roofUnder: [0.62, 0, 0],
   panel: [0.4, 0.12, 0], // 塗った金属の板（壁・ホームドア）
   metalRoof: [0.45, 0.55, 0],
@@ -147,17 +147,22 @@ export function createInfraMaterial(params: THREE.MeshStandardMaterialParameters
         gKind = floor(vRM.z + 0.5);
         {
           // コンクリート：広いむらと、縦の面には雨の筋（道路の壁と同じ模様。雨の筋は高画質のときだけ）。
-          // 模様の座標の変化量は分岐の外で求める（分岐の中だとミップマップの選び方が乱れる）
+          // 高画質では模様の座標の変化量を分岐の外で求める（分岐の中だとミップマップの選び方が乱れる）。
+          // ふつうの画質では、なめらかなむらだけを決まった細かさで読む（変化量を求めないので、コンクリート以外の画素は軽い）
           bool up = abs(vINy) > 0.5;
           vec2 q = up ? vIw.xz : vec2(vIw.x + vIw.z, vIw.y);
           vec2 qM = mat2(0.8, -0.6, 0.6, 0.8) * q * (1.0 / 17.0);
-          vec2 mx = dFdx(qM), my = dFdy(qM);
           #ifdef INFRA_HQ
+            vec2 mx = dFdx(qM), my = dFdy(qM);
             vec2 qS = vec2(q.x * (1.0 / 9.0), q.y * (1.0 / 60.0)) + 0.6;
             vec2 sx = dFdx(qS), sy = dFdy(qS);
           #endif
           if (gKind > 0.5 && gKind < 1.5) {
-            float mo = textureGrad(uSurf, qM, mx, my).g;
+            #ifdef INFRA_HQ
+              float mo = textureGrad(uSurf, qM, mx, my).g;
+            #else
+              float mo = textureLod(uSurf, qM, 2.0).g;
+            #endif
             diffuseColor.rgb *= 0.9 + 0.2 * mo;
             #ifdef INFRA_HQ
               if (!up) diffuseColor.rgb *= 1.0 - smoothstep(0.5, 0.75, textureGrad(uSurf, qS, sx, sy).g) * 0.14;

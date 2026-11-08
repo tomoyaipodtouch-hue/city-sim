@@ -217,6 +217,8 @@ export class CityRenderer {
     this.buildings.group.traverse((o) => fade((o as THREE.Mesh).material, on ? 0.2 : 1));
     fade(this.buildings.material, on ? 0.2 : 1);
     this.roads.group.traverse((o) => fade((o as THREE.Mesh).material, on ? 0.35 : 1));
+    // 道路の橋の構造物（橋脚・塔・ケーブルなど）も、路面と同じように薄くする
+    fade(this.roadBridges.mesh.material, on ? 0.35 : 1);
     this.trees.group.visible = !on;
     this.kick();
   }
