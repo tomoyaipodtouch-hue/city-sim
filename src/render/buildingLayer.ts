@@ -37,11 +37,13 @@ export function portLevel(b: Building, ports: Building[]): number {
 
 // 物流施設の連結：港の近くで、同じ向き・同じ大きさの工業（IM）の敷地が、道路にそった横の辺をぴったり共有して並んでいれば、
 // 1 つの長い建物として描く（実際の大型物流施設は 150〜350m の長さがある）。seed = 連結の種（いちばん小さい種）、
-// L / R = 敷地の -x / +x の側がつながる、lead = 看板を描く敷地、port・den = 連結の中でいちばん大きい値
+// L / R = 敷地の -x / +x の側がつながる、lead = 看板を描く敷地、port・den = 連結の中でいちばん大きい値。
+// 連結はいちばん高い敷地の地面にそろえて建てるので、地面の高さ（base）の差が JOIN_DH を超えるところではつなげない
 export interface Campus { seed: number; den: number; port: number; L: boolean; R: boolean; lead: boolean }
 // 向きごとの、敷地の +x の向き（マスの x, y）
 const RIGHT: Record<number, [number, number]> = { 2: [1, 0], 6: [-1, 0], 0: [0, -1], 4: [0, 1] };
-export function campuses(list: Building[], lv: Map<number, number>, any = false): Map<number, Campus> {
+const JOIN_DH = 1.5; // 連結の中の地面の高さの差の上限（m）
+export function campuses(list: Building[], lv: Map<number, number>, any = false, base: (b: Building) => number = () => 0): Map<number, Campus> {
   const ok = (b: Building) => !b.civic && b.type === 'IM' && b.state !== BState.Building && RIGHT[b.face] !== undefined && (any || (lv.get(b.id) ?? 0) >= 2);
   const at = new Map<string, Building>();
   for (const b of list) if (ok(b)) at.set(`${b.x},${b.y}`, b);
@@ -52,14 +54,22 @@ export function campuses(list: Building[], lv: Map<number, number>, any = false)
     return r;
   };
   const L = new Set<number>(), R = new Set<number>(), byId = new Map<number, Building>();
+  // 連結ごとの地面の高さのいちばん低い値・高い値（根の id ごと）
+  const lo = new Map<number, number>(), hi = new Map<number, number>();
   for (const b of at.values()) {
     const [dx, dy] = RIGHT[b.face];
     const nb = at.get(`${b.x + dx * b.w},${b.y + dy * b.h}`);
     if (!nb || nb.face !== b.face || nb.w !== b.w || nb.h !== b.h) continue;
+    for (const q of [b, nb]) if (!parent.has(q.id) && !lo.has(q.id)) { const h = base(q); lo.set(q.id, h); hi.set(q.id, h); }
+    const ra = parent.has(b.id) ? find(b.id) : b.id, rb = parent.has(nb.id) ? find(nb.id) : nb.id;
+    const l = Math.min(lo.get(ra)!, lo.get(rb)!), h = Math.max(hi.get(ra)!, hi.get(rb)!);
+    if (h - l > JOIN_DH) continue;
     for (const q of [b, nb]) if (!parent.has(q.id)) { parent.set(q.id, q.id); byId.set(q.id, q); }
     R.add(b.id);
     L.add(nb.id);
-    parent.set(find(b.id), find(nb.id));
+    parent.set(ra, rb);
+    lo.set(rb, l);
+    hi.set(rb, h);
   }
   // 連結ごとに、種・密度・近さをまとめる
   const groups = new Map<number, Building[]>();
@@ -133,15 +143,17 @@ export class BuildingLayer {
     const plv = new Map<number, number>();
     if (ports.length) for (const b of list) if (!b.civic && (b.type === 'IM' || b.type === 'ID')) plv.set(b.id, portLevel(b, ports));
     // 確認用に物流施設の形を強制しているときは、港から遠くてもつなげる
-    const camp = campuses(list, plv, !!forcedLogi());
+    const lotBase = (b: Building) => {
+      let h = -Infinity;
+      for (let y = b.y; y < b.y + b.h; y++) for (let x = b.x; x < b.x + b.w; x++) h = Math.max(h, groundAt(x, y));
+      return h;
+    };
+    const camp = campuses(list, plv, !!forcedLogi(), lotBase);
     // 連結した建物は同じ高さの地面に建てる（敷地ごとに地面の高さが違うと、つなぎ目に段ができる）
     const cbase = new Map<number, number>();
     for (const b of list) {
       const cp = camp.get(b.id);
-      if (!cp) continue;
-      let h = cbase.get(cp.seed) ?? -Infinity;
-      for (let y = b.y; y < b.y + b.h; y++) for (let x = b.x; x < b.x + b.w; x++) h = Math.max(h, groundAt(x, y));
-      cbase.set(cp.seed, h);
+      if (cp) cbase.set(cp.seed, Math.max(cbase.get(cp.seed) ?? -Infinity, lotBase(b)));
     }
     const all = new Set<number>([...byChunk.keys(), ...this.chunks.keys()]);
     for (const c of all) {

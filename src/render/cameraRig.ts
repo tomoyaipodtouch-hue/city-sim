@@ -78,9 +78,10 @@ export class CameraRig {
     this.dist = nd;
   }
 
-  // 1段で 30° 回す
+  // 1段で 30° 回す。30° の目盛りにそろえる（はじめの 45° から回しても、道路にまっすぐな 0°・90° に止まれる）
   rotate(step: number) {
-    this.yawTarget += step * ROT_STEP;
+    const k = this.yawTarget / ROT_STEP;
+    this.yawTarget = (step > 0 ? Math.floor(k + 1e-6) + step : Math.ceil(k - 1e-6) + step) * ROT_STEP;
   }
 }
 

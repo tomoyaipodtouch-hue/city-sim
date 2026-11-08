@@ -64,16 +64,17 @@ const tmpC = new THREE.Color();
 
 // ---------------- 小さな部品 ----------------
 // 箱（角の順は問わない）。壁の模様の高さ（v）は地面からの高さにそろえる（根元の陰が地面の近くだけにつく）
-interface BO { roof?: Col | null; bot?: Col; rpat?: number; bpat?: number; m?: number; rm?: number; v?: number }
+// skip = 描かない壁（1 = +z、2 = -z、4 = +x、8 = -x。となりの敷地の建物とくっつく面）
+interface BO { roof?: Col | null; bot?: Col; rpat?: number; bpat?: number; m?: number; rm?: number; v?: number; skip?: number }
 function bx(mb: MeshBuilder, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, wall: Col, pat = 0, o: BO = {}) {
   if (x0 > x1) [x0, x1] = [x1, x0];
   if (z0 > z1) [z0, z1] = [z1, z0];
-  const h = y1 - y0, wx = x1 - x0, wz = z1 - z0, keep = mb.matOverride, v0 = o.v ?? y0;
+  const h = y1 - y0, wx = x1 - x0, wz = z1 - z0, keep = mb.matOverride, v0 = o.v ?? y0, sk = o.skip ?? 0;
   if (o.m !== undefined) mb.matOverride = o.m;
-  mb.quad([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], wall, pat, wx, h, 0, v0);
-  mb.quad([x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0], wall, pat, wx, h, 0, v0);
-  mb.quad([x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1], wall, pat, wz, h, 0, v0);
-  mb.quad([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], wall, pat, wz, h, 0, v0);
+  if (!(sk & 1)) mb.quad([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], wall, pat, wx, h, 0, v0);
+  if (!(sk & 2)) mb.quad([x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0], wall, pat, wx, h, 0, v0);
+  if (!(sk & 4)) mb.quad([x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1], wall, pat, wz, h, 0, v0);
+  if (!(sk & 8)) mb.quad([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], wall, pat, wz, h, 0, v0);
   mb.matOverride = o.rm !== undefined ? o.rm : keep;
   if (o.roof !== null) mb.quad([x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0], o.roof ?? wall, o.rpat ?? 0);
   if (o.bot) mb.quad([x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], o.bot, o.bpat ?? 0);
@@ -498,7 +499,7 @@ function panelLines(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: num
 }
 // 屋上のふち（パラペット）の輪。open = その側の板を描かない（1 = -x、2 = +x。となりの敷地の建物につながる）
 function rim(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, h: number, col: Col, t = 0.35, open = 0) {
-  const o: BO = { roof: K.cap, m: MAT.plaster };
+  const o: BO = { roof: K.cap, m: MAT.plaster, skip: (open & 1 ? 8 : 0) | (open & 2 ? 4 : 0) };
   bx(mb, x0, y, z1 - t, x1, y + h, z1, col, 0, o);
   bx(mb, x0, y, z0, x1, y + h, z0 + t, col, 0, o);
   if (!(open & 1)) bx(mb, x0, y, z0 + t, x0 + t, y + h, z1 - t, col, 0, o);
@@ -555,7 +556,7 @@ function pipe(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y
   }
 }
 // 屋上の太陽光パネル（x の向きの列。少し +z へ傾ける）。上のふちに明るい枠の線、まん中に横の継ぎ目、
-// 約 4m ごとに縦の継ぎ目を入れて、屋根が 1 枚の紺の板に見えないようにする。列の間からは屋根が見える
+// 約 5m ごとに縦の継ぎ目を入れて、屋根が 1 枚の紺の板に見えないようにする。列の間からは屋根が見える
 function solar(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, pitch = 3.3) {
   if (x1 - x0 < 3) return;
   const keep = mb.matOverride;
@@ -563,7 +564,7 @@ function solar(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, 
   const lo = y + 0.3, hi = y + 0.85, dz = 1.9;
   // 傾いた面の上の点（t = 0 が下のふち、1 が上のふち）。継ぎ目の線は面から少し浮かせる
   const nl = Math.hypot(dz, hi - lo), ny = (dz / nl) * 0.025, nz = ((hi - lo) / nl) * 0.025;
-  const n = Math.max(1, Math.round((x1 - x0) / 4)), sx = (x1 - x0) / n;
+  const n = Math.max(1, Math.round((x1 - x0) / 5)), sx = (x1 - x0) / n;
   for (let z = z0; z + dz <= z1; z += pitch) {
     const S = (x: number, t: number): P3 => [x, lo + (hi - lo) * t + ny, z + dz * (1 - t) + nz];
     mb.quad([x0, lo, z + dz], [x1, lo, z + dz], [x1, hi, z], [x0, hi, z], K.solar);
@@ -607,7 +608,8 @@ function shelter(mb: MeshBuilder, d: number, w: number, a: number, y0: number, l
   if (lamp) wbox(mb, d, w, a - 0.45, a + 0.45, 0, 0.3, y0 + 4.05, y0 + 4.35, K.lamp, PAT.lit, { m: MAT.none, v: 10 });
 }
 // ドックの面（壁 d の w）：灰色の腰壁、シェルターの列、上のひさし（下の面は夜に光る）
-function dockFace(mb: MeshBuilder, d: number, w: number, a0: number, a1: number, docks: number[], y0: number, hc: number, cd: number, edge: Col | null) {
+// open = となりの敷地のひさしにつながる端（1 = a0、2 = a1。正面 d = 0 のときだけ）
+function dockFace(mb: MeshBuilder, d: number, w: number, a0: number, a1: number, docks: number[], y0: number, hc: number, cd: number, edge: Col | null, open = 0) {
   wq(mb, d, w + sgn(d) * 0.02, a0, a1, 0, y0, K.plinth, 0, MAT.concrete);
   docks.forEach((a) => shelter(mb, d, w, a, y0, true));
   // ドックの前の地面（夜はドックの灯りに照らされる）
@@ -616,7 +618,7 @@ function dockFace(mb: MeshBuilder, d: number, w: number, a0: number, a1: number,
     gq(mb, x0, z0, x1, z1, 0.105, K.dockLit, PAT.lit);
   }
   if (cd > 0) {
-    wbox(mb, d, w, a0, a1, 0, cd, hc, hc + 0.32, K.white, 0, { roof: K.roof, bot: K.lamp, bpat: PAT.lit, m: MAT.metal, v: 10 });
+    wbox(mb, d, w, a0, a1, 0, cd, hc, hc + 0.32, K.white, 0, { roof: K.roof, bot: K.lamp, bpat: PAT.lit, m: MAT.metal, v: 10, skip: d === 0 ? (open & 1 ? 8 : 0) | (open & 2 ? 4 : 0) : 0 });
     if (edge) {
       const s = sgn(d);
       wq(mb, d, w + s * (cd + 0.02), a0, a1, hc + 0.02, hc + 0.3, edge, 0, MAT.none, 10);
@@ -759,7 +761,7 @@ function coldBlock(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, 
   const tFaces = 15 & ~(tOpen & 1 ? 8 : 0) & ~(tOpen & 2 ? 4 : 0);
 
   // 高い棟
-  bx(mb, tx0, 0, zB, tx1, Ht, tz1, wall, 0, { roof: K.roof, m: wallMat, rm: MAT.membrane });
+  bx(mb, tx0, 0, zB, tx1, Ht, tz1, wall, 0, { roof: K.roof, m: wallMat, rm: MAT.membrane, skip: (tOpen & 1 ? 8 : 0) | (tOpen & 2 ? 4 : 0) });
   ring4(mb, tx0, zB, tx1, tz1, 0, 1.2, K.plinth, 0, MAT.concrete, 0.03, 0, tOpen);
   if (kind === 'highbay') {
     // 自動倉庫：窓のない銀の箱、上のふちだけ少し明るい帯
@@ -779,7 +781,7 @@ function coldBlock(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, 
   }
   // 荷捌き棟（前の低い棟）
   if (annexD > 0) {
-    bx(mb, xb0, 0, zM, xb1, Ha, zF, K.annex, 0, { roof: K.roof, m: MAT.plaster, rm: MAT.membrane });
+    bx(mb, xb0, 0, zM, xb1, Ha, zF, K.annex, 0, { roof: K.roof, m: MAT.plaster, rm: MAT.membrane, skip: (jl ? 8 : 0) | (jr ? 4 : 0) });
     panelLines(mb, xb0, zM, xb1, zF, 0, Ha, 2.4, 0, K.joint, 1 | (jr ? 0 : 4) | (jl ? 0 : 8));
     rim(mb, xb0, zM, xb1, zF, Ha, 0.9, K.annex, 0.35, open);
   }
@@ -843,12 +845,11 @@ function coldBlock(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, 
         bx(mb, xc - 2.8, Ha, zM + 0.04, xc + 2.8, Ht + 3.5, zM + 3, coreCol, 0, { roof: K.cap, m: MAT.plaster, v: 10 });
         wq(mb, 0, zM + 3.03, xc - 0.55, xc + 0.55, Ha + 1, Ht + 2.6, K.slot, PAT.lit, MAT.none, 10);
       }
-    } else if (!edge(coreS)) {
+    } else if (!edge(coreS) && !(sideSign && coreS === os)) {
+      // （短い敷地で、看板を書く横の面には塔を出さない）
       const xe = coreS > 0 ? tx1 : tx0, cd = Math.min(2.2, (coreS > 0 ? hw - tx1 : tx0 + hw) - 0.7);
-      // 短い敷地で、事務所の側の横の面に看板があるときは、塔を後ろ寄りに
-      const cz = sideSign && coreS === os ? zB + 3.2 : czc;
-      bx(mb, xe, 0, cz - 2.8, xe + coreS * cd, Ht + (short ? 1.2 : 3), cz + 2.8, coreCol, 0, { roof: K.cap, m: MAT.plaster });
-      wq(mb, coreS > 0 ? 1 : 3, xe + coreS * (cd + 0.03), cz - 0.55, cz + 0.55, 1.5, Ht + (short ? 0.6 : 2.2), K.slot, PAT.lit, MAT.none, 10);
+      bx(mb, xe, 0, czc - 2.8, xe + coreS * cd, Ht + (short ? 1.2 : 3), czc + 2.8, coreCol, 0, { roof: K.cap, m: MAT.plaster });
+      wq(mb, coreS > 0 ? 1 : 3, xe + coreS * (cd + 0.03), czc - 0.55, czc + 0.55, 1.5, Ht + (short ? 0.6 : 2.2), K.slot, PAT.lit, MAT.none, 10);
     }
   }
 
@@ -901,7 +902,7 @@ function coldBlock(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, 
   if (kind === 'highbay' && annexD === 0 && lowX) { da = Math.max(da, lowX[0] + 1); db = Math.min(db, lowX[1] - 1); }
   const docks = slots(da, db, short ? 4.0 : 4.2, 0.2);
   const yd = 1.2;
-  dockFace(mb, 0, zF, jl ? -hw : da - 0.5, jr ? hw : db + 0.5, docks, yd, yd + 4.5, D >= 48 ? 2.6 : 2.0, S.next() < 0.6 ? accent : null);
+  dockFace(mb, 0, zF, jl ? -hw : da - 0.5, jr ? hw : db + 0.5, docks, yd, yd + 4.5, D >= 48 ? 2.6 : 2.0, S.next() < 0.6 ? accent : null, open);
   const room = hd - strip - 0.6 - (zF + 0.66);
   dockLines(mb, 0, zF, docks, Math.min(9, room - 1));
   dockTrucks(mb, rng, 0, zF, docks, room, 0.6, rng.next() < 0.5 ? accent : null);
@@ -1162,6 +1163,8 @@ function boxCol(rng: Rng, fam: number): Col {
 // =====================================================================
 function containerYard(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
   mb.flatRoofMat = MAT.membrane;
+  // 屋根の色はいつも同じ（前に建てた冷蔵倉庫の色が残らないように。rng は使わない）
+  K.roof.copy(ROOFS[1]);
   const W = f.W, D = f.D;
   if (W < 28 || D < 28) { depot(mb, f, rng, tf, den); return; }
   // シャーシプールは奥行き 44m 以上（2 列が入るとき）

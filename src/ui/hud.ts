@@ -886,7 +886,7 @@ export class Hud {
     om.append(oseg);
     body.append(om);
     // BGM の音量
-    const bv = el('div', 'row', `<div><div>BGM の音量</div><div class="desc">静かなアンビエントの4曲を順番にくり返し流します${this.nowPlaying ? `（再生中：${this.nowPlaying}）` : ''}。iPhone の消音スイッチがオンだと鳴りません</div></div>`);
+    const bv = el('div', 'row', `<div><div>BGM の音量</div><div class="desc">静かなアンビエントの4曲を順番にくり返し流します${this.nowPlaying ? `（再生中：${this.nowPlaying}）` : ''}。BGM がオンのときは、iPhone の消音スイッチがオンでも BGM と効果音が鳴ります。BGM をオフにすると、効果音は消音スイッチにしたがいます</div></div>`);
     const vbox = el('div', 'jrow');
     vbox.style.minWidth = '190px';
     vbox.innerHTML = `<input type="range" min="0" max="100" step="5" value="${this.settings.bgmVol ?? 50}"><span class="v">${this.settings.bgmVol ?? 50}</span>`;

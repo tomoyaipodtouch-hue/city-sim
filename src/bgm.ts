@@ -72,26 +72,30 @@ export class Bgm {
     }
     if (!this.ctx) this.start();
     if (!this.wanted || document.hidden) return;
-    if (this.running && this.silent && !this.silent.paused) return;
+    if (this.running && (!bgmSettings.enabled || (this.silent && !this.silent.paused))) return;
     this.wake();
   }
 
-  // 止まっていたら動かす（電話やほかのアプリの音で止められたとき、iOS は 'interrupted' になる）
+  // 止まっていたら動かす（電話やほかのアプリの音で止められたとき、iOS は 'interrupted' になる）。
+  // BGM がオンのときだけ消音スイッチを無視して鳴らす。効果音だけのときは、ほかのアプリの音楽を止めず、消音スイッチにしたがう
   private wake() {
-    // iOS 17 以降：消音スイッチがオンでも音楽として鳴らす
+    const music = bgmSettings.enabled;
+    // iOS 17 以降：BGM は音楽として鳴らす（消音スイッチがオンでも鳴る）。効果音だけなら 'ambient'（ほかの音とまざる）
     try {
       const nav = navigator as unknown as { audioSession?: { type: string } };
-      if (nav.audioSession && nav.audioSession.type !== 'playback') nav.audioSession.type = 'playback';
+      const type = music ? 'playback' : 'ambient';
+      if (nav.audioSession && nav.audioSession.type !== type) nav.audioSession.type = type;
     } catch { /* 対応していない */ }
-    // それより前の iOS：無音の音声を流しておくと、Web Audio も消音スイッチの影響を受けなくなる
-    if (!this.silent) {
+    // それより前の iOS：無音の音声を流しておくと、Web Audio も消音スイッチの影響を受けなくなる（BGM のときだけ）
+    if (music && !this.silent) {
       const a = document.createElement('audio');
       a.src = silentWav();
       a.loop = true;
       a.setAttribute('playsinline', '');
       this.silent = a;
     }
-    if (this.silent.paused) void this.silent.play().catch(() => {});
+    if (!music) this.silent?.pause();
+    else if (this.silent?.paused) void this.silent.play().catch(() => {});
     const c = this.ctx as AudioContext | null;
     if (!c || c.state === 'running' || c.state === 'closed') return;
     void c.resume().catch(() => {});
@@ -115,11 +119,12 @@ export class Bgm {
     this.ctWall = 0;
     this.setup(c);
     this.nextTime = c.currentTime + 0.5;
-    // 止められたら（こちらで止めたのでなければ）すぐに動かし直してみる。だめなら次のタップで
+    // 止められたら（こちらで止めたのでなければ）すぐに動かし直してみる。だめなら次のタップで。
+    // ほかのアプリに止められた（'interrupted'）ときは、BGM がオンのときだけ取りもどす
     c.addEventListener('statechange', () => {
       if (this.ctx !== c) return;
       if (c.state === 'running') this.tick();
-      else if (c.state !== 'closed' && this.wanted && !document.hidden) void c.resume().catch(() => {});
+      else if (c.state !== 'closed' && this.wanted && !document.hidden && (c.state !== 'interrupted' || bgmSettings.enabled)) void c.resume().catch(() => {});
     });
     this.applyVolume();
     if (this.timer) return;
@@ -170,7 +175,7 @@ export class Bgm {
       // どちらもオフなら止めておく（電池のため）
       if (a.state === 'running') void a.suspend().catch(() => {});
       this.silent?.pause();
-    } else if (!document.hidden && (a.state !== 'running' || this.silent?.paused)) this.wake();
+    } else if (!document.hidden) this.wake(); // BGM のオンとオフで、消音スイッチの扱いも変わる
   }
 
   // 効果音の出口（音を出せないときは null）
@@ -182,11 +187,25 @@ export class Bgm {
       if (!document.hidden) void a.resume().catch(() => {});
       return null;
     }
+    // 'running' でも時間が止まっていることがある（音の出口の切り替えなど）。そのときも鳴らさない
+    if (this.frozen(a, 400) || this.stuck) return null;
     if (!this.fx) {
       this.fx = a.createGain();
       this.fx.connect(a.destination);
     }
     return { ctx: a, out: this.fx };
+  }
+
+  // 音の時間が ms ミリ秒より長く進んでいなければ true（進んでいれば、見張りの記録を新しくする）
+  private frozen(a: BaseAudioContext, ms: number) {
+    const now = a.currentTime, wall = performance.now();
+    if (!this.ctWall || now > this.ctLast + 0.01) {
+      this.ctWall = wall;
+      this.ctLast = now;
+      this.stuck = false;
+      return false;
+    }
+    return wall - this.ctWall > ms;
   }
 
   // 次の曲へ（4曲を順番に）
@@ -203,14 +222,10 @@ export class Bgm {
       this.ctWall = 0;
       return;
     }
-    const now = a.currentTime, wall = performance.now();
     // 時間が進んでいるかを見張る（2秒たっても進まなければ、止まっているとみなす）
-    if (!this.ctWall || now > this.ctLast + 0.01) {
-      this.ctWall = wall;
-      this.ctLast = now;
-      this.stuck = false;
-    } else if (wall - this.ctWall > 2000) this.stuck = true;
+    if (this.frozen(a, 2000)) this.stuck = true;
     if (!bgmSettings.enabled) return;
+    const now = a.currentTime;
     // 予約が遅れたとき（BGM をオフにしていた、タイマーが止まっていた）は、たまった和音をまとめて鳴らさず、今から続ける
     if (this.nextTime < now - 0.25 || this.nextTime > now + 30) this.nextTime = now + 0.3;
     // 3秒先までの和音を予約する（和音どうしは重なって、ゆっくり入れ替わる）
