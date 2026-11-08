@@ -82,8 +82,8 @@ export const ZONE_COST = [
 ];
 
 // ---- 成長する建物の種類（SC4 と同じ区分） ----
-export type GrowKind = 'R1' | 'R2' | 'R3' | 'CS1' | 'CS2' | 'CS3' | 'CO2' | 'CO3' | 'IA' | 'ID' | 'IM' | 'IH';
-export const GROW_KINDS: GrowKind[] = ['R1', 'R2', 'R3', 'CS1', 'CS2', 'CS3', 'CO2', 'CO3', 'IA', 'ID', 'IM', 'IH'];
+export type GrowKind = 'R1' | 'R2' | 'R3' | 'CS1' | 'CS2' | 'CS3' | 'CO2' | 'CO3' | 'IA' | 'ID' | 'IM' | 'IL' | 'IH';
+export const GROW_KINDS: GrowKind[] = ['R1', 'R2', 'R3', 'CS1', 'CS2', 'CS3', 'CO2', 'CO3', 'IA', 'ID', 'IM', 'IL', 'IH'];
 
 type Size = [number, number];
 export interface GrowDef {
@@ -106,6 +106,8 @@ const S_MID: Size[] = [[1, 1], [1, 2], [2, 1], [2, 2], [2, 2], [3, 2], [2, 3]];
 const S_HIGH: Size[] = [[1, 1], [2, 1], [1, 2], [2, 2], [2, 2], [3, 3], [3, 2], [2, 3]];
 const S_IND_MID: Size[] = [[2, 2], [3, 2], [2, 3], [3, 3], [4, 3]];
 const S_IND_HIGH: Size[] = [[3, 3], [4, 3], [3, 4], [4, 4]];
+// 倉庫業の大きな敷地（港・貨物駅のすぐ近くだけ。6×4 まで）
+export const IL_BIG_SIZES: Size[] = [[5, 3], [3, 5], [5, 4], [4, 5], [6, 3], [3, 6], [6, 4], [4, 6]];
 
 export const GROW: Record<GrowKind, GrowDef> = {
   R1: { kind: 'R1', zone: ZoneType.R, name: '住宅（低所得）', capPerCell: 14, floorCap: 5, wealth: 0.6, dens: [0, 1, 2], sizes: [S_LOW_R, S_MID, S_HIGH], floors: [[1, 2], [3, 6], [8, 32]], pollution: 0, powerPer: 0.05, waterPer: 0.1 },
@@ -119,6 +121,8 @@ export const GROW: Record<GrowKind, GrowDef> = {
   IA: { kind: 'IA', zone: ZoneType.F, name: '農業', capPerCell: 1.6, floorCap: 0, wealth: 0.5, dens: [0], sizes: [[[2, 2]]], floors: [[1, 1]], pollution: 0.05, powerPer: 0.05, waterPer: 0.3 },
   ID: { kind: 'ID', zone: ZoneType.I, name: '汚染型工業', capPerCell: 18, floorCap: 0, wealth: 0.8, dens: [0, 1, 2], sizes: [[[2, 2], [3, 2], [2, 3], [3, 3], [1, 2]], S_IND_MID, S_IND_HIGH], floors: [[1, 1], [1, 1], [1, 1]], pollution: 1.0, powerPer: 0.12, waterPer: 0.1 },
   IM: { kind: 'IM', zone: ZoneType.I, name: '製造業', capPerCell: 14, floorCap: 0, wealth: 1.1, dens: [0, 1, 2], sizes: [[[2, 2], [3, 2], [2, 3], [3, 3]], S_IND_MID, S_IND_HIGH], floors: [[1, 1], [1, 1], [1, 1]], pollution: 0.45, powerPer: 0.1, waterPer: 0.1 },
+  // 倉庫業：トラックの出入りだけなので汚染は少なく、広さの割に働く人も少ない。税の係数は製造業と同じ
+  IL: { kind: 'IL', zone: ZoneType.I, name: '倉庫業', capPerCell: 8.5, floorCap: 0, wealth: 1.1, dens: [0, 1, 2], sizes: [[[2, 2], [3, 2], [2, 3], [3, 3]], S_IND_MID, S_IND_HIGH], floors: [[1, 1], [1, 1], [1, 1]], pollution: 0.15, powerPer: 0.07, waterPer: 0.04 },
   IH: { kind: 'IH', zone: ZoneType.I, name: 'ハイテク産業', capPerCell: 10, floorCap: 0, wealth: 1.7, dens: [1, 2], sizes: [[], [[2, 2], [2, 1], [1, 2], ...S_IND_MID], [[2, 2], [3, 2], [2, 3], ...S_IND_HIGH]], floors: [[1, 1], [1, 1], [1, 1]], pollution: 0.05, powerPer: 0.14, waterPer: 0.06 },
 };
 
@@ -128,7 +132,7 @@ export const IND_DENSITY_MUL = [1, 1.7, 2.6];
 export const ZONE_KINDS: Record<number, GrowKind[]> = {
   [ZoneType.R]: ['R1', 'R2', 'R3'],
   [ZoneType.C]: ['CS1', 'CS2', 'CS3', 'CO2', 'CO3'],
-  [ZoneType.I]: ['ID', 'IM', 'IH'],
+  [ZoneType.I]: ['ID', 'IM', 'IL', 'IH'],
   [ZoneType.F]: ['IA'],
 };
 
@@ -136,7 +140,7 @@ export const TAX_LABELS: Record<GrowKind, string> = {
   R1: '住宅 $', R2: '住宅 $$', R3: '住宅 $$$',
   CS1: '商業 $', CS2: '商業 $$', CS3: '商業 $$$',
   CO2: 'オフィス $$', CO3: 'オフィス $$$',
-  IA: '農業', ID: '汚染型工業', IM: '製造業', IH: 'ハイテク産業',
+  IA: '農業', ID: '汚染型工業', IM: '製造業', IL: '倉庫業', IH: 'ハイテク産業',
 };
 
 // 人口に応じた最大の階数（小さな街に超高層ビルは建たない）
@@ -253,8 +257,8 @@ export const CIVIC: Record<CivicId, CivicDef> = {
   sub_station: { id: 'sub_station', name: '地下鉄の駅', w: 1, h: 1, cost: 3500, upkeep: 70, transit: 'sub', desc: '地下鉄の線路の上か隣に、道路に接するように置く' },
   ferry_p: { id: 'ferry_p', name: '旅客フェリー乗り場', w: 2, h: 2, cost: 3000, upkeep: 60, ferry: 'passenger', waterfront: true, desc: '水辺に、道路に接するように置く。同じ水域の乗り場どうしが航路で結ばれる' },
   ferry_c: { id: 'ferry_c', name: 'カーフェリー乗り場', w: 3, h: 3, cost: 6000, upkeep: 110, ferry: 'car', waterfront: true, desc: '車ごと乗れるフェリー。水域がマップの端まで続いていれば、隣の都市へも行ける' },
-  seaport_l: { id: 'seaport_l', name: '大型コンテナターミナル', w: 8, h: 12, rotate: true, cost: 90000, upkeep: 900, seaport: true, portScale: 3, waterfront: true, pollution: 10, desc: '大きなガントリークレーンが並ぶコンテナ港。工業の需要が大きく上がる。水域がマップの端まで続いている必要がある' },
-  seaport: { id: 'seaport', name: '港', w: 4, h: 4, cost: 25000, upkeep: 300, seaport: true, waterfront: true, pollution: 6, desc: '工業の需要が上がり、トラックが荷物を運べる。水域がマップの端まで続いている必要がある' },
+  seaport_l: { id: 'seaport_l', name: '大型コンテナターミナル', w: 8, h: 12, rotate: true, cost: 90000, upkeep: 900, seaport: true, portScale: 3, waterfront: true, pollution: 10, desc: '大きなガントリークレーンが並ぶコンテナ港。工業、とくに倉庫業の需要が大きく上がり、まわりに大きな倉庫が建つ。水域がマップの端まで続いている必要がある' },
+  seaport: { id: 'seaport', name: '港', w: 4, h: 4, cost: 25000, upkeep: 300, seaport: true, waterfront: true, pollution: 6, desc: '工業、とくに倉庫業の需要が上がり、トラックが荷物を運べる。水域がマップの端まで続いている必要がある' },
   airport_s: { id: 'airport_s', name: '空港（小）', w: 11, h: 44, rotate: true, cost: 30000, upkeep: 350, airport: 1, pollution: 4, desc: '商業とオフィスの需要が上がる。周りは騒音で地価が下がる' },
   airport_l: { id: 'airport_l', name: '空港（大）', w: 17, h: 80, rotate: true, cost: 90000, upkeep: 900, airport: 2, pollution: 10, desc: '商業とオフィスの需要が大きく上がる。周りは騒音で地価が下がる' },
   police_s: { id: 'police_s', name: '交番', w: 1, h: 1, cost: 800, upkeep: 60, service: 'police', radius: 9, desc: '周りの犯罪を減らす（小さな範囲）' },
@@ -277,8 +281,40 @@ export const CIVIC: Record<CivicId, CivicDef> = {
   future_stadium: { id: 'future_stadium', name: '近未来スタジアム', w: 8, h: 8, cost: 60000, upkeep: 500, park: 0.12, reward: true, desc: '記念施設。白い曲面の大きなスタジアム。商業の需要が上がり、市長評価が上がる' },
   stadium: { id: 'stadium', name: 'スタジアム', w: 6, h: 6, cost: 40000, upkeep: 400, park: 0.1, reward: true, desc: '記念施設。商業の需要が上がり、市長評価が上がる' },
   recycling: { id: 'recycling', name: 'リサイクルセンター', w: 3, h: 2, cost: 6000, upkeep: 200, service: 'recycling', capacity: 4000, desc: 'ゴミを月 4,000 減らす' },
-  freight_st: { id: 'freight_st', name: '貨物駅', w: 3, h: 2, cost: 8000, upkeep: 120, freightRail: true, desc: '線路と道路に接するように置く。線路がマップの端まで続いていれば、トラックの荷物を鉄道で運ぶ' },
+  freight_st: { id: 'freight_st', name: '貨物駅', w: 3, h: 2, cost: 8000, upkeep: 120, freightRail: true, desc: '線路と道路に接するように置く。線路がマップの端まで続いていれば、トラックの荷物を鉄道で運び、倉庫業の需要が上がる' },
 };
+
+// 港・貨物駅のまわりの倉庫業。施設ごとに [いちばん強いときの近さ, その強さのままの距離, 0 になる距離]（マス）。
+// grow = 倉庫業が建つ場所（シミュレーション）。look = 倉庫業の建物の形（描画）。look は岸壁のすぐそばだけ強いので、
+// 岸壁から外へ輪の形に形が並ぶ。どちらも同じ施設・同じはかり方（敷地の中心から施設の四角のいちばん近いところまで）
+type Reach = [number, number, number];
+export const LOGI_REACH: Partial<Record<CivicId, { grow: Reach; look: Reach }>> = {
+  seaport_l: { grow: [1, 20, 48], look: [1, 3, 40] }, // 大型コンテナターミナル
+  seaport: { grow: [0.6, 10, 28], look: [0.6, 2, 24] }, // 港
+  freight_st: { grow: [0.7, 8, 24], look: [0.7, 2, 20] }, // 貨物駅
+};
+type Rect = { type: string; x: number; y: number; w: number; h: number };
+// 点 (cx, cy) から施設の四角までの距離（マス）
+function logiDist(p: Rect, cx: number, cy: number) {
+  return Math.hypot(Math.max(p.x - cx, 0, cx - (p.x + p.w)), Math.max(p.y - cy, 0, cy - (p.y + p.h)));
+}
+const reachAt = (r: Reach, d: number) => r[0] * (d <= r[1] ? 1 : d >= r[2] ? 0 : (r[2] - d) / (r[2] - r[1]));
+// 1つの施設への近さ（0..1、建つ場所）。full = いちばん強い範囲の中（倉庫業の大きな敷地が建つ）
+export function logiReach(p: Rect, cx: number, cy: number): { v: number; full: boolean } {
+  const r = LOGI_REACH[p.type as CivicId]?.grow;
+  if (!r) return { v: 0, full: false };
+  const d = logiDist(p, cx, cy);
+  return { v: reachAt(r, d), full: d <= r[1] };
+}
+// 描画用：いちばん近い施設への近さ（0..1）。倉庫業の建物の形を選ぶのに使う
+export function logiLook(ports: Rect[], cx: number, cy: number): number {
+  let v = 0;
+  for (const p of ports) {
+    const r = LOGI_REACH[p.type as CivicId]?.look;
+    if (r) v = Math.max(v, reachAt(r, logiDist(p, cx, cy)));
+  }
+  return v;
+}
 
 export const DIFFICULTY = [
   { name: 'かんたん', funds: 200000, demand: 1.25 },

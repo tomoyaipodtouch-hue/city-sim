@@ -4,7 +4,7 @@ import { Rng } from './rng';
 import { DAYS_PER_MONTH, DX, DY } from './constants';
 import {
   CIVIC, CivicId, plantPower, DEFAULT_TAX, DEPT_NAMES, Dept, DIFFICULTY, isHighway, SERVICE_DEPT, LineKind, LINES, FARE, BUS_STOP_UPKEEP, ESTOP_UPKEEP, GROW, GROW_KINDS, GrowKind, IND_DENSITY_MUL, maxFloorsFor, POWER_LINE_UPKEEP, ROADS, RoadType,
-  ZONE_KINDS, ZoneType, FARM_TILE,
+  ZONE_KINDS, ZoneType, FARM_TILE, IL_BIG_SIZES, LOGI_REACH, logiReach,
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
 import {
@@ -171,6 +171,17 @@ export type Command =
   | { t: 'uramp'; x: number; y: number }
   | { t: 'terrain'; op: TerrainOp; x0: number; y0: number; x1: number; y1: number }
   | { t: 'trees'; x0: number; y0: number; x1: number; y1: number };
+
+// 倉庫業の魅力：港・貨物駅のすぐ近く（近さ 1）と、幹線道路・高速道路の近くで足す値
+const LOGI_PORT_W = 1.0;
+const LOGI_ROAD_W = 0.15;
+// 倉庫業の需要：街の荷物（工業と店の雇用）に対する割合（港がないとき）、港 1 つあたりの割合と、港 1 つあたりの量、港の効果の割合
+const IL_WANT_BASE = 0.03;
+const IL_WANT_PORT = 0.06;
+const IL_WANT_PORT_FLAT = 100;
+const IL_PORT_SHARE = 0.5;
+// 港・貨物駅への近さが 0.3 以上なら、港の分の需要も使える（それより遠いと少しずつ減る）
+const ilPortMix = (near: number) => Math.min(1, near / 0.3);
 
 const emptyKinds = (v: number) => Object.fromEntries(GROW_KINDS.map((k) => [k, v])) as Record<GrowKind, number>;
 
@@ -619,6 +630,7 @@ export class World {
     for (let i = 0; i < this.g.estn.length; i++) if (this.g.estn[i] && !this.g.erail[i]) this.g.estn[i] = 0;
     this.gridVersion++;
     this.candidatesDirty = true;
+    this.logiRoadsDirty = true;
     this.updatePower();
     this.updateWater();
     this.mapsVersion++;
@@ -670,6 +682,7 @@ export class World {
       }
     this.buildings.set(b.id, b);
     this.buildingVersion++;
+    if (b.civic && LOGI_REACH[b.type as CivicId]) this.logiPortsDirty = true;
   }
 
   private removeBuilding(id: number) {
@@ -685,6 +698,7 @@ export class World {
     this.buildingVersion++;
     this.gridVersion++;
     this.candidatesDirty = true;
+    if (b.civic && LOGI_REACH[b.type as CivicId]) this.logiPortsDirty = true;
   }
 
   // 敷地の正面（道路に面した辺）を探す
@@ -831,6 +845,10 @@ export class World {
       const core = this.coreMap()[i], office = this.officeNear![i];
       if (kind === 'CO2' || kind === 'CO3') base += 0.7 * core + 0.8 * office - 0.25 * res;
       else base += -0.6 * core * (kind === 'CS1' ? 1.2 : 1) - 0.5 * office + 0.15 * res;
+    } else if (kind === 'IL') {
+      // 倉庫業は港・貨物駅のすぐ近くに集まる。幹線道路・高速道路の近くも少し好む
+      const f = this.logiField();
+      base += LOGI_PORT_W * f.near[i] + LOGI_ROAD_W * f.major[i];
     }
     return base + (zone === ZoneType.R ? svcR * (kind === 'R1' ? 0.6 : kind === 'R3' ? 1.4 : 1) : zone === ZoneType.C ? svcC : -0.15 * fire - 0.2 * garbage);
   }
@@ -848,9 +866,62 @@ export class World {
       case 'IA': return 0.75 - 0.6 * lv - 0.5 * res;
       case 'ID': return 0.7 - 0.2 * lv - water * 0.5;
       case 'IM': return 0.5 + 0.1 * lv - 0.3 * pol - water;
+      // 倉庫業は港・貨物駅から遠いと建ちにくい（近さの分は desirability で足す）
+      case 'IL': return 0.25 + 0.1 * lv - 0.1 * pol - water * 0.8;
       // 汚れた工場の近くはきらうが、工業地域でも建てられるくらいに（汚染の少ない工業地域ほど建ちやすい）
       case 'IH': return 0.52 + 0.5 * lv - 0.45 * pol - water * 1.2 + Math.max(0, (eq - 50) / 100);
     }
+  }
+
+  // 倉庫業の立地：港・貨物駅への近さ（near, 0..1）、大きな敷地が建つ範囲（full）、幹線道路・高速道路の近さ（major, 0..1）。
+  // 港・貨物駅が変わったとき、道路が変わったときだけ作り直す
+  private logi: { near: Float32Array; full: Uint8Array; major: Float32Array } | null = null;
+  private logiPortsDirty = true;
+  private logiRoadsDirty = true;
+  logiField() {
+    const g = this.g, n = g.n, N = n * n;
+    let f = this.logi;
+    if (!f || f.near.length !== N) {
+      f = this.logi = { near: new Float32Array(N), full: new Uint8Array(N), major: new Float32Array(N) };
+      this.logiPortsDirty = this.logiRoadsDirty = true;
+    }
+    if (this.logiPortsDirty) {
+      f.near.fill(0);
+      f.full.fill(0);
+      for (const b of this.buildings.values()) {
+        const r = b.civic ? LOGI_REACH[b.type as CivicId]?.grow : undefined;
+        if (!r) continue;
+        const R = Math.ceil(r[2]);
+        const xa = Math.max(0, b.x - R), xb = Math.min(n - 1, b.x + b.w + R), ya = Math.max(0, b.y - R), yb = Math.min(n - 1, b.y + b.h + R);
+        for (let y = ya; y <= yb; y++)
+          for (let x = xa; x <= xb; x++) {
+            const i = y * n + x, c = logiReach(b, x + 0.5, y + 0.5);
+            if (c.v > f.near[i]) f.near[i] = c.v;
+            if (c.full) f.full[i] = 1;
+          }
+      }
+      this.logiPortsDirty = false;
+    }
+    if (this.logiRoadsDirty) {
+      // ランプ（高速道路の出入口）、高速道路、大通りのまわり
+      const src = new Float32Array(N);
+      for (let i = 0; i < N; i++) {
+        const t = g.road[i];
+        src[i] = t === RoadType.Ramp ? 1 : isHighway(t) || isHighway(g.up[i]) ? 0.6 : t === RoadType.Avenue ? 0.5 : 0;
+      }
+      const b = blur(src, n, 3, 2);
+      for (let i = 0; i < N; i++) f.major[i] = Math.min(1, b[i] * 5);
+      this.logiRoadsDirty = false;
+    }
+    return f;
+  }
+
+  // 倉庫業の需要（場所ごと）：港・貨物駅の近くは街全体の需要、遠い内陸は街の荷物の分（港の分を除く）だけ
+  private ilInland = 0;
+  private ilDemandAt(i: number) {
+    const t = ilPortMix(this.logiField().near[i]);
+    const inland = Math.min(this.ilInland, this.demand.IL);
+    return inland + (this.demand.IL - inland) * t;
   }
 
   private growthStep() {
@@ -887,7 +958,8 @@ export class World {
         let total = 0;
         const scores: number[] = [];
         for (const k of kinds) {
-          let s = Math.max(0, this.demand[k]) * Math.max(0, this.desirability(k, i));
+          const dem = k === 'IL' ? this.ilDemandAt(i) : this.demand[k];
+          let s = Math.max(0, dem) * Math.max(0, this.desirability(k, i));
           // 古い工場の建て替えでは、ハイテク産業になりやすい（産業の高度化）
           if (replace && k === 'IH') s *= 3;
           scores.push(s);
@@ -1048,6 +1120,18 @@ export class World {
     const old = replace ? this.buildings.get(replace) : undefined;
     // 農家は 8×8 マスの区画ごとに1軒だけ
     if (def.zone === ZoneType.F && !old && this.farmInTile(x0, y0)) return false;
+    // 倉庫業は、港・貨物駅のすぐ近くでは大きな敷地（6×4 まで）になりやすい。入らなければ、ふつうの大きさでもう一度ためす
+    if (kind === 'IL' && watered && this.logiField().full[i] && this.rng.next() < 0.6) {
+      const [bw, bh] = IL_BIG_SIZES[this.rng.int(IL_BIG_SIZES.length)];
+      if (this.spawnLot(kind, x0, y0, bw, bh, den, watered, pop, replace, old)) return true;
+    }
+    return this.spawnLot(kind, x0, y0, sw, sh, den, watered, pop, replace, old);
+  }
+
+  // (x0, y0) を含む sw×sh の敷地を探して建てる
+  private spawnLot(kind: GrowKind, x0: number, y0: number, sw: number, sh: number, den: number, watered: boolean, pop: number, replace: number, old: Building | undefined): boolean {
+    const g = this.g, n = g.n;
+    const def = GROW[kind];
     // この位置を含む敷地を探す
     const tries: [number, number][] = [];
     for (let oy = 0; oy < sh; oy++) for (let ox = 0; ox < sw; ox++) tries.push([x0 - ox, y0 - oy]);
@@ -1440,7 +1524,7 @@ export class World {
     const railEdge = railReachEdge(g);
     const freightAt = new Map<number, Destination[]>();
     const terminals: { b: Building; kind: 'passenger' | 'car'; body: number; road: number }[] = [];
-    let airportBoost = 0, seaportBoost = 0;
+    let airportBoost = 0, seaportBoost = 0, freightBoost = 0;
     for (const b of this.buildings.values()) {
       if (!b.civic) continue;
       const def = CIVIC[b.type as CivicId];
@@ -1464,6 +1548,7 @@ export class World {
         for (let yy = b.y - 1; yy <= b.y + b.h; yy++) for (let xx = b.x - 1; xx <= b.x + b.w; xx++) if (g.inb(xx, yy) && railEdge[g.idx(xx, yy)]) ok = true;
         if (ok) {
           for (const c of acc) (freightAt.get(c) ?? freightAt.set(c, []).get(c)!).push({ id: b.id, free: 1e9 });
+          freightBoost += 0.15; // 倉庫業の需要が上がる
           b.note = '鉄道で隣の都市へ荷物を運んでいる';
         } else b.note = '<span class="neg">線路がマップの端までつながっていません</span>';
       } else if (def.airport) {
@@ -1494,6 +1579,7 @@ export class World {
     }
     this.airportBoost = airportBoost;
     this.seaportBoost = seaportBoost;
+    this.freightBoost = freightBoost;
     const graph = buildRoadGraph(g, cong, junctions);
     const rc = assignTrips(g, [...commuters.values()], jobsAt, cong, junctions, rnd, { externalCap: external, maxMinutes: 80, weight: 1 }, tm, graph);
     const rs = assignTrips(g, [...shoppers.values()], shopsAt, cong, junctions, rnd, { externalCap: this.neighborConnected ? pop * 0.03 : 0, maxMinutes: 30, weight: 0.5 }, tm, graph);
@@ -1585,6 +1671,7 @@ export class World {
   private airportBoost = 0;
   zoneDemand: [number, number, number] = [0, 0, 0];
   private seaportBoost = 0;
+  private freightBoost = 0; // 貨物駅（倉庫業の需要）
   modeShare = { car: 0, transit: 0, walk: 0 };
   static readonly CTL_AUTO = Ctl.Auto;
   tripStats = { shopping: 0, freight: 0, trucks: 0 };
@@ -1593,6 +1680,8 @@ export class World {
   private updateDemand() {
     let pop = 0, popR1 = 0, popR2 = 0, popR3 = 0;
     const capK = emptyKinds(0);
+    const lf = this.logiField();
+    let capILIn = 0; // 内陸（港・貨物駅から遠いところ）の倉庫業の雇用
     for (const b of this.buildings.values()) {
       if (b.civic || b.state === BState.Abandoned) continue;
       const k = b.type as GrowKind;
@@ -1602,8 +1691,9 @@ export class World {
         else if (k === 'R2') popR2 += b.occ;
         else popR3 += b.occ;
       } else capK[k] += b.cap;
+      if (k === 'IL') capILIn += b.cap * (1 - ilPortMix(lf.near[this.g.idx(b.x + (b.w >> 1), b.y + (b.h >> 1))]));
     }
-    const jobs = capK.CS1 + capK.CS2 + capK.CS3 + capK.CO2 + capK.CO3 + capK.IA + capK.ID + capK.IM + capK.IH;
+    const jobs = capK.CS1 + capK.CS2 + capK.CS3 + capK.CO2 + capK.CO3 + capK.IA + capK.ID + capK.IM + capK.IL + capK.IH;
     const ext = this.neighborConnected ? 200 + pop * 0.25 : 0;
     const workers = pop * 0.5;
     const unemployment = workers > 50 ? Math.max(0, (workers - this.employedTotal) / workers) : 0;
@@ -1636,10 +1726,21 @@ export class World {
       raw[k] = want[k] > 0 ? (want[k] - capK[k]) / Math.max(60, want[k] * 0.5) : -0.3;
       raw[k] += unemployment * 1.2;
     }
-    // 空港と港
+    // 倉庫業：街の工業と店が大きいほど（保管して配る荷物が多い）、港と貨物駅があるほど多い。
+    // 港の数え方：港 1、大型コンテナターミナル 3、貨物駅 0.6（4 で頭打ち）
+    const portUnits = Math.min(4, (this.seaportBoost + this.freightBoost) / 0.25);
+    const goods = capK.ID + capK.IM + capK.IH + (capK.CS1 + capK.CS2 + capK.CS3) * 0.5;
+    const wantILIn = pop > 600 ? goods * IL_WANT_BASE : 0;
+    const wantIL = wantILIn + portUnits * (IL_WANT_PORT_FLAT + goods * IL_WANT_PORT);
+    raw.IL = wantIL > 0 ? (wantIL - capK.IL) / Math.max(60, wantIL * 0.5) + unemployment : -0.3;
+    // 内陸の倉庫業は、街の荷物の分だけ（港があっても内陸にはあまり建たない）
+    const rawILIn = (wantILIn > 0 ? (wantILIn - capILIn) / Math.max(60, wantILIn * 0.5) + unemployment : -0.3) + this.fx.demand.I;
+    // 空港と港（港の効果は、ほとんどが倉庫業に向かう）
     for (const k of ['CS2', 'CS3', 'CO2', 'CO3'] as const) raw[k] += this.airportBoost;
     raw.CS1 += this.airportBoost * 0.5;
-    for (const k of ['ID', 'IM'] as const) raw[k] += this.seaportBoost;
+    raw.ID += this.seaportBoost * 0.3;
+    raw.IM += this.seaportBoost * 0.4;
+    raw.IL += (this.seaportBoost + this.freightBoost) * IL_PORT_SHARE;
     // 記念施設
     const has = (t: string) => [...this.buildings.values()].some((b) => b.type === t);
     if (has('stadium') || has('future_stadium')) for (const k of ['CS1', 'CS2', 'CS3'] as const) raw[k] += 0.1;
@@ -1647,19 +1748,21 @@ export class World {
     // 条例
     for (const k of ['R1', 'R2', 'R3'] as const) raw[k] += this.fx.demand.R + (this.rating - 50) / 250;
     for (const k of ['CS1', 'CS2', 'CS3', 'CO2', 'CO3'] as const) raw[k] += this.fx.demand.C;
-    for (const k of ['ID', 'IM', 'IH', 'IA'] as const) raw[k] += this.fx.demand.I;
+    for (const k of ['ID', 'IM', 'IL', 'IH', 'IA'] as const) raw[k] += this.fx.demand.I;
     raw.ID += this.fx.demand.ID;
     raw.R1 -= unemployment * 1.5;
     raw.R2 -= unemployment * 1.5;
     raw.R3 -= unemployment * 1.5;
     const mul = DIFFICULTY[this.difficulty].demand;
-    for (const k of GROW_KINDS) {
-      let v = raw[k] - (this.taxes[k] - DEFAULT_TAX) * 0.08;
+    const settle = (prev: number, r: number, k: GrowKind) => {
+      let v = r - (this.taxes[k] - DEFAULT_TAX) * 0.08;
       if (v > 0) v *= mul;
       // なめらかに頭打ちにする（すぐに ±1 に張り付かないように）
       v = Math.tanh(v * 1.1);
-      this.demand[k] = this.demand[k] * 0.5 + v * 0.5;
-    }
+      return prev * 0.5 + v * 0.5;
+    };
+    for (const k of GROW_KINDS) this.demand[k] = settle(this.demand[k], raw[k], k);
+    this.ilInland = settle(this.ilInland, rawILIn, 'IL');
     // 画面の R・C・I のグラフ：種類ごとの需要を、その種類の街での大きさで重みをつけて平均する。
     // （以前はいちばん大きい種類を出していたので、建たない種類（工業地域が全部高密度のときの農業など）が
     //   いつも上限になり、グラフが動かなかった）
@@ -1674,7 +1777,7 @@ export class World {
     this.zoneDemand = [
       wmean(['R1', 'R2', 'R3'], [0.5, 0.35, pop > 600 ? 0.15 : 0]),
       wmean(['CS1', 'CS2', 'CS3', 'CO2', 'CO3'], [desiredC * share[0], desiredC * share[1], desiredC * share[2], wantCO.CO2, wantCO.CO3]),
-      wmean(['IA', 'ID', 'IM', 'IH'], [lowI ? want.IA : 0, want.ID, want.IM, wantIH]),
+      wmean(['IA', 'ID', 'IM', 'IL', 'IH'], [lowI ? want.IA : 0, want.ID, want.IM, wantIL, wantIH]),
     ];
   }
 
@@ -1880,7 +1983,7 @@ export class World {
     // 需要が高いのにゾーンがない
     if (this.day % (DAYS_PER_MONTH * 6) === 0) {
       if (this.demand.R1 > 0.6 && !this.candidates[1].length) this.pushNews('住宅の需要が高まっています。住宅ゾーンを指定しましょう。');
-      else if (Math.max(this.demand.ID, this.demand.IA) > 0.6 && !this.candidates[3].length) this.pushNews('工業の需要が高まっています。工業ゾーンを指定しましょう。');
+      else if (Math.max(this.demand.ID, this.demand.IL, this.demand.IA) > 0.6 && !this.candidates[3].length) this.pushNews('工業の需要が高まっています。工業ゾーンを指定しましょう。');
       else if (Math.max(this.demand.CS1, this.demand.CS2) > 0.6 && !this.candidates[2].length) this.pushNews('商業の需要が高まっています。商業ゾーンを指定しましょう。');
     }
   }

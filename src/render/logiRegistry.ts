@@ -1,6 +1,6 @@
-// 物流施設の形（港のそばの工業ゾーンに建つ倉庫・配送センターなど）の一覧。
+// 物流施設の形（倉庫業の建物：倉庫・配送センターなど）の一覧。
 // 形を作る関数はそれぞれのファイルでここに登録する。
-// 確認用：window.__logi = '名前' にすると、工業の建物をその形で描く（ふだんは何もしない）
+// 確認用：window.__logi = '名前' にすると、倉庫業・製造業・汚染型工業の建物をその形で描く（ふだんは何もしない）
 import type { MeshBuilder } from './builder';
 import type { Rng } from '../sim/rng';
 import type { LotFrame, TF } from './buildingGen';

@@ -7,44 +7,34 @@ import { generateBuilding, setupLot, TreeSpot, farmFields, FxSpot } from './buil
 import { forcedLogi } from './logiRegistry';
 import { createBuildingMaterial } from './materials';
 import { PondBuilder, createPondMaterial, createGlowMaterial, createFallMaterial } from './parkPond';
-import { CIVIC, CivicId, FARM_TILE, ZoneType } from '../sim/defs';
+import { CIVIC, CivicId, FARM_TILE, LOGI_REACH, logiLook, ZoneType } from '../sim/defs';
 
 const CHUNK = 16;
 
-// 港・貨物駅のまわりの工業は物流施設になりやすい。
-// 施設ごとに [いちばん強いときの近さ, その強さのままの距離, 0 になる距離]（距離はマス）。
-// 岸壁のすぐそばだけ強く、離れるほどまっすぐ弱くなる（近さで建つものが変わり、岸壁から輪の形に並ぶ）
-const PORT_REACH: Partial<Record<string, [number, number, number]>> = {
-  seaport_l: [1, 3, 40], // 大型コンテナターミナル
-  seaport: [0.6, 2, 24], // 港
-  freight_st: [0.7, 2, 20], // 貨物駅
-};
+// 倉庫業（IL）の建物の形は、港・貨物駅への近さで変わる。施設と近さのはかり方は、シミュレーション（倉庫業が建つ場所）と
+// 同じ defs の LOGI_REACH を使う（形には look の近さを使う）
 export const PORT_STEPS = 8; // 近さの段階の数（段階を区画のキーに入れる）
 
 // 港・貨物駅への近さ（0..PORT_STEPS の段階）。建物の中心から施設の四角のいちばん近いところまでの距離で決める
 export function portLevel(b: Building, ports: Building[]): number {
-  const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
-  let v = 0;
-  for (const p of ports) {
-    const r = PORT_REACH[p.type];
-    if (!r) continue;
-    const dx = Math.max(p.x - cx, 0, cx - (p.x + p.w)), dy = Math.max(p.y - cy, 0, cy - (p.y + p.h));
-    const d = Math.hypot(dx, dy);
-    v = Math.max(v, r[0] * (d <= r[1] ? 1 : d >= r[2] ? 0 : (r[2] - d) / (r[2] - r[1])));
-  }
-  return Math.round(v * PORT_STEPS);
+  return Math.round(logiLook(ports, b.x + b.w / 2, b.y + b.h / 2) * PORT_STEPS);
 }
 
-// 物流施設の連結：港の近くで、同じ向き・同じ大きさの工業（IM）の敷地が、道路にそった横の辺をぴったり共有して並んでいれば、
+// 物流施設の連結：港の近くで、同じ向き・同じ大きさの倉庫業（IL）の敷地が、道路にそった横の辺をぴったり共有して並んでいれば、
 // 1 つの長い建物として描く（実際の大型物流施設は 150〜350m の長さがある）。seed = 連結の種（いちばん小さい種）、
 // L / R = 敷地の -x / +x の側がつながる、lead = 看板を描く敷地、port・den = 連結の中でいちばん大きい値。
-// 連結はいちばん高い敷地の地面にそろえて建てるので、地面の高さ（base）の差が JOIN_DH を超えるところではつなげない
+// 連結はいちばん高い敷地の地面にそろえて建てるので、地面の高さ（base）の差が JOIN_DH を超えるところではつなげない。
+// 奥行きが 5 マス以上の敷地はつなげない（長い辺が道路と直角なので、横につなぐと形がくずれる）
 export interface Campus { seed: number; den: number; port: number; L: boolean; R: boolean; lead: boolean }
+// 倉庫業の建物かどうか
+const isIL = (b: Building) => !b.civic && b.type === 'IL';
+// 敷地の奥行き（マス。道路と直角の向き）
+const depth = (b: Building) => (b.face === 0 || b.face === 4 ? b.w : b.h);
 // 向きごとの、敷地の +x の向き（マスの x, y）
 const RIGHT: Record<number, [number, number]> = { 2: [1, 0], 6: [-1, 0], 0: [0, -1], 4: [0, 1] };
 const JOIN_DH = 1.5; // 連結の中の地面の高さの差の上限（m）
 export function campuses(list: Building[], lv: Map<number, number>, any = false, base: (b: Building) => number = () => 0): Map<number, Campus> {
-  const ok = (b: Building) => !b.civic && b.type === 'IM' && b.state !== BState.Building && RIGHT[b.face] !== undefined && (any || (lv.get(b.id) ?? 0) >= 2);
+  const ok = (b: Building) => isIL(b) && b.state !== BState.Building && RIGHT[b.face] !== undefined && depth(b) <= 4 && (any || (lv.get(b.id) ?? 0) >= 2);
   const at = new Map<string, Building>();
   for (const b of list) if (ok(b)) at.set(`${b.x},${b.y}`, b);
   const parent = new Map<number, number>();
@@ -138,10 +128,10 @@ export class BuildingLayer {
     const cparkIds = new Set<number>();
     for (const b of list) if (b.civic && CIVIC[b.type as CivicId]?.cpark) cparkIds.add(b.id);
     const isCpark = (x: number, y: number) => g.inb(x, y) && cparkIds.has(g.bldg[g.idx(x, y)]);
-    // 港・貨物駅（工業の建物の形を選ぶのに使う）と、建物ごとの近さの段階、物流施設の連結
-    const ports = list.filter((b) => b.civic && PORT_REACH[b.type]);
+    // 港・貨物駅（倉庫業の建物の形を選ぶのに使う）と、建物ごとの近さの段階、物流施設の連結
+    const ports = list.filter((b) => b.civic && LOGI_REACH[b.type as CivicId]);
     const plv = new Map<number, number>();
-    if (ports.length) for (const b of list) if (!b.civic && (b.type === 'IM' || b.type === 'ID')) plv.set(b.id, portLevel(b, ports));
+    if (ports.length) for (const b of list) if (isIL(b)) plv.set(b.id, portLevel(b, ports));
     // 確認用に物流施設の形を強制しているときは、港から遠くてもつなげる
     const lotBase = (b: Building) => {
       let h = -Infinity;
@@ -176,13 +166,15 @@ export class BuildingLayer {
           key += `c${m};`;
         }
       }
-      // 区画の地形が変わったかどうか
+      // 区画の地形が変わったかどうか（区画からはみ出す大きな建物の下の地形も見る）
       let hk = this.heightKeys.get(c) ?? 0;
       if (heightsChanged) {
         const cx = (c % cpr) * CHUNK, cy = Math.floor(c / cpr) * CHUNK;
+        let ex = cx + CHUNK, ey = cy + CHUNK;
+        for (const b of bs) { ex = Math.max(ex, b.x + b.w); ey = Math.max(ey, b.y + b.h); }
         let s = 0;
-        for (let y = cy; y <= Math.min(n, cy + CHUNK); y++)
-          for (let x = cx; x <= Math.min(n, cx + CHUNK); x++) s = (s * 31 + Math.round(g.vh(x, y) * 10)) | 0;
+        for (let y = cy; y <= Math.min(n, ey); y++)
+          for (let x = cx; x <= Math.min(n, ex); x++) s = (s * 31 + Math.round(g.vh(x, y) * 10)) | 0;
         hk = s;
         this.heightKeys.set(c, s);
       }

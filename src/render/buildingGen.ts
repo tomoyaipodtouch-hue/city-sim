@@ -99,7 +99,7 @@ let resPat: number = PAT.balcony;
 let louvers = false;
 const flatRoof = () => curRoof;
 
-// port = 港・貨物駅への近さ（0..1、buildingLayer で決める）。工業の建物が物流施設になる割合に使う
+// port = 港・貨物駅への近さ（0..1、buildingLayer で決める）。倉庫業の建物の形の選び方に使う
 export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, trees: TreeSpot[], isCpark: (x: number, y: number) => boolean = () => false, pond?: PondBuilder, fx?: FxSpot[], port = 0) {
   fxOut = fx ?? null;
   const rng = new Rng(b.seed);
@@ -111,7 +111,7 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
   resPat = ((b.seed >>> 12) % 100) < 80 ? PAT.balcony : PAT.apartment;
   mb.flatRoofMat = (b.seed >> 3) % 3 === 0 ? MAT.gravel : MAT.membrane;
   // 工場・発電所などの斜めの屋根は金属
-  mb.slopeRoofMat = b.civic || b.type === 'ID' || b.type === 'IM' || b.type === 'IH' ? MAT.metal : MAT.shingle;
+  mb.slopeRoofMat = b.civic || b.type === 'ID' || b.type === 'IM' || b.type === 'IH' || b.type === 'IL' ? MAT.metal : MAT.shingle;
   mb.abandoned = b.state === BState.Abandoned;
   const tf = (lx: number, lz: number, s = 1, kind = 0, ly = 0, col?: number, shape?: number) => {
     // ローカル座標から世界座標へ（MeshBuilder と同じ変換）
@@ -145,8 +145,9 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
       highrise(mb, f, rng, tf, Math.max(3, b.floors), true, b.type === 'CO3');
       break;
     case 'IA': farm(mb, f, rng, tf); break;
-    case 'ID': dirtyIndustry(mb, f, rng, tf, b.den, b.seed, port); break;
-    case 'IM': mfgIndustry(mb, f, rng, tf, b.den, b.seed, port); break;
+    case 'ID': dirtyIndustry(mb, f, rng, tf, b.den); break;
+    case 'IM': mfgIndustry(mb, f, rng, tf, b.den); break;
+    case 'IL': warehousing(mb, f, rng, tf, b.den, b.seed, port); break;
     case 'IH': hightech(mb, f, rng, tf, b.den); break;
     case 'coal': coalPlant(mb, f); break;
     case 'gas': gasPlant(mb, f); break;
@@ -3030,30 +3031,34 @@ function recycling(mb: MeshBuilder, f: LotFrame, rng: Rng) {
   for (let k = 0; k < 4; k++) mb.box(f.W / 2 - 10, 0, -f.D / 2 + 3 + k * 6, f.W / 2 - 4, 2.4, -f.D / 2 + 7.5 + k * 6, rng.pick([BLUE, GREEN, PALETTE.accent[3]]));
 }
 
-// ---------------- 工業（汚染型・製造業） ----------------
+// ---------------- 工業（汚染型・製造業・倉庫業） ----------------
 // 汚染型：大きい敷地は製鉄所か石油化学プラント、中くらいは石油化学か煙突の工場、小さい敷地は煙突の工場。
-//   港・貨物駅のそばでは物流施設も建つ（内陸は 0、いちばん近いところで半分）
 // 製造業：大きい敷地は自動車工場か現代の工場、ほかは現代の工場（のこぎり屋根の天窓）。
-//   物流施設は内陸でも 2 割、港・貨物駅に近いほど増えて、いちばん近いところで 9 割
-// port = 港・貨物駅への近さ（0..1）。物流施設にするかどうかと種類は種から決める（建物の rng の並びは変えない）
-function dirtyIndustry(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, seed: number, port: number) {
+// 倉庫業：いつも物流施設（形は logisticsA・B）。
+// 確認用：window.__logi で物流施設の形を強制しているときは、どれもその形で描く
+function dirtyIndustry(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
   const dbg = forcedLogi();
   if (dbg) return dbg(mb, f, rng, tf, den);
-  if (seedRoll(seed, 1) < 0.5 * port && logiPick(mb, f, rng, tf, den, seed, port, true)) return;
   const cells = Math.round((f.W * f.D) / (CELL * CELL)), r = rng.next();
   if (cells >= 9) return r < 0.5 ? steelMill(mb, f, rng, den) : petrochem(mb, f, rng, den);
   if (cells >= 6) return r < 0.45 ? petrochem(mb, f, rng, den) : stackFactory(mb, f, rng, tf, den);
   return stackFactory(mb, f, rng, tf, den);
 }
-function mfgIndustry(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, seed: number, port: number) {
-  // 連結した敷地（buildingLayer で決める）は、連結の種と密度で決める（物流施設にするか・種類・高さがそろう）
-  const cs = f.campus ?? seed, cden = f.cden ?? den;
+function mfgIndustry(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
   const dbg = forcedLogi();
-  if (dbg) return dbg(mb, f, rng, tf, cden);
-  if (seedRoll(cs, 1) < 0.2 + 0.7 * port && logiPick(mb, f, rng, tf, cden, cs, port, false)) return;
+  if (dbg) return dbg(mb, f, rng, tf, den);
   const cells = Math.round((f.W * f.D) / (CELL * CELL)), r = rng.next();
   if (cells >= 9) return r < 0.6 ? autoPlant(mb, f, rng, tf, den) : modernFactory(mb, f, rng, tf, den);
   return modernFactory(mb, f, rng, tf, den);
+}
+// 倉庫業。連結した敷地（buildingLayer で決める）は、連結の種と密度で決める（種類・高さがそろう）
+// port = 港・貨物駅への近さ（0..1）
+function warehousing(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, seed: number, port: number) {
+  const cs = f.campus ?? seed, cden = f.cden ?? den;
+  const dbg = forcedLogi();
+  if (dbg) return dbg(mb, f, rng, tf, cden);
+  if (logiPick(mb, f, rng, tf, cden, cs, port)) return;
+  modernFactory(mb, f, rng, tf, den);
 }
 // 種から決まる 0..1 の値（k ごとに別の値）
 function seedRoll(seed: number, k: number) {
@@ -3062,17 +3067,23 @@ function seedRoll(seed: number, k: number) {
   h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
-// 物流施設の種類を選んで建てる（形は logisticsA・B）。近さで帯に分ける：岸壁のすぐそばはコンテナヤード、
+// 倉庫業の建物の種類を選んで建てる（形は logisticsA・B）。近さで帯に分ける：岸壁のすぐそばはコンテナヤード、
 // その外に冷凍・冷蔵倉庫、さらに外に配送センターと背の高いマルチテナント型（岸壁から外へ、低い→高いの順に並ぶ）。
-// マルチテナント型は 3×3 以上だけ（4×4 は多め）。汚染型の敷地ではコンテナヤードが中心。登録がなければ false
-function logiPick(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, seed: number, port: number, dirty: boolean): boolean {
-  const wide = Math.min(f.W, f.D) >= 60;
-  const big = Math.round((f.W * f.D) / (CELL * CELL)) >= 9;
+// 内陸は配送センターとマルチテナント型が中心で、冷凍・冷蔵倉庫が少し。マルチテナント型は 3×3 以上だけ。
+// 港のそばの大きな敷地（長い辺が 5 マス以上）は、長いマルチテナント型と長い配送センター・トラックターミナルが多い。
+// 種類は種から決める（建物の rng の並びは変えない）。登録がなければ false
+function logiPick(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, seed: number, port: number): boolean {
+  const cells = Math.round((f.W * f.D) / (CELL * CELL));
+  const wide = Math.min(f.W, f.D) >= 60, mid = cells >= 9, big = Math.max(f.W, f.D) >= 5 * CELL;
   const ss = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
   const bell = (c: number, s: number) => Math.exp(-(((port - c) / s) ** 2));
-  const w: [string, number][] = dirty
-    ? [['containerYard', 0.5 + 3 * ss(0.7, 1, port)], ['coldStorage', 0.3 + bell(0.65, 0.2)], ['distCenter', 0.2 + 0.5 * bell(0.4, 0.3)], ['multiTenant', big ? 0.4 * bell(0.35, 0.25) : 0]]
-    : [['containerYard', 3 * ss(0.8, 1, port)], ['coldStorage', 0.4 + 2.2 * bell(0.65, 0.2)], ['distCenter', 0.5 + 1.2 * bell(0.45, 0.3)], ['multiTenant', big ? (wide ? 1.8 : 0.6) * bell(0.35, 0.25) : 0]];
+  const near = ss(0.75, 1, port);
+  const w: [string, number][] = [
+    ['containerYard', (big ? 1.8 : 3) * near],
+    ['coldStorage', (big ? 0.7 : 1) * (0.3 + 2.2 * bell(0.65, 0.2))],
+    ['distCenter', (big ? 1.6 : 1) * (0.7 + 1.2 * bell(0.45, 0.3))],
+    ['multiTenant', mid ? (big ? (wide ? 2.2 : 1.6) : wide ? 1 : 0.5) * (0.6 + 1.2 * bell(0.35, 0.3)) : 0],
+  ];
   const ok = w.filter(([k, v]) => v > 0 && LOGI[k]);
   if (!ok.length) return false;
   let u = seedRoll(seed, 2) * ok.reduce((s, [, v]) => s + v, 0);
