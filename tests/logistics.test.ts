@@ -216,10 +216,11 @@ describe('warehousing (IL)', () => {
     const keep = { ...LOGI };
     for (const k of Object.keys(LOGI)) LOGI[k] = (...a) => { used = k; keep[k](...a); };
     try {
-      const draw = (type: string, w: number, h: number, seed: number, port: number) => {
+      const draw = (type: string, w: number, h: number, seed: number, port: number, join = false) => {
         const mb = new MeshBuilder();
         const b = { id: 1, civic: false, type, x: 10, y: 10, w, h, face: seed % 2 ? 2 : 0, seed, den: 2, cap: 100, occ: 100, state: BState.Normal, stateDays: 0, powered: true, watered: true, floors: 1, commute: 0, employed: 1, badMonths: 0 } as Parameters<typeof generateBuilding>[1];
         const f = setupLot(mb, b, () => 0, () => 0);
+        if (join) Object.assign(f, { campus: seed, joinL: seed % 3 !== 0, joinR: seed % 3 !== 1, lead: true, cden: 2 });
         used = '';
         generateBuilding(mb, b, f, [], () => false, undefined, [], port);
         return used;
@@ -227,8 +228,33 @@ describe('warehousing (IL)', () => {
       const sizes: [number, number][] = [[2, 2], [3, 2], [3, 3], [4, 4], ...[[5, 3], [6, 4], [4, 6], [3, 6]] as [number, number][]];
       for (const [w, h] of sizes) for (const port of [0, 0.5, 1]) for (let s = 1; s <= 4; s++) expect(draw('IL', w, h, s * 7919 + w * 31 + h, port)).not.toBe('');
       for (const t of ['IM', 'ID']) for (const port of [0, 1]) for (let s = 1; s <= 4; s++) expect(draw(t, 4, 4, s * 104729, port)).toBe('');
+      // 岸壁のそばでも、連結した敷地（1 つの長い建物）はコンテナヤードにならない（ヤードはつながらない）
+      const alone = new Set<string>(), joined = new Set<string>();
+      for (const [w, h] of [[4, 3], [3, 3], [6, 3]] as [number, number][]) for (let s = 1; s <= 30; s++) {
+        alone.add(draw('IL', w, h, s * 7919 + w, 1));
+        joined.add(draw('IL', w, h, s * 7919 + w, 1, true));
+      }
+      expect(alone.has('containerYard')).toBe(true);
+      expect(joined.has('containerYard')).toBe(false);
+      expect(joined.size).toBeGreaterThan(1);
     } finally {
       Object.assign(LOGI, keep);
+    }
+  });
+
+  it('keeps factory shapes inside their lots', () => {
+    // 汚染型工業はいつも工場の形。細い敷地（正面 2 マスの 2×3 や 1×2）でも、となりの敷地や道路にはみ出さない
+    for (const type of ['ID', 'IM']) for (const [w, h] of [[1, 2], [2, 1], [2, 3], [3, 2], [3, 3], [4, 3]] as [number, number][]) for (const face of [0, 2, 4, 6]) for (let s = 0; s < 40; s++) {
+      const mb = new MeshBuilder();
+      const b = { id: 1, civic: false, type, x: 10, y: 10, w, h, face, seed: s * 104729 + 7, den: s % 3, cap: 100, occ: 100, state: BState.Normal, stateDays: 0, powered: true, watered: true, floors: 1, commute: 0, employed: 1, badMonths: 0 } as Parameters<typeof generateBuilding>[1];
+      const f = setupLot(mb, b, () => 0, () => 0);
+      generateBuilding(mb, b, f, [], () => false, undefined, [], 0);
+      let out = 0;
+      for (let i = 0; i < mb.pos.length; i += 3) {
+        const x = mb.pos[i], z = mb.pos[i + 2];
+        out = Math.max(out, 160 - x, x - (10 + w) * 16, 160 - z, z - (10 + h) * 16);
+      }
+      expect(out, `${type} ${w}x${h} face ${face} seed ${b.seed}`).toBeLessThan(0.05);
     }
   });
 });

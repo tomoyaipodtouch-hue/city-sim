@@ -3041,7 +3041,8 @@ function dirtyIndustry(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: numb
   if (dbg) return dbg(mb, f, rng, tf, den);
   const cells = Math.round((f.W * f.D) / (CELL * CELL)), r = rng.next();
   if (cells >= 9) return r < 0.5 ? steelMill(mb, f, rng, den) : petrochem(mb, f, rng, den);
-  if (cells >= 6) return r < 0.45 ? petrochem(mb, f, rng, den) : stackFactory(mb, f, rng, tf, den);
+  // 石油化学は正面の幅が 3 マス以上のときだけ（蒸留塔と加熱炉が横に並ぶので、2 マスでは敷地からはみ出す）
+  if (cells >= 6) return r < 0.45 && f.W >= 48 ? petrochem(mb, f, rng, den) : stackFactory(mb, f, rng, tf, den);
   return stackFactory(mb, f, rng, tf, den);
 }
 function mfgIndustry(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
@@ -3072,15 +3073,17 @@ function seedRoll(seed: number, k: number) {
 // 内陸は配送センターとマルチテナント型が中心で、冷凍・冷蔵倉庫が少し。マルチテナント型は 3×3 以上だけ。
 // 冷凍・冷蔵倉庫の帯でも、ふつうの大きさの敷地は半分ほどにとどめる（窓のない白い箱ばかりが並ばないように）。
 // 港のそばの大きな敷地（長い辺が 5 マス以上）は、長いマルチテナント型と長い配送センター・トラックターミナルが多い。
-// 種類は種から決める（建物の rng の並びは変えない）。登録がなければ false
+// 種類は種から決める（建物の rng の並びは変えない）。連結した敷地はどれも同じ種・大きさ・近さなので、同じ種類になる。登録がなければ false
 function logiPick(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, seed: number, port: number): boolean {
   const cells = Math.round((f.W * f.D) / (CELL * CELL));
   const wide = Math.min(f.W, f.D) >= 60, mid = cells >= 9, big = Math.max(f.W, f.D) >= 5 * CELL;
   const ss = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
   const bell = (c: number, s: number) => Math.exp(-(((port - c) / s) ** 2));
   const near = ss(0.75, 1, port);
+  // 連結した敷地（1 つの長い建物にする）はコンテナヤードにしない（ヤードは敷地ごとに柵で囲むので、つながらない）
+  const joined = !!(f.joinL || f.joinR);
   const w: [string, number][] = [
-    ['containerYard', (big ? 1.8 : 3) * near],
+    ['containerYard', joined ? 0 : (big ? 1.8 : 3) * near],
     ['coldStorage', big ? 0.7 * (0.3 + 2.2 * bell(0.65, 0.2)) : 0.3 + 1.1 * bell(0.65, 0.2)],
     ['distCenter', (big ? 1.6 : 1) * (0.7 + 1.2 * bell(0.45, 0.3))],
     ['multiTenant', mid ? (big ? (wide ? 2.2 : 1.6) : wide ? 1 : 0.5) * (0.6 + 1.2 * bell(0.35, 0.3)) : 0],
@@ -3250,14 +3253,14 @@ function stackFactory(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: numbe
   mb.gableX(x0, z0, x1, z1, h, 2.2, roof, wall, 0.4);
   // 屋根の換気モニター（棟の上の細長い箱）
   mb.box(x0 + 3, h + 2.2, (z0 + z1) / 2 - 1.4, x1 - 3, h + 3.6, (z0 + z1) / 2 + 1.4, wall, PAT.industrial, roof);
-  // 集じん機とダクト
-  const sx = x1 + 4.5, sz = z0 + 6;
+  // 集じん機とダクト（1 マス幅の敷地でも、はみ出さないように）
+  const sx = Math.min(x1 + 4.5, hw - 2.7), sz = z0 + 6;
   mb.cylinder(sx, sz, 4, 13, 2.6, 14, IND.metal[0], IND.metal[0]);
   mb.cylinder(sx, sz, 1.5, 4, 0.6, 14, IND.metal[0], IND.metal[0], 2.6);
   for (const [ox, oz] of [[-2, -2], [2, -2], [-2, 2], [2, 2]]) mb.box(sx + ox - 0.15, 0, sz + oz - 0.15, sx + ox + 0.15, 4, sz + oz + 0.15, IND.steel);
   mb.box(x1, h - 2, sz - 0.8, sx - 2.6, h - 0.4, sz + 0.8, IND.pipe);
   // 煙突
-  redWhiteStack(mb, sx, sz + 7, 0, (26 + rng.next() * 10) * (1 + den * 0.3), 1.4, true, rng.next() < 0.4);
+  redWhiteStack(mb, sx, Math.min(sz + 7, hd - 1.5), 0, (26 + rng.next() * 10) * (1 + den * 0.3), 1.4, true, rng.next() < 0.4);
   // 事務所と搬入口
   mb.box(x0, 0, z1, x0 + Math.min(12, (x1 - x0) / 2), 7, z1 + 4.5, MW, PAT.ribbon, flatRoof());
   for (let x = x0 + 14; x < x1 - 4; x += 5) mb.box(x, 0, z1, x + 3.6, 4, z1 + 0.15, C(0x6b7178));

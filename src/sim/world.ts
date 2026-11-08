@@ -1186,7 +1186,7 @@ export class World {
       // 内陸の倉庫業は需要が小さいので、建てたらすぐに内陸の需要を下げる（次の月の計算までに建ちすぎないように）
       if (kind === 'IL') {
         const added = cap - (old?.type === 'IL' ? old.cap : 0);
-        this.ilInland -= ((1 - ilPortMix(this.logiField().near[g.idx(x + (sw >> 1), y + (sh >> 1))])) * added) / 60;
+        this.ilInland = Math.max(-1, this.ilInland - ((1 - ilPortMix(this.logiField().near[g.idx(x + (sw >> 1), y + (sh >> 1))])) * added) / 60);
       }
       this.gridVersion++;
       this.candidatesDirty = true;
