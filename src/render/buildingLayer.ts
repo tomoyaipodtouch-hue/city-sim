@@ -10,6 +10,29 @@ import { CIVIC, CivicId, FARM_TILE, ZoneType } from '../sim/defs';
 
 const CHUNK = 16;
 
+// 港・貨物駅のまわりの工業は物流施設になりやすい。
+// 施設ごとに [いちばん強いときの近さ, その強さのままの距離, 0 になる距離]（距離はマス）
+const PORT_REACH: Partial<Record<string, [number, number, number]>> = {
+  seaport_l: [1, 20, 48], // 大型コンテナターミナル
+  seaport: [0.6, 10, 28], // 港
+  freight_st: [0.7, 8, 24], // 貨物駅
+};
+export const PORT_STEPS = 8; // 近さの段階の数（段階を区画のキーに入れる）
+
+// 港・貨物駅への近さ（0..PORT_STEPS の段階）。建物の中心から施設の四角のいちばん近いところまでの距離で決める
+export function portLevel(b: Building, ports: Building[]): number {
+  const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+  let v = 0;
+  for (const p of ports) {
+    const r = PORT_REACH[p.type];
+    if (!r) continue;
+    const dx = Math.max(p.x - cx, 0, cx - (p.x + p.w)), dy = Math.max(p.y - cy, 0, cy - (p.y + p.h));
+    const d = Math.hypot(dx, dy);
+    v = Math.max(v, r[0] * (d <= r[1] ? 1 : d >= r[2] ? 0 : (r[2] - d) / (r[2] - r[1])));
+  }
+  return Math.round(v * PORT_STEPS);
+}
+
 interface Chunk {
   key: string;
   mesh: THREE.Mesh | null;
@@ -59,13 +82,19 @@ export class BuildingLayer {
     const cparkIds = new Set<number>();
     for (const b of list) if (b.civic && CIVIC[b.type as CivicId]?.cpark) cparkIds.add(b.id);
     const isCpark = (x: number, y: number) => g.inb(x, y) && cparkIds.has(g.bldg[g.idx(x, y)]);
+    // 港・貨物駅（工業の建物の形を選ぶのに使う）
+    const ports = list.filter((b) => b.civic && PORT_REACH[b.type]);
     const all = new Set<number>([...byChunk.keys(), ...this.chunks.keys()]);
     for (const c of all) {
       const bs = byChunk.get(c) || [];
       bs.sort((a, b) => a.id - b.id);
       let key = '';
+      const lv: number[] = []; // 建物ごとの港への近さの段階
       for (const b of bs) {
         key += `${b.id}.${b.state}.${b.face};`;
+        const p = ports.length && !b.civic && (b.type === 'IM' || b.type === 'ID') ? portLevel(b, ports) : 0;
+        lv.push(p);
+        if (p) key += `p${p};`;
         if (b.type === 'IA') key += `f${farmEmpty(g, b).length};`;
         if (cparkIds.has(b.id)) {
           let m = 0;
@@ -107,10 +136,11 @@ export class BuildingLayer {
       const beacons: number[] = [];
       const pb = new PondBuilder();
       const fx: FxSpot[] = [];
-      for (const b of bs) {
+      for (let i = 0; i < bs.length; i++) {
+        const b = bs[i];
         const f = setupLot(mb, b, groundAt, minAt);
         const v0 = mb.pos.length;
-        generateBuilding(mb, b, f, trees, isCpark, pb, fx);
+        generateBuilding(mb, b, f, trees, isCpark, pb, fx, lv[i] / PORT_STEPS);
         // 農家：同じ区画（8×8）の空いた農地を、ぜんぶ畑にする
         if (b.type === 'IA' && g.zone[g.idx(b.x, b.y)] === ZoneType.F) farmFields(mb, g, b, farmEmpty(g, b), trees);
         // 高さ 60m を超える建物のいちばん高いところに、航空障害灯を付ける

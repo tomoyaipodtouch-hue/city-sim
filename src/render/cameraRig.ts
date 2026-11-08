@@ -1,10 +1,11 @@
-// カメラ（斜め見下ろし、90°ごとに回転、なめらかなズーム）
+// カメラ（斜め見下ろし、30°ごとに回転、なめらかなズーム）
 import * as THREE from 'three';
 import { Grid } from '../sim/grid';
 import { CELL } from '../sim/constants';
 
 export const MIN_DIST = 30;
 export const MAX_DIST = 2600;
+export const ROT_STEP = Math.PI / 6;
 
 export class CameraRig {
   camera: THREE.PerspectiveCamera;
@@ -77,8 +78,9 @@ export class CameraRig {
     this.dist = nd;
   }
 
+  // 1段で 30° 回す
   rotate(step: number) {
-    this.yawTarget += (step * Math.PI) / 2;
+    this.yawTarget += step * ROT_STEP;
   }
 }
 

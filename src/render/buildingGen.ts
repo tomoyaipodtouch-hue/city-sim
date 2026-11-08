@@ -9,7 +9,7 @@ import type { Grid } from '../sim/grid';
 import { BState } from '../sim/world';
 import { PondBuilder, cpLake, LAKE_T } from './parkPond';
 import { kyotoGarden } from './gardenGen';
-import { forcedLogi } from './logiRegistry';
+import { forcedLogi, LOGI } from './logiRegistry';
 import './logisticsA';
 import './logisticsB';
 
@@ -93,7 +93,8 @@ let resPat: number = PAT.balcony;
 let louvers = false;
 const flatRoof = () => curRoof;
 
-export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, trees: TreeSpot[], isCpark: (x: number, y: number) => boolean = () => false, pond?: PondBuilder, fx?: FxSpot[]) {
+// port = 港・貨物駅への近さ（0..1、buildingLayer で決める）。工業の建物が物流施設になる割合に使う
+export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, trees: TreeSpot[], isCpark: (x: number, y: number) => boolean = () => false, pond?: PondBuilder, fx?: FxSpot[], port = 0) {
   fxOut = fx ?? null;
   const rng = new Rng(b.seed);
   curRoof = FLAT_ROOFS[b.seed % FLAT_ROOFS.length];
@@ -138,8 +139,8 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
       highrise(mb, f, rng, tf, Math.max(3, b.floors), true, b.type === 'CO3');
       break;
     case 'IA': farm(mb, f, rng, tf); break;
-    case 'ID': dirtyIndustry(mb, f, rng, tf, b.den); break;
-    case 'IM': mfgIndustry(mb, f, rng, tf, b.den); break;
+    case 'ID': dirtyIndustry(mb, f, rng, tf, b.den, b.seed, port); break;
+    case 'IM': mfgIndustry(mb, f, rng, tf, b.den, b.seed, port); break;
     case 'IH': hightech(mb, f, rng, tf, b.den); break;
     case 'coal': coalPlant(mb, f); break;
     case 'gas': gasPlant(mb, f); break;
@@ -591,38 +592,6 @@ function cornerStore(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
   mb.box(f.W / 2 - 2.2, 0, f.D / 2 - 1.4, f.W / 2 - 1.9, 4.5, f.D / 2 - 1.1, PALETTE.steel);
   mb.box(f.W / 2 - 3.2, 4.5, f.D / 2 - 1.4, f.W / 2 - 0.9, 6.3, f.D / 2 - 1.1, accent);
   tf(-f.W / 2 + 1.5, -f.D / 2 + 1.5, 0.7);
-}
-
-// ---------------- 工場の種類 ----------------
-// 倉庫・物流センター：大きな箱、トラックの搬入口が並ぶ、コンテナ
-function warehouse(mb: MeshBuilder, f: LotFrame, rng: Rng, den: number) {
-  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.concrete);
-  const wall = rng.pick([C(0xcfd3d6), C(0xb9c2c9), C(0xd8d2c4), C(0x9fb0bc)]);
-  const w = f.W - 4, d = f.D * 0.55;
-  const z0 = -f.D / 2 + 2, z1 = z0 + d, h = 10 + den * 3;
-  mb.box(-w / 2, 0, z0, w / 2, h, z1, wall, PAT.industrial, flatRoof());
-  roofRim(mb, -w / 2, z0, w / 2, z1, h, wall, 0.6);
-  // 帯（会社の色）と事務所の角
-  const accent = rng.pick(PALETTE.accent);
-  mb.box(-w / 2 - 0.05, h - 1.6, z1, w / 2 + 0.05, h - 0.9, z1 + 0.1, accent);
-  mb.box(-w / 2, 0, z1, -w / 2 + 10, 7, z1 + 0.6, PALETTE.glass, PAT.office, wall);
-  // 搬入口（シャッター、ひさし、止まっているトラック）
-  for (let x = -w / 2 + 12; x < w / 2 - 3; x += 4.2) {
-    mb.box(x, 0.0, z1, x + 3, 3.8, z1 + 0.12, C(0x6b7178));
-    if (rng.next() < 0.45) {
-      mb.box(x + 0.25, 0, z1 + 0.5, x + 2.75, 3.8, z1 + 10, PALETTE.white);
-      mb.box(x + 0.35, 0, z1 + 10, x + 2.65, 3.1, z1 + 12.5, rng.pick(PALETTE.accent));
-    }
-  }
-  mb.box(-w / 2 + 11, 4.2, z1, w / 2 - 2, 4.5, z1 + 2, PALETTE.steel);
-  // 天窓の列
-  for (let x = -w / 2 + 3; x < w / 2 - 3; x += 7) mb.box(x, h, z0 + 3, x + 1.4, h + 0.35, z1 - 3, PALETTE.glass);
-  // コンテナ
-  const cont = [0xb5452f, 0x2f6fb5, 0x3f8f4a, 0xd9a227, 0x7a7f86].map(C);
-  for (let k = 0; k < 4; k++) {
-    const x = -f.W / 2 + 3 + k * 3;
-    for (let lv = 0; lv < 1 + rng.int(3); lv++) mb.box(x, lv * 2.6, f.D / 2 - 14, x + 2.4, lv * 2.6 + 2.55, f.D / 2 - 2, rng.pick(cont), PAT.industrial, rng.pick(cont));
-  }
 }
 
 function farm(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
@@ -3056,23 +3025,50 @@ function recycling(mb: MeshBuilder, f: LotFrame, rng: Rng) {
 }
 
 // ---------------- 工業（汚染型・製造業） ----------------
-// 汚染型：大きい敷地は製鉄所か石油化学プラント、中くらいは石油化学か煙突の工場、小さい敷地は煙突の工場
-// 製造業：大きい敷地は自動車工場か多層の物流倉庫、ほかは現代の工場（のこぎり屋根の天窓）か倉庫
-function dirtyIndustry(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
+// 汚染型：大きい敷地は製鉄所か石油化学プラント、中くらいは石油化学か煙突の工場、小さい敷地は煙突の工場。
+//   港・貨物駅のそばでは物流施設も建つ（内陸は 0、いちばん近いところで半分）
+// 製造業：大きい敷地は自動車工場か現代の工場、ほかは現代の工場（のこぎり屋根の天窓）。
+//   物流施設は内陸でも 2 割、港・貨物駅に近いほど増えて、いちばん近いところで 9 割
+// port = 港・貨物駅への近さ（0..1）。物流施設にするかどうかと種類は種から決める（建物の rng の並びは変えない）
+function dirtyIndustry(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, seed: number, port: number) {
   const dbg = forcedLogi();
   if (dbg) return dbg(mb, f, rng, tf, den);
+  if (seedRoll(seed, 1) < 0.5 * port && logiPick(mb, f, rng, tf, den, seed, port, true)) return;
   const cells = Math.round((f.W * f.D) / (CELL * CELL)), r = rng.next();
   if (cells >= 9) return r < 0.5 ? steelMill(mb, f, rng, den) : petrochem(mb, f, rng, den);
   if (cells >= 6) return r < 0.45 ? petrochem(mb, f, rng, den) : stackFactory(mb, f, rng, tf, den);
   return stackFactory(mb, f, rng, tf, den);
 }
-function mfgIndustry(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
+function mfgIndustry(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, seed: number, port: number) {
   const dbg = forcedLogi();
   if (dbg) return dbg(mb, f, rng, tf, den);
+  if (seedRoll(seed, 1) < 0.2 + 0.7 * port && logiPick(mb, f, rng, tf, den, seed, port, false)) return;
   const cells = Math.round((f.W * f.D) / (CELL * CELL)), r = rng.next();
-  if (cells >= 9) return r < 0.4 ? autoPlant(mb, f, rng, tf, den) : r < 0.75 ? logisticsHub(mb, f, rng, tf, den) : modernFactory(mb, f, rng, tf, den);
-  if (cells >= 6) return r < 0.7 ? modernFactory(mb, f, rng, tf, den) : warehouse(mb, f, rng, den);
-  return r < 0.65 ? modernFactory(mb, f, rng, tf, den) : warehouse(mb, f, rng, den);
+  if (cells >= 9) return r < 0.6 ? autoPlant(mb, f, rng, tf, den) : modernFactory(mb, f, rng, tf, den);
+  return modernFactory(mb, f, rng, tf, den);
+}
+// 種から決まる 0..1 の値（k ごとに別の値）
+function seedRoll(seed: number, k: number) {
+  let h = (seed ^ Math.imul(k, 0x9e3779b1)) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+// 物流施設の種類を選んで建てる（形は logisticsA・B）。港に近いほどコンテナヤードと冷凍・冷蔵倉庫が増え、
+// 少し離れたところと内陸は配送センターとマルチテナント型が多い。短い辺が 44m 以上ならスロープ付きの大型倉庫を多めに。
+// 汚染型の敷地ではコンテナヤードが中心。登録がなければ false
+function logiPick(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number, seed: number, port: number, dirty: boolean): boolean {
+  const wide = Math.min(f.W, f.D) >= 44;
+  const w: [string, number][] = dirty
+    ? [['containerYard', 0.6 + 2.4 * port], ['coldStorage', 0.8], ['distCenter', 0.9], ['multiTenant', 0.4]]
+    : [['containerYard', 2.6 * port * Math.sqrt(port)], ['coldStorage', 0.5 + 1.5 * port], ['distCenter', 1.5 - 0.7 * port], ['multiTenant', (wide ? 1.7 : 1) - 0.6 * port]];
+  const ok = w.filter(([k, v]) => v > 0 && LOGI[k]);
+  if (!ok.length) return false;
+  let u = seedRoll(seed, 2) * ok.reduce((s, [, v]) => s + v, 0);
+  let k = ok[ok.length - 1][0];
+  for (const [n, v] of ok) if ((u -= v) < 0) { k = n; break; }
+  LOGI[k](mb, f, rng, tf, den);
+  return true;
 }
 
 const IND = {
@@ -3286,55 +3282,6 @@ function modernFactory(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: numb
   }
   if (big) ihParking(mb, rng, x0, z1 + 7, x0 + ow + 2, hd - 0.6);
   tf(hw - 1.5, hd - 1.5, 0.8);
-}
-
-// 多層の物流倉庫（日本の大型物流施設のような）：4層の白い箱、各階に横長の窓の帯とトラックの接車バース、
-// 端にトラックが上り下りするらせんのスロープ（円筒の壁）、屋上に太陽光パネル
-function logisticsHub(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) {
-  const hw = f.W / 2, hd = f.D / 2;
-  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.08, PALETTE.concrete);
-  const levels = 3 + (den > 1 ? 1 : 0), fh = 7, H = levels * fh;
-  const R = 11; // らせんの半径
-  const x0 = -hw + 3, x1 = hw - 3 - R * 2 - 2, z0 = -hd + 4, z1 = hd - 10;
-  const wall = rng.pick([MW, C(0xe9eaeb)]), accent = rng.pick([C(0x1f6fd0), C(0x2e9e5b), C(0xd23a3a)]);
-  mb.box(x0, 0, z0, x1, H, z1, wall, PAT.none, C(0xc9cdd2));
-  for (let k = 0; k < levels; k++) {
-    const y = k * fh;
-    // 各階：接車バースの暗い開口（正面）と、横長の窓の帯
-    mb.box(x0 + 2, y + 0.8, z1 - 0.1, x1 - 2, y + 5.2, z1 + 0.05, C(0x3a3f45));
-    mb.box(x0 - 0.05, y + 5.6, z0 - 0.05, x1 + 0.05, y + 6.6, z1 + 0.05, MGL, PAT.fullglass, MGL);
-    // 各階のひさし
-    mb.box(x0, y + 5.2, z1, x1, y + 5.5, z1 + 3, wall);
-  }
-  mb.box(x0 - 0.1, H - 1.4, z0 - 0.1, x1 + 0.1, H - 0.6, z1 + 0.1, accent);
-  litSign(mb, x0 + 3, H - 3.8, z1 + 0.1, x0 + 22, H - 2, z1 + 0.25, accent);
-  for (let z = z0 + 3; z < z1 - 3; z += 3.5) mb.box(x0 + 3, H, z, x1 - 3, H + 0.5, z + 2.4, C(0x22385a), PAT.none, C(0x22385a));
-  // らせんのスロープ：中心の柱、外の円筒の壁（階ごとの帯）
-  const sx = x1 + 1 + R, sz = (z0 + z1) / 2;
-  mb.cylinder(sx, sz, 0, H + 1, 2.6, 18, wall, wall);
-  const turns = levels, N = 28 * turns;
-  for (let i = 0; i < N; i++) {
-    const a0 = (i / 28) * Math.PI * 2, a1 = ((i + 1) / 28) * Math.PI * 2, y0 = (i / N) * H, y1 = ((i + 1) / N) * H;
-    const P = (a: number, r: number, y: number): [number, number, number] => [sx + Math.cos(a) * r, y, sz + Math.sin(a) * r];
-    // 路面（上と下）と外の低い壁
-    mb.quad(P(a0, 3, y0 + 0.4), P(a0, R, y0 + 0.4), P(a1, R, y1 + 0.4), P(a1, 3, y1 + 0.4), C(0x8d9196));
-    mb.quad(P(a0, R, y0), P(a0, 3, y0), P(a1, 3, y1), P(a1, R, y1), C(0x8d9196));
-    mb.quad(P(a1, R, y1), P(a0, R, y0), P(a0, R, y0 + 1.8), P(a1, R, y1 + 1.8), wall);
-    mb.quad(P(a0, R, y0), P(a1, R, y1), P(a1, R, y1 + 1.8), P(a0, R, y0 + 1.8), wall);
-  }
-  // らせんを上り下りするトラック（1周ごとに点を取る）
-  const helix: [number, number, number][] = [[sx + R * 0.66, 0, hd - 0.5], [sx + R * 0.66, 0.5, sz + 1]];
-  for (let i = 0; i <= 28 * turns; i += 2) {
-    const a = (i / 28) * Math.PI * 2 + Math.PI * 0.0, y = (i / (28 * turns)) * H + 0.5;
-    helix.push([sx + Math.cos(a) * R * 0.66, y, sz + Math.sin(a) * R * 0.66]);
-  }
-  helix.push([x1 - 6, H - fh + 0.5, sz]);
-  fxTruck(mb, helix, 10, 0xf2f2f2);
-  fxTruck(mb, helix.slice(0, 2 + 14 * Math.max(1, turns - 1)), 7, 0x1d3f8a);
-  // 地上の接車バースのトラック
-  fxTruck(mb, [[x0 + 8, 0, hd - 0.5], [x0 + 8, 0, z1 + 7]], 12, 0x9a1d1d);
-  tf(-hw + 1.5, hd - 1.5, 0.8);
-  tf(-hw + 1.5, -hd + 1.5, 0.8);
 }
 
 // 自動車工場：長い組み立て棟、背の高い塗装棟（排気筒と煙）、プレス棟、完成車がずらりと並ぶ駐車場、運ぶキャリアカー

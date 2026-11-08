@@ -8,6 +8,10 @@ import { toApp } from './orient';
 const ax = (e: MouseEvent) => toApp(e.clientX, e.clientY)[0];
 const ay = (e: MouseEvent) => toApp(e.clientX, e.clientY)[1];
 
+// 2本指でこれだけひねるごとに、カメラを 30° 回す（ラジアン）
+const TWIST_STEP = 0.4;
+const wrapAngle = (a: number) => (a > Math.PI ? a - Math.PI * 2 : a < -Math.PI ? a + Math.PI * 2 : a);
+
 interface Ptr {
   x: number;
   y: number;
@@ -123,6 +127,8 @@ export class Input {
           this.gKind = vertical && Math.abs(dist - S.dist) < 30 ? 'tilt' : 'pz';
         }
         if (this.gKind === 'undecided') return;
+        // 決まるまでにひねった分も、回転には数える
+        this.g0.rotAcc = this.gKind === 'pz' ? wrapAngle(angle - this.g0.angle) : 0;
         this.g0.dist = dist;
         this.g0.angle = angle;
         this.g0.mx = mx;
@@ -142,13 +148,13 @@ export class Input {
         const anchor = this.r.pick(mx, my)?.point || null;
         this.r.rig.zoom(this.g0.dist / dist, anchor);
       }
-      let da = angle - this.g0.angle;
-      if (da > Math.PI) da -= Math.PI * 2;
-      if (da < -Math.PI) da += Math.PI * 2;
+      const da = wrapAngle(angle - this.g0.angle);
+      // ひねった角度がたまるごとに 30° ずつ回す（大きくひねると何段も回る。余りは次に持ちこす）
       this.g0.rotAcc += da;
-      if (Math.abs(this.g0.rotAcc) > 0.55) {
-        this.r.rig.rotate(this.g0.rotAcc > 0 ? 1 : -1);
-        this.g0.rotAcc = 0;
+      while (Math.abs(this.g0.rotAcc) >= TWIST_STEP) {
+        const s = Math.sign(this.g0.rotAcc);
+        this.r.rig.rotate(s);
+        this.g0.rotAcc -= s * TWIST_STEP;
       }
       this.g0.dist = dist;
       this.g0.angle = angle;

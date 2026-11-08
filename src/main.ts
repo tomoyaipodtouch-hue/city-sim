@@ -1,5 +1,5 @@
 // Pocket Metro の起動
-import { bgm, bgmSettings } from './bgm';
+import { bgm, bgmSettings, SONGS } from './bgm';
 import './ui/style.css';
 import { GameClient } from './game';
 import { CityRenderer } from './render/renderer';
@@ -17,6 +17,7 @@ const renderer = new CityRenderer(canvas);
 const tools = new ToolController(game, renderer);
 if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__pm = { game, renderer };
 let inGame = false;
+let qualityKey = '';
 
 const SETTINGS_KEY = 'pocket-metro-settings';
 function loadSettings(): Partial<Settings> {
@@ -97,12 +98,13 @@ const hud: Hud = new Hud(game, renderer, tools, {
     void hud.showTitle();
   },
   applySettings: (s) => {
-    renderer.setQuality({
-      shadows: s.shadows,
-      cars: s.cars,
-      hq: s.hq,
-      pixelRatio: s.lowRes ? 1 : Math.min(2, window.devicePixelRatio || 1),
-    });
+    // 画質は変わったときだけ作り直す（音量のスライダーなどを動かすたびに重い処理をしない）
+    const q = { shadows: s.shadows, cars: s.cars, hq: s.hq, pixelRatio: s.lowRes ? 1 : Math.min(2, window.devicePixelRatio || 1) };
+    const qk = JSON.stringify(q);
+    if (qk !== qualityKey) {
+      qualityKey = qk;
+      renderer.setQuality(q);
+    }
     renderer.dayMode = s.dayNight ?? 'auto';
     bgmSettings.enabled = s.bgm ?? true;
     bgmSettings.volume = (s.bgmVol ?? 50) / 100;
@@ -182,14 +184,10 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
 // 開発用
 (window as unknown as Record<string, unknown>).__pm = { game, renderer, tools, hud };
 
-// BGM：タップしたときに始める（iPhone は「指をはなした」ときでないと音を出させてくれない）。
-// 音が鳴る状態になるまで、タップのたびにやり直す
-const unlockAudio = () => {
-  bgm.unlock();
-  if (bgm.running) for (const ev of ['touchend', 'click', 'keydown'] as const) window.removeEventListener(ev, unlockAudio, true);
-};
+// 音（BGM と効果音）：タップしたときに始める（iPhone は「指をはなした」ときでないと音を出させてくれない）。
+// 電話やほかのアプリの音で止められることがあるので、ずっと見張って、止まっていたら次のタップで動かし直す
+const unlockAudio = () => bgm.unlock();
 for (const ev of ['touchend', 'click', 'keydown'] as const) window.addEventListener(ev, unlockAudio, true);
 bgm.onSong = (name) => (hud.nowPlaying = name);
-setInterval(() => (bgm.night = renderer.nightAmount > 0.6), 2000);
 
-(window as unknown as { __bgm: unknown }).__bgm = { Bgm: bgm.constructor as unknown };
+(window as unknown as { __bgm: unknown }).__bgm = { Bgm: bgm.constructor as unknown, bgm, songs: SONGS };

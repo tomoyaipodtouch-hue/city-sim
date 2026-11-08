@@ -886,7 +886,7 @@ export class Hud {
     om.append(oseg);
     body.append(om);
     // BGM の音量
-    const bv = el('div', 'row', `<div><div>BGM の音量</div><div class="desc">静かなアンビエントの曲が流れます${this.nowPlaying ? `（再生中：${this.nowPlaying}）` : ''}。iPhone の消音スイッチがオンだと鳴りません</div></div>`);
+    const bv = el('div', 'row', `<div><div>BGM の音量</div><div class="desc">静かなアンビエントの4曲を順番にくり返し流します${this.nowPlaying ? `（再生中：${this.nowPlaying}）` : ''}。iPhone の消音スイッチがオンだと鳴りません</div></div>`);
     const vbox = el('div', 'jrow');
     vbox.style.minWidth = '190px';
     vbox.innerHTML = `<input type="range" min="0" max="100" step="5" value="${this.settings.bgmVol ?? 50}"><span class="v">${this.settings.bgmVol ?? 50}</span>`;
@@ -932,7 +932,7 @@ export class Hud {
       row.append(t);
       body.append(row);
     }
-    body.append(el('p', 'muted', '操作：1本指でドラッグ＝地図を動かす（ツールを選んでいるときは道路を引くなど）、2本指でドラッグ＝地図を動かす、2本指で上下にスワイプ＝カメラの傾き、ピンチ＝ズーム、2本指でひねる＝回転、タップ＝情報'));
+    body.append(el('p', 'muted', '操作：1本指でドラッグ＝地図を動かす（ツールを選んでいるときは道路を引くなど）、2本指でドラッグ＝地図を動かす、2本指で上下にスワイプ＝カメラの傾き、ピンチ＝ズーム、2本指でひねる＝回転（30°ずつ）、タップ＝情報'));
   }
 
   applySettings() {

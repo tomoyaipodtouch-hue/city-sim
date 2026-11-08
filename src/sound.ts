@@ -1,23 +1,16 @@
-// 効果音（Web Audio で合成）
-let ctx: AudioContext | null = null;
-export const soundSettings = { enabled: true };
+// 効果音（Web Audio で合成）。音の出口は BGM と同じ1つの AudioContext を使い、効果音用の音量の段を通す
+import { bgm, soundSettings } from './bgm';
+export { soundSettings };
 
-function ac(): AudioContext | null {
+function ac() {
   if (!soundSettings.enabled) return null;
-  if (!ctx) {
-    try {
-      ctx = new AudioContext();
-    } catch {
-      return null;
-    }
-  }
-  if (ctx.state === 'suspended') void ctx.resume();
-  return ctx;
+  return bgm.sfxOut();
 }
 
 function tone(freq: number, dur: number, type: OscillatorType, vol: number, slide = 0, delay = 0) {
-  const a = ac();
-  if (!a) return;
+  const o0 = ac();
+  if (!o0) return;
+  const a = o0.ctx;
   const t = a.currentTime + delay;
   const o = a.createOscillator();
   const g = a.createGain();
@@ -27,14 +20,15 @@ function tone(freq: number, dur: number, type: OscillatorType, vol: number, slid
   g.gain.setValueAtTime(0.0001, t);
   g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  o.connect(g).connect(a.destination);
+  o.connect(g).connect(o0.out);
   o.start(t);
   o.stop(t + dur + 0.02);
 }
 
 function noise(dur: number, vol: number, lp: number) {
-  const a = ac();
-  if (!a) return;
+  const o0 = ac();
+  if (!o0) return;
+  const a = o0.ctx;
   const len = Math.floor(a.sampleRate * dur);
   const buf = a.createBuffer(1, len, a.sampleRate);
   const d = buf.getChannelData(0);
@@ -46,7 +40,7 @@ function noise(dur: number, vol: number, lp: number) {
   f.frequency.value = lp;
   const g = a.createGain();
   g.gain.value = vol;
-  s.connect(f).connect(g).connect(a.destination);
+  s.connect(f).connect(g).connect(o0.out);
   s.start();
 }
 

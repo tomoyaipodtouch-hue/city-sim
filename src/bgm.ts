@@ -1,23 +1,26 @@
 // BGM：アンビエント。ゆっくり移り変わるパッドの和音と、低い音だけで作る（リズムやメロディはない）。
-// Web Audio でその場で演奏するので、音のファイルは使わない。昼は3曲を順番に、夜は暗めの曲を流す。
+// Web Audio でその場で演奏するので、音のファイルは使わない。4曲を順番に、昼も夜も同じようにくり返し流す。
+// 音の出口（AudioContext）は効果音と合わせて1つだけにする（iPhone は2つ目を作ると BGM が止まることがある）
 
 export const bgmSettings = { enabled: true, volume: 0.5 };
+// 効果音のオンとオフ（音の準備で使うので、ここに置く。sound.ts から同じものを使う）
+export const soundSettings = { enabled: true };
 
 interface Song {
   name: string;
   chords: string[];
   len: number; // 1つの和音の長さ（秒）
   bright: number; // パッドの明るさ（ローパスの上限、Hz）
-  night?: boolean;
 }
 
+// この順番でくり返す（1曲は和音の並びを2回）
 export const SONGS: Song[] = [
   { name: '朝もや', len: 9, bright: 1100, chords: ['Dmaj9', 'Bm9', 'Gmaj9', 'Asus2', 'Dmaj9', 'Gbm7', 'Gmaj9', 'Aadd9'] },
   { name: '川べりの午後', len: 10, bright: 1000, chords: ['Fmaj9', 'Am7', 'Bbmaj9', 'Csus2', 'Fmaj9', 'Dm9', 'Bbmaj9', 'Cadd9'] },
   { name: '遠くの線路', len: 9, bright: 1050, chords: ['Ebmaj9', 'Cm9', 'Abmaj9', 'Bbsus2', 'Gm7', 'Cm9', 'Abmaj9', 'Bbadd9'] },
-  { name: '夜の港', len: 12, bright: 750, night: true, chords: ['Am9', 'Fmaj9', 'Dm9', 'Esus2', 'Am9', 'Cmaj9', 'Fmaj9', 'Gsus2'] },
+  { name: '夜の港', len: 12, bright: 750, chords: ['Am9', 'Fmaj9', 'Dm9', 'Esus2', 'Am9', 'Cmaj9', 'Fmaj9', 'Gsus2'] },
 ];
-
+const LOOPS = 2;
 const NOTE: Record<string, number> = { C: 0, Db: 1, D: 2, Eb: 3, E: 4, F: 5, Gb: 6, G: 7, Ab: 8, A: 9, Bb: 10, B: 11 };
 const QUAL: Record<string, number[]> = {
   maj9: [0, 4, 7, 11, 14], m9: [0, 3, 7, 10, 14], m7: [0, 3, 7, 10], maj7: [0, 4, 7, 11], add9: [0, 4, 7, 14], sus2: [0, 2, 7, 14],
@@ -36,26 +39,49 @@ export class Bgm {
   private master!: GainNode;
   private dry!: GainNode;
   private wet!: GainNode;
-  private song: Song | null = null;
+  private fx: GainNode | null = null; // 効果音の出口
+  private song: Song = SONGS[0];
   private songIdx = 0;
   private chordIdx = 0;
   private loops = 0;
   private nextTime = 0; // 次の和音を鳴らす時刻
   private timer = 0;
   private silent: HTMLAudioElement | null = null;
-  night = false;
+  // 'running' なのに時間が進まないことがある（iOS で電話などのあと）。そのときは次のタップで作り直す
+  private stuck = false;
+  private ctLast = 0;
+  private ctWall = 0;
   onSong: ((name: string) => void) | null = null;
 
   get running() {
     return !!this.ctx && this.ctx.state === 'running';
   }
 
-  // タップのたびに呼ぶ：音の準備をして、止まっていたら動かす（iPhone は操作のあとでないと音を出せない）
+  // BGM か効果音のどちらかがオンなら、音を出せる状態にしておく
+  private get wanted() {
+    return bgmSettings.enabled || soundSettings.enabled;
+  }
+
+  // タップのたびに呼ぶ（iPhone は操作の中でないと音を出せない）。鳴っているときは何もしない
   unlock() {
+    if (this.ctx?.state === 'closed') this.ctx = null;
+    if (this.stuck && this.ctx) {
+      const old = this.ctx as AudioContext;
+      this.ctx = null;
+      void old.close().catch(() => {});
+    }
+    if (!this.ctx) this.start();
+    if (!this.wanted || document.hidden) return;
+    if (this.running && this.silent && !this.silent.paused) return;
+    this.wake();
+  }
+
+  // 止まっていたら動かす（電話やほかのアプリの音で止められたとき、iOS は 'interrupted' になる）
+  private wake() {
     // iOS 17 以降：消音スイッチがオンでも音楽として鳴らす
     try {
       const nav = navigator as unknown as { audioSession?: { type: string } };
-      if (nav.audioSession) nav.audioSession.type = 'playback';
+      if (nav.audioSession && nav.audioSession.type !== 'playback') nav.audioSession.type = 'playback';
     } catch { /* 対応していない */ }
     // それより前の iOS：無音の音声を流しておくと、Web Audio も消音スイッチの影響を受けなくなる
     if (!this.silent) {
@@ -65,34 +91,47 @@ export class Bgm {
       a.setAttribute('playsinline', '');
       this.silent = a;
     }
-    void this.silent.play().catch(() => {});
-    if (!this.ctx) this.start();
+    if (this.silent.paused) void this.silent.play().catch(() => {});
     const c = this.ctx as AudioContext | null;
-    if (c && c.state !== 'running' && bgmSettings.enabled) void c.resume();
-    if (c) {
-      const b = c.createBuffer(1, 1, 22050), src = c.createBufferSource();
-      src.buffer = b;
-      src.connect(c.destination);
-      src.start(0);
-    }
+    if (!c || c.state === 'running' || c.state === 'closed') return;
+    void c.resume().catch(() => {});
+    // 古い iOS は、操作の中で音を1つ鳴らさないと動き出さない
+    const src = c.createBufferSource();
+    src.buffer = c.createBuffer(1, 1, 22050);
+    src.connect(c.destination);
+    src.start(0);
   }
 
-  start(ctx?: AudioContext) {
-    if (this.ctx) return;
+  private start() {
+    let c: AudioContext;
     try {
-      this.ctx = ctx ?? new AudioContext();
+      c = new AudioContext();
     } catch {
       return;
     }
-    this.setup(this.ctx);
+    this.ctx = c;
+    this.fx = null;
+    this.stuck = false;
+    this.ctWall = 0;
+    this.setup(c);
+    this.nextTime = c.currentTime + 0.5;
+    // 止められたら（こちらで止めたのでなければ）すぐに動かし直してみる。だめなら次のタップで
+    c.addEventListener('statechange', () => {
+      if (this.ctx !== c) return;
+      if (c.state === 'running') this.tick();
+      else if (c.state !== 'closed' && this.wanted && !document.hidden) void c.resume().catch(() => {});
+    });
     this.applyVolume();
-    this.nextSong();
+    if (this.timer) return;
     this.timer = window.setInterval(() => this.tick(), 250);
+    // 画面が隠れたら止めて、戻ったら動かす（動かせなければ次のタップで）
     document.addEventListener('visibilitychange', () => {
-      if (!this.ctx) return;
-      const c = this.ctx as AudioContext;
-      if (document.hidden) void c.suspend();
-      else if (bgmSettings.enabled) void c.resume();
+      const a = this.ctx as AudioContext | null;
+      if (!a || a.state === 'closed') return;
+      if (document.hidden) {
+        void a.suspend().catch(() => {});
+        this.silent?.pause();
+      } else if (this.wanted) this.wake();
     });
   }
 
@@ -120,40 +159,70 @@ export class Bgm {
     this.dry.connect(this.master);
   }
 
+  // 設定（BGM のオンとオフ、音量、効果音のオンとオフ）を反映する
   applyVolume() {
-    if (!this.ctx) return;
+    const a = this.ctx as AudioContext | null;
+    if (!a || a.state === 'closed') return;
     const v = bgmSettings.enabled ? bgmSettings.volume * 1.6 : 0;
-    this.master.gain.cancelScheduledValues(this.ctx.currentTime);
-    this.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.6);
-    if (bgmSettings.enabled && this.ctx.state === 'suspended') void (this.ctx as AudioContext).resume();
+    this.master.gain.cancelScheduledValues(a.currentTime);
+    this.master.gain.setTargetAtTime(v, a.currentTime, 0.6);
+    if (!this.wanted) {
+      // どちらもオフなら止めておく（電池のため）
+      if (a.state === 'running') void a.suspend().catch(() => {});
+      this.silent?.pause();
+    } else if (!document.hidden && (a.state !== 'running' || this.silent?.paused)) this.wake();
   }
 
-  // 次の曲へ（夜は夜の曲、昼はほかの曲を順番に）
+  // 効果音の出口（音を出せないときは null）
+  sfxOut(): { ctx: AudioContext; out: GainNode } | null {
+    const a = this.ctx as AudioContext | null;
+    if (!a || a.state === 'closed') return null;
+    // 止まっている間に予約すると、動き出したときにまとめて鳴るので、鳴らさない
+    if (a.state !== 'running') {
+      if (!document.hidden) void a.resume().catch(() => {});
+      return null;
+    }
+    if (!this.fx) {
+      this.fx = a.createGain();
+      this.fx.connect(a.destination);
+    }
+    return { ctx: a, out: this.fx };
+  }
+
+  // 次の曲へ（4曲を順番に）
   private nextSong() {
-    if (!this.ctx) return;
-    const day = SONGS.filter((s) => !s.night), nightSongs = SONGS.filter((s) => s.night);
-    if (this.night) this.song = nightSongs[0];
-    else this.song = day[this.songIdx++ % day.length];
+    this.songIdx = (this.songIdx + 1) % SONGS.length;
+    this.song = SONGS[this.songIdx];
     this.chordIdx = 0;
     this.loops = 0;
-    if (this.nextTime < this.ctx.currentTime) this.nextTime = this.ctx.currentTime + 0.5;
-    this.onSong?.(this.song.name);
   }
 
   private tick() {
     const a = this.ctx;
-    if (!a || !this.song || a.state !== 'running') return;
+    if (!a || a.state !== 'running') {
+      this.ctWall = 0;
+      return;
+    }
+    const now = a.currentTime, wall = performance.now();
+    // 時間が進んでいるかを見張る（2秒たっても進まなければ、止まっているとみなす）
+    if (!this.ctWall || now > this.ctLast + 0.01) {
+      this.ctWall = wall;
+      this.ctLast = now;
+      this.stuck = false;
+    } else if (wall - this.ctWall > 2000) this.stuck = true;
+    if (!bgmSettings.enabled) return;
+    // 予約が遅れたとき（BGM をオフにしていた、タイマーが止まっていた）は、たまった和音をまとめて鳴らさず、今から続ける
+    if (this.nextTime < now - 0.25 || this.nextTime > now + 30) this.nextTime = now + 0.3;
     // 3秒先までの和音を予約する（和音どうしは重なって、ゆっくり入れ替わる）
-    while (this.nextTime < a.currentTime + 3) {
+    while (this.nextTime < now + 3) {
       const s = this.song;
+      if (this.chordIdx === 0 && this.loops === 0) this.onSong?.(s.name);
       this.chord(this.nextTime, s.chords[this.chordIdx], s.len, s.bright);
       this.nextTime += s.len;
-      this.chordIdx++;
-      if (this.chordIdx >= s.chords.length) {
+      if (++this.chordIdx >= s.chords.length) {
         this.chordIdx = 0;
-        this.loops++;
-        // 2回くり返したら次の曲（昼と夜が変わったら、その場で）
-        if (this.loops >= 2 || this.night !== !!s.night) this.nextSong();
+        // 2回くり返したら次の曲
+        if (++this.loops >= LOOPS) this.nextSong();
       }
     }
   }

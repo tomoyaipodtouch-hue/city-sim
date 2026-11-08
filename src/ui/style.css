@@ -250,6 +250,8 @@ html.portrait .toolbar {
 }
 html.portrait .tbtn { max-height: none; min-width: 0; flex: 1 1 0; border-left: 0; border-top: 3px solid transparent; margin: 0; font-size: 9.5px; letter-spacing: -0.04em; white-space: nowrap; }
 html.portrait .tbtn.on { border-top-color: var(--accent); }
+/* 取り壊しのボタンは、縦画面でも選んだときに黄色 */
+html.portrait .tbtn.demo.on { color: #f2c200; background: rgba(242, 194, 0, 0.18); border-top-color: #f2c200; }
 html.portrait .bar {
   left: 0; bottom: calc(var(--tool) + var(--sb)); height: var(--bar); flex-wrap: wrap; align-content: center; row-gap: 2px;
   padding: 2px calc(var(--sr) + 6px) 2px calc(var(--sl) + 6px);
