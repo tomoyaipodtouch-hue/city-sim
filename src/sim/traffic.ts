@@ -105,20 +105,100 @@ export function autoCtl(vol: number, deg: number, roadType: number) {
   return Ctl.Signal;
 }
 
+// 交差点のマス（地上の一般の道路で、3方向以上につながる）
+function junctionDeg(g: Grid, i: number) {
+  const m = g.conn[i];
+  if (!m || isHighway(g.road[i]) || g.road[i] === RoadType.Ramp) return 0;
+  let d = 0;
+  for (let k = 0; k < 8; k++) if (m & (1 << k)) d++;
+  return d;
+}
+
+// 大通りの交差点は、となりあう交差点のマス（2〜4マス）をまとめて1つの交差点として扱う。
+// cells = まとまりのマス（小さい番号の順）、avenue = 大通りがかかわる交差点（大通りでなければ cells は [cell] だけ）
+export function junctionGroup(g: Grid, cell: number): { cells: number[]; avenue: boolean } {
+  const grp = junctionCluster(g, cell);
+  return grp.avenue ? grp : { cells: [cell], avenue: false };
+}
+// となりあう交差点のマスのまとまり（大通りかどうかによらない）
+function junctionCluster(g: Grid, cell: number): { cells: number[]; avenue: boolean } {
+  const n = g.n;
+  if (junctionDeg(g, cell) < 3) return { cells: [cell], avenue: false };
+  const cells = [cell];
+  const seen = new Set(cells);
+  let avenue = false;
+  for (let q = 0; q < cells.length; q++) {
+    const c = cells[q];
+    const x = c % n, y = (c / n) | 0;
+    if (g.road[c] === RoadType.Avenue) avenue = true;
+    for (let d = 0; d < 8; d++) {
+      if (!(g.conn[c] & (1 << d)) || !g.inb(x + DX[d], y + DY[d])) continue;
+      const j = c + DY[d] * n + DX[d];
+      if (g.road[j] === RoadType.Avenue) avenue = true;
+      if (seen.has(j) || junctionDeg(g, j) < 3) continue;
+      seen.add(j);
+      cells.push(j);
+    }
+  }
+  return { cells: cells.sort((a, b) => a - b), avenue };
+}
+
+// 大通りの交差点の制御方式：まとまりの最初の手動の設定（なければ自動）。ロータリーにはせず、信号にする
+function groupCtl(g: Grid, cells: number[]) {
+  const set = cells.find((c) => g.ictl[c] !== Ctl.Auto);
+  const c = set === undefined ? Ctl.Auto : g.ictl[set];
+  return c === Ctl.Roundabout ? Ctl.Signal : c;
+}
+
+// 大通りの交差点の設定を、まとまりのすべてのマスでそろえる（古い保存データのロータリーは信号にする）
+export function normalizeAvenueJunctions(g: Grid) {
+  const N = g.n * g.n;
+  const done = new Uint8Array(N);
+  for (let i = 0; i < N; i++) {
+    if (done[i] || junctionDeg(g, i) < 3) continue;
+    const grp = junctionCluster(g, i);
+    for (const c of grp.cells) done[c] = 1;
+    if (!grp.avenue) continue;
+    const src = grp.cells.find((c) => g.ictl[c] !== Ctl.Auto) ?? grp.cells[0];
+    const ctl = groupCtl(g, grp.cells);
+    for (const c of grp.cells) {
+      g.ictl[c] = ctl;
+      g.isplit[c] = g.isplit[src];
+      g.iflags[c] = g.iflags[src];
+    }
+  }
+}
+
 export function buildJunctions(g: Grid, traffic: Float32Array): JunctionModel {
   const N = g.n * g.n;
   const ctl = new Uint8Array(N), load = new Float32Array(N), deg = new Uint8Array(N);
+  const done = new Uint8Array(N); // 1 = 大通りの交差点として処理ずみ、2 = ふつうの交差点のまとまり
+  const setLoad = (i: number, c: number, vol: number) => {
+    const lanes = g.iflags[i] & (JF.leftLane | JF.rightLane) ? 1.25 : 1;
+    load[i] = vol / ((NODE_CAP[c] ?? 2600) * lanes);
+  };
   for (let i = 0; i < N; i++) {
-    const m = g.conn[i];
-    if (!m || isHighway(g.road[i]) || g.road[i] === RoadType.Ramp) continue;
-    let d = 0;
-    for (let k = 0; k < 8; k++) if (m & (1 << k)) d++;
+    const d = junctionDeg(g, i);
     deg[i] = d;
-    if (d < 3) continue;
+    if (d < 3 || done[i] === 1) continue;
+    const grp = done[i] ? null : junctionCluster(g, i);
+    if (grp && !grp.avenue) for (const c of grp.cells) done[c] = 2;
+    if (grp && grp.avenue) {
+      // 大通りの交差点：まとまり全体で1つの制御。自動なら、いちばん多い交通量で決める
+      let vol = 0, dmax = 0, tmax = 0;
+      for (const c of grp.cells) { vol = Math.max(vol, traffic[c]); dmax = Math.max(dmax, junctionDeg(g, c)); tmax = Math.max(tmax, g.road[c]); }
+      let c = groupCtl(g, grp.cells);
+      if (c === Ctl.Auto) c = autoCtl(vol, dmax, tmax);
+      for (const j of grp.cells) {
+        done[j] = 1;
+        ctl[j] = c;
+        setLoad(j, c, traffic[j]);
+      }
+      continue;
+    }
     const c = g.ictl[i] === Ctl.Auto ? autoCtl(traffic[i], d, g.road[i]) : g.ictl[i];
     ctl[i] = c;
-    const lanes = g.iflags[i] & (JF.leftLane | JF.rightLane) ? 1.25 : 1;
-    load[i] = traffic[i] / ((NODE_CAP[c] ?? 2600) * lanes);
+    setLoad(i, c, traffic[i]);
   }
   return { ctl, load, deg };
 }

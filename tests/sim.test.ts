@@ -136,14 +136,17 @@ describe('stage 2a roads', () => {
       // 続きを引く（2回目は、わざと反対車線のマスから始める）
       expect(w.exec({ t: 'road', x0: 10, y0: startY, x1: 18, y1: 10, road: RoadType.Avenue }).ok).toBe(true);
       const g = w.g, idx = (x: number, y: number) => g.idx(x, y);
+      // 大通りの座標は格子点（なぞった線が中心線）。1本目はマス 2..9、2本目はマス 10..17
       // つなぎ目に、車線どうしの折り返しが残っていない
-      expect(g.conn[idx(10, 10)] & (1 << 6)).toBe(0);
-      expect(g.conn[idx(10, 9)] & (1 << 2)).toBe(0);
+      for (const x of [9, 10]) {
+        expect(g.conn[idx(x, 10)] & (1 << 6)).toBe(0);
+        expect(g.conn[idx(x, 9)] & (1 << 2)).toBe(0);
+      }
       // 車線は2本だけ（3本目ができていない）
       expect(g.road[idx(14, 8)]).toBe(0);
       expect(g.road[idx(14, 11)]).toBe(0);
       // 向こうの端には折り返しがある
-      expect(g.conn[idx(18, 10)] & (1 << 6)).not.toBe(0);
+      expect(g.conn[idx(17, 10)] & (1 << 6)).not.toBe(0);
     }
   });
 
@@ -202,15 +205,16 @@ describe('stage 2a roads', () => {
     w.g.heights.fill(6);
     w.funds = 1e6;
     const g = w.g, idx = (x: number, y: number) => g.idx(x, y);
-    w.exec({ t: 'road', x0: 2, y0: 10, x1: 12, y1: 10, road: RoadType.Avenue }); // 東向きの車線は y=10、西向きは y=9
+    // 大通りの座標は格子点：マス 2..11。東向きの車線は y=10、西向きは y=9
+    w.exec({ t: 'road', x0: 2, y0: 10, x1: 12, y1: 10, road: RoadType.Avenue });
     expect(w.exec({ t: 'road', x0: 12, y0: 10, x1: 22, y1: 10, road: RoadType.Road }).ok).toBe(true);
-    // 東向き：大通り(12,10) → 道路(13,10)
-    expect(g.flow[idx(12, 10)] & (1 << 0)).not.toBe(0);
-    // 西向き：道路(13,10) → 大通り(12,9)（斜め）。道路から(12,10)へは入らない
-    expect(g.flow[idx(13, 10)] & (1 << 5)).not.toBe(0);
-    expect(g.flow[idx(13, 10)] & (1 << 4)).toBe(0);
+    // 東向き：大通り(11,10) → 道路(12,10)
+    expect(g.flow[idx(11, 10)] & (1 << 0)).not.toBe(0);
+    // 西向き：道路(12,10) → 大通り(11,9)（斜め）。道路から(11,10)へは入らない
+    expect(g.flow[idx(12, 10)] & (1 << 5)).not.toBe(0);
+    expect(g.flow[idx(12, 10)] & (1 << 4)).toBe(0);
     // 端の折り返しはない
-    expect(g.conn[idx(12, 10)] & (1 << 6)).toBe(0);
+    expect(g.conn[idx(11, 10)] & (1 << 6)).toBe(0);
   });
 
   it('two diagonal roads crossing between cells get a junction', () => {

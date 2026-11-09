@@ -3,7 +3,8 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Grid } from '../sim/grid';
 import { CELL, DX, DY } from '../sim/constants';
-import { ROADS } from '../sim/defs';
+import { ROADS, RoadType } from '../sim/defs';
+import { AV_W, avenueMedianDir, junctionLamps } from './roadLayer';
 
 // soft = 街灯の光：中心が明るく、外へ長くうすく消える（寄ったとき、ふちのはっきりした円盤に見えないように）
 function glowTexture(soft = false) {
@@ -100,9 +101,34 @@ export class StreetLights {
       const t = level ? g.up[i] : g.road[i];
       if (!t) continue;
       const x = i % n, y = (i / n) | 0;
+      const m = level ? g.conn1[i] : g.conn[i];
+      const h = g.nodeH(node);
+      if (level === 0 && t === RoadType.Avenue) {
+        // 大通り：外側（分離帯と反対の側）の歩道に、32m ごとに立てて車道へ腕をのばす。
+        // 交差点・曲がり角（分離帯の向きが決まらないマス）には立てない（車道の中に立たないように）
+        let deg = 0;
+        for (let d = 0; d < 8; d++) if (m & (1 << d)) deg++;
+        if (deg >= 3) continue;
+        const md = avenueMedianDir(g, i);
+        if (md < 0) continue;
+        // 斜めの車線は x と y の和の偶奇が変わらないので、x の偶奇で間引く
+        if ((md & 1 ? x : x + y) & 1) continue;
+        const ol = Math.hypot(DX[md], DY[md]);
+        const ox = -DX[md] / ol, oz = -DY[md] / ol; // 外向き
+        // バス停の待合所と重ならないよう、道に沿って少しずらす
+        const sh = g.bstop[i] ? 4.5 : 0;
+        const bx = (x + 0.5) * CELL + oz * sh, bz = (y + 0.5) * CELL - ox * sh;
+        const off = AV_W / 2 + 0.8;
+        const cx = bx + ox * off, cz = bz + oz * off;
+        lamp.push(cx - ox * 2.0, h + 7.2, cz - oz * 2.0);
+        poles.push(cx, h, cz, Math.atan2(oz, -ox));
+        // 路面と、歩道を照らす光
+        pool.push(bx + ox * (AV_W / 2 - 0.6), h + 0.25, bz + oz * (AV_W / 2 - 0.6), 11);
+        pool.push(bx + ox * (AV_W / 2 + 2.4), h + 0.5, bz + oz * (AV_W / 2 + 2.4), 8.5);
+        continue;
+      }
       // 1マスおきに、左右交互に立てる
       if ((x + y) & 1) continue;
-      const m = level ? g.conn1[i] : g.conn[i];
       let d = 0;
       while (d < 8 && !(m & (1 << d))) d++;
       if (d === 8) d = 0;
@@ -113,12 +139,18 @@ export class StreetLights {
       px = (px / l) * off;
       pz = (pz / l) * off;
       const cx = (x + 0.5) * CELL + px, cz = (y + 0.5) * CELL + pz;
-      const h = g.nodeH(node);
       // 腕は道路の中心の向き
       const dl = Math.hypot(px, pz) || 1, dx = -px / dl, dz = -pz / dl;
       lamp.push(cx + dx * 2.0, h + 7.2, cz + dz * 2.0);
-      pool.push(cx - px * 0.6, h + 0.25, cz - pz * 0.6);
+      pool.push(cx - px * 0.6, h + 0.25, cz - pz * 0.6, 11);
       poles.push(cx, h, cz, Math.atan2(-dz, dx));
+    }
+    // 大通りの交差点の角の街灯（道路の層が、交差点を作るときに置き場所を決める）
+    for (let k = 0; k + 4 < junctionLamps.length; k += 5) {
+      const [cx, h, cz, dx, dz] = junctionLamps.slice(k, k + 5);
+      lamp.push(cx + dx * 2.0, h + 7.2, cz + dz * 2.0);
+      poles.push(cx, h, cz, Math.atan2(-dz, dx));
+      pool.push(cx + dx * 4.5, h + 0.25, cz + dz * 4.5, 13);
     }
     {
       const m2 = new THREE.Matrix4(), q2 = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), v2 = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
@@ -133,10 +165,11 @@ export class StreetLights {
     }
     this.lamps.geometry.dispose();
     this.lamps.geometry = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(lamp, 3));
-    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(11, 1, 11), v = new THREE.Vector3();
-    const cnt = Math.min(this.pools.instanceMatrix.count, pool.length / 3);
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), v = new THREE.Vector3();
+    const cnt = Math.min(this.pools.instanceMatrix.count, pool.length / 4);
     for (let k = 0; k < cnt; k++) {
-      v.set(pool[k * 3], pool[k * 3 + 1], pool[k * 3 + 2]);
+      v.set(pool[k * 4], pool[k * 4 + 1], pool[k * 4 + 2]);
+      sc.set(pool[k * 4 + 3], 1, pool[k * 4 + 3]);
       this.pools.setMatrixAt(k, m.compose(v, q, sc));
     }
     this.pools.count = cnt;

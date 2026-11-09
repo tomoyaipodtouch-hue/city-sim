@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import type { CityRenderer } from '../render/renderer';
 import type { ToolController, PreviewInfo } from './tools';
 import { toApp } from './orient';
+import { CELL } from '../sim/constants';
 
 // 画面を回しているときは、#app の中の座標に直して使う
 const ax = (e: MouseEvent) => toApp(e.clientX, e.clientY)[0];
@@ -10,6 +11,10 @@ const ay = (e: MouseEvent) => toApp(e.clientX, e.clientY)[1];
 
 // 2本指でこれだけひねるごとに、カメラを 30° 回す（ラジアン）
 const TWIST_STEP = 0.4;
+// ツールでなぞっているとき、指が地図の端からこの幅（px）に入って少し止まると、その向きへ地図を動かす
+const EDGE_BAND = 32;
+const EDGE_DWELL = 0.25; // 動かし始めるまでの時間（秒）。端の近くを通り過ぎるだけでは動かさない
+const EDGE_SPEED = 480; // いちばん端での速さ（px/秒、地図をなぞって動かすのと同じ単位）
 const wrapAngle = (a: number) => (a > Math.PI ? a - Math.PI * 2 : a < -Math.PI ? a + Math.PI * 2 : a);
 
 interface Ptr {
@@ -41,7 +46,11 @@ export class Input {
   // 2本指の操作の種類：動かし始めで決める（そろって上下 = 傾き、それ以外 = 移動・ズーム・回転）
   private gKind: 'undecided' | 'tilt' | 'pz' = 'undecided';
   private gStart = { ax: 0, ay: 0, bx: 0, by: 0, dist: 0 };
-  private lastCell = { x: -1, y: -1 };
+  private toolPos = { x: 0, y: 0 }; // なぞっている指の位置
+  private edgeRaf = 0;
+  private edgeT = 0;
+  private edgeAge = 0; // 端に入ってからの時間（秒）
+  private view = { left: 0, top: 0, right: 0, bottom: 0 }; // なぞり始めたときの、地図が見えている範囲
 
   constructor(private canvas: HTMLCanvasElement, private r: CityRenderer, private tools: ToolController, private hooks: InputHooks) {
     canvas.addEventListener('pointerdown', this.down);
@@ -65,8 +74,9 @@ export class Input {
         const c = this.r.pick(ax(e), ay(e));
         if (c) {
           this.mode = 'tool';
-          this.lastCell = { x: c.x, y: c.y };
-          const info = this.tools.begin(c.x, c.y);
+          this.toolPos = { x: ax(e), y: ay(e) };
+          this.view = this.viewRect();
+          const info = this.tools.begin(c.x, c.y, c.point.x / CELL, c.point.z / CELL);
           this.hooks.onDragUI(true);
           this.hooks.onPreview(info, ax(e), ay(e), false);
           return;
@@ -74,6 +84,7 @@ export class Input {
       }
       this.mode = 'pan';
     } else if (this.ptrs.size === 2) {
+      this.stopEdgePan();
       if (this.mode === 'tool') {
         this.tools.cancel();
         this.hooks.onDragUI(false);
@@ -101,13 +112,9 @@ export class Input {
     p.y = ay(e);
     this.r.kick();
     if (this.mode === 'tool') {
-      const over = this.hooks.isOverCancel(ax(e), ay(e));
-      const c = over ? null : this.r.pick(ax(e), ay(e));
-      if (c && (c.x !== this.lastCell.x || c.y !== this.lastCell.y)) {
-        this.lastCell = { x: c.x, y: c.y };
-        const info = this.tools.update(c.x, c.y);
-        this.hooks.onPreview(info, ax(e), ay(e), over);
-      } else this.hooks.onPreview(undefined, ax(e), ay(e), over);
+      this.toolPos = { x: ax(e), y: ay(e) };
+      this.toolMove();
+      this.edgePan();
       return;
     }
     if (this.mode === 'pan') {
@@ -163,10 +170,78 @@ export class Input {
     }
   };
 
+  // なぞっている指の下のマスで、ツールのプレビューを更新する（同じ場所なら、ラベルの位置だけ動かす）
+  private toolMove() {
+    const { x, y } = this.toolPos;
+    const over = this.hooks.isOverCancel(x, y);
+    const c = over ? null : this.r.pick(x, y);
+    const info = c ? this.tools.update(c.x, c.y, c.point.x / CELL, c.point.z / CELL) : undefined;
+    this.hooks.onPreview(info, x, y, over);
+  }
+
+  // 地図が見えている範囲（左や下のツールバー・情報バーを除く）。#app の中の座標
+  private viewRect() {
+    const W = this.canvas.clientWidth, H = this.canvas.clientHeight;
+    const r = { left: 0, top: 0, right: W, bottom: H };
+    for (const sel of ['.toolbar', '.bar']) {
+      const el = document.querySelector(sel);
+      if (!el) continue;
+      const b = el.getBoundingClientRect();
+      if (!b.width || !b.height) continue;
+      const [x0, y0] = toApp(b.left, b.top), [x1, y1] = toApp(b.right, b.bottom);
+      const L = Math.min(x0, x1), R = Math.max(x0, x1), T = Math.min(y0, y1), B = Math.max(y0, y1);
+      if (B - T > R - L && L < W / 2) r.left = Math.max(r.left, R); // 左の縦長のバー
+      else if (R - L >= B - T && T > H / 2) r.bottom = Math.min(r.bottom, T); // 下の横長のバー
+    }
+    return r;
+  }
+
+  // 指が地図の端の近くにあれば、その向きへ地図を動かし続ける（キャンセルの枠の上では動かさない）
+  private edgeVec(): [number, number] {
+    const { x, y } = this.toolPos;
+    if (this.hooks.isOverCancel(x, y)) return [0, 0];
+    const r = this.view;
+    const k = (d: number) => Math.max(0, Math.min(1, 1 - d / EDGE_BAND));
+    return [k(r.right - x) - k(x - r.left), k(r.bottom - y) - k(y - r.top)];
+  }
+
+  private edgePan() {
+    if (this.edgeRaf || this.mode !== 'tool') return;
+    const [vx, vy] = this.edgeVec();
+    if (!vx && !vy) return;
+    this.edgeT = performance.now();
+    this.edgeAge = 0;
+    const step = () => {
+      this.edgeRaf = 0;
+      if (this.mode !== 'tool') return;
+      const [ex, ey] = this.edgeVec();
+      if (!ex && !ey) return;
+      const now = performance.now();
+      const dt = Math.min(0.05, (now - this.edgeT) / 1000);
+      this.edgeT = now;
+      this.edgeAge += dt;
+      if (this.edgeAge > EDGE_DWELL) {
+        // 指の向こうが見えるように地図を動かす（地図は指と反対へ流れる）。動き始めは少しずつ速くする
+        const sp = EDGE_SPEED * dt * Math.min(1, (this.edgeAge - EDGE_DWELL) / 0.4);
+        this.r.rig.pan(-ex * sp, -ey * sp, this.canvas.clientHeight);
+        this.r.kick();
+        this.toolMove();
+      }
+      this.edgeRaf = requestAnimationFrame(step);
+    };
+    this.edgeRaf = requestAnimationFrame(step);
+  }
+
+  private stopEdgePan() {
+    if (this.edgeRaf) cancelAnimationFrame(this.edgeRaf);
+    this.edgeRaf = 0;
+  }
+
   private up = (e: PointerEvent) => {
     const p = this.ptrs.get(e.pointerId);
     this.ptrs.delete(e.pointerId);
     if (!p) return;
+    if (this.mode === 'tool') this.stopEdgePan();
     if (this.mode === 'tool') {
       // キャンセル枠を隠す前に、枠の上で指を離したかを判定する
       const cancelled = this.hooks.isOverCancel(ax(e), ay(e));
@@ -197,6 +272,7 @@ export class Input {
 
   private cancel = (e: PointerEvent) => {
     this.ptrs.delete(e.pointerId);
+    this.stopEdgePan();
     if (this.mode === 'tool') {
       this.tools.cancel();
       this.hooks.onDragUI(false);

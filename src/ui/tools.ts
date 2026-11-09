@@ -1,6 +1,7 @@
 // ツールの定義と、ドラッグ中のプレビュー・確定
 import { BUS_STOP_COST, CIVIC, CivicId, DENSITY_NAMES, LINES, LineKind, ROADS, RoadType, ZoneType, ZONE_COST, ZONE_NAMES, POWER_LINE_COST, RAMP_COST , ESTOP_COST } from '../sim/defs';
-import { normRect, planBulldoze, planBusStop, planCloverleaf, planTransitLine, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone, planURamp, planTerrain, TERRAIN_STEP, TerrainOp, planTrees, TREE_COST, planEStop, snapRoadEnds } from '../sim/plan';
+import { normRect, planBulldoze, planBusStop, planCloverleaf, planTransitLine, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoadCmd, planZone, planURamp, planTerrain, TERRAIN_STEP, TerrainOp, planTrees, TREE_COST, planEStop } from '../sim/plan';
+import type { PreviewArrow } from '../render/previewLayer';
 import type { Command } from '../sim/world';
 import type { GameClient } from '../game';
 import type { CityRenderer } from '../render/renderer';
@@ -149,6 +150,36 @@ export interface DragState {
   y0: number;
   x1: number;
   y1: number;
+  fx0: number; // 指の位置（マス単位の小数）
+  fy0: number;
+  fx1: number;
+  fy1: number;
+  line: [number, number, number, number] | null; // 線を引くツールの始点・終点（向きをそろえたあと。大通りは格子点）
+  key: string; // 前回のプレビューと同じなら作り直さない
+}
+
+// 8方向（東から時計回り）
+const DIR8: [number, number][] = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+
+// 始点 (sx, sy) から指 (fx, fy) への向きを、いちばん近い8方向にそろえる。
+// hard = 必ずそろえる（大通り）。そうでなければ、ほぼその向き（10°以内か、ずれが 0.75 マス以内）のときだけ
+function snap8(sx: number, sy: number, fx: number, fy: number, hard: boolean): [number, number] | null {
+  const vx = fx - sx, vy = fy - sy;
+  const len = Math.hypot(vx, vy);
+  if (len < 1e-6) return [sx, sy];
+  let best = 0, bd = -Infinity;
+  for (let d = 0; d < 8; d++) {
+    const [ux, uy] = DIR8[d];
+    const dot = (vx * ux + vy * uy) / Math.hypot(ux, uy);
+    if (dot > bd) { bd = dot; best = d; }
+  }
+  const [ux, uy] = DIR8[best];
+  const ul = Math.hypot(ux, uy);
+  const off = Math.abs(vx * uy - vy * ux) / ul; // 線からのずれ（マス）
+  const ang = Math.asin(Math.min(1, off / len));
+  if (!hard && ang > (10 * Math.PI) / 180 && off > 0.75) return null;
+  const k = Math.max(0, Math.round(bd / ul));
+  return [sx + ux * k, sy + uy * k];
 }
 
 export interface PreviewInfo {
@@ -186,47 +217,85 @@ export class ToolController {
     return !!this.tool && this.tool !== 'query';
   }
 
-  begin(x: number, y: number): PreviewInfo | null {
-    this.drag = { x0: x, y0: y, x1: x, y1: y };
-    return this.update(x, y);
+  // fx, fy = 指の位置（マス単位の小数）。省略するとマスの中心
+  begin(x: number, y: number, fx = x + 0.5, fy = y + 0.5): PreviewInfo | null {
+    this.drag = { x0: x, y0: y, x1: x, y1: y, fx0: fx, fy0: fy, fx1: fx, fy1: fy, line: null, key: '' };
+    return this.update(x, y, fx, fy) ?? null;
   }
 
-  update(x: number, y: number): PreviewInfo | null {
+  // 線を引くツールの始点・終点。大通りは格子点（指に近い角）で、なぞった線が中心線。8方向にそろえる
+  private lineEnds(d: DragState): [number, number, number, number] {
+    const n = this.game.grid?.n ?? 1;
+    if (this.tool === 'road:4') {
+      const sx = Math.max(0, Math.min(n, Math.round(d.fx0))), sy = Math.max(0, Math.min(n, Math.round(d.fy0)));
+      const e = snap8(sx, sy, d.fx1, d.fy1, true)!;
+      return [sx, sy, Math.max(0, Math.min(n, e[0])), Math.max(0, Math.min(n, e[1]))];
+    }
+    const e = snap8(d.x0 + 0.5, d.y0 + 0.5, d.fx1, d.fy1, false);
+    if (!e) return [d.x0, d.y0, d.x1, d.y1];
+    return [d.x0, d.y0, Math.max(0, Math.min(n - 1, Math.floor(e[0]))), Math.max(0, Math.min(n - 1, Math.floor(e[1])))];
+  }
+
+  // プレビューを作り直す。前回と同じなら undefined（表示はそのまま）
+  update(x: number, y: number, fx = x + 0.5, fy = y + 0.5): PreviewInfo | null | undefined {
     const g = this.game.grid;
     const d = this.drag;
     if (!g || !d) return null;
     d.x1 = x;
     d.y1 = y;
+    d.fx1 = fx;
+    d.fy1 = fy;
     const pv = this.r.preview;
     const t = this.tool;
+    const lineTool = t.startsWith('road:') || t.startsWith('line:') || t === 'pline';
+    d.line = lineTool ? this.lineEnds(d) : null;
+    const key = d.line ? d.line.join(',') : `${x},${y}`;
+    if (key === d.key) return undefined;
+    d.key = key;
     this.r.kick();
-    if (t.startsWith('road:')) {
+    pv.setArrows(g, [], 0);
+    pv.setLineColor(0xffffff);
+    if (t.startsWith('road:') && d.line) {
       const type = Number(t.split(':')[1]) as RoadType;
-      const [sx0, sy0, sx1, sy1] = snapRoadEnds(g, type, d.x0, d.y0, x, y);
-      const path = planLine(g, sx0, sy0, sx1, sy1);
-      const plan = planRoad(g, path, type);
+      const [lx0, ly0, lx1, ly1] = d.line;
+      const plan = planRoadCmd(g, type, lx0, ly0, lx1, ly1);
       const cells = plan.lanes.flatMap((l) => l.cells);
       const conv = new Set(plan.converts);
       const upper = new Set(plan.lanes.flatMap((l) => l.cells.filter((_, k) => l.levels[k] === 1)));
       pv.setTiles(g, cells, (i) =>
         plan.bad.has(i) ? 0xe5534b : conv.has(i) ? 0xffb347 : upper.has(i) ? 0xb9a6ff : plan.deck.has(i) ? 0x6fc3ff : type === RoadType.Street ? 0xcfd6dc : 0xffffff,
       );
-      pv.setPath(g, path.cells);
-      if (path.cells.length < 2) return { text: 'ドラッグして道路を引く', bad: false };
+      // 一方通行の車線（大通りの2本の車線も）は、進む向きを矢印で見せる
+      const arrows: PreviewArrow[] = [];
+      for (const l of plan.lanes) {
+        if (!l.oneWay || l.cells.length < 2) continue;
+        const step = l.cells.length > 24 ? 3 : 2;
+        for (let k = 1; k < l.cells.length; k += step) arrows.push({ cell: l.cells[k], dir: l.dirs[Math.min(k, l.dirs.length - 1)] });
+      }
+      pv.setArrows(g, arrows, plan.ok ? 0x1f6fe0 : 0xffffff);
+      if (type === RoadType.Avenue) {
+        // 中心線（中央分離帯）を緑の線で見せる
+        pv.setLineColor(plan.ok ? 0x2fa24a : 0xe5534b);
+        pv.setGridLine(g, plan.centre ?? [[lx0, ly0], [lx1, ly1]]);
+        if (lx0 === lx1 && ly0 === ly1) return { text: 'ドラッグして大通りを引く（指の線が中央分離帯）', bad: false };
+      } else {
+        pv.setPath(g, plan.path.cells);
+        if (plan.path.cells.length < 2) return { text: 'ドラッグして道路を引く', bad: false };
+      }
       const extra = plan.bridgeCells ? `（橋 ${plan.bridgeCells} マス）` : '';
       return plan.ok ? { text: `${yen(plan.cost)}${extra}`, bad: false } : { text: plan.reason || '引けません', bad: true };
     }
-    if (t.startsWith('line:')) {
+    if (t.startsWith('line:') && d.line) {
       const kind = t.split(':')[1] as LineKind;
-      const path = planLine(g, d.x0, d.y0, x, y);
+      const path = planLine(g, d.line[0], d.line[1], d.line[2], d.line[3]);
       const plan = planTransitLine(g, path, kind);
       pv.setTiles(g, path.cells, (i) => (plan.bad.has(i) ? 0xe5534b : 0xffd27a));
       pv.setPath(g, path.cells);
       if (path.cells.length < 2) return { text: 'ドラッグして線路を引く', bad: false };
       return plan.ok ? { text: yen(plan.cost), bad: false } : { text: plan.reason || '引けません', bad: true };
     }
-    if (t === 'pline') {
-      const path = planLine(g, d.x0, d.y0, x, y);
+    if (t === 'pline' && d.line) {
+      const path = planLine(g, d.line[0], d.line[1], d.line[2], d.line[3]);
       const plan = planPowerLine(g, path);
       pv.setTiles(g, path.cells, (i) => (plan.bad.has(i) ? 0xe5534b : 0xf0d040));
       pv.setPath(g, path.cells);
@@ -325,13 +394,14 @@ export class ToolController {
     if (!d) return;
     const t = this.tool;
     let cmd: Command | null = null;
+    const ln = d.line ?? this.lineEnds(d);
     if (t.startsWith('road:')) {
-      if (d.x0 === d.x1 && d.y0 === d.y1) return;
-      cmd = { t: 'road', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1, road: Number(t.split(':')[1]) as RoadType };
-    } else if (t === 'pline') cmd = { t: 'pline', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1 };
+      if (ln[0] === ln[2] && ln[1] === ln[3]) return;
+      cmd = { t: 'road', x0: ln[0], y0: ln[1], x1: ln[2], y1: ln[3], road: Number(t.split(':')[1]) as RoadType };
+    } else if (t === 'pline') cmd = { t: 'pline', x0: ln[0], y0: ln[1], x1: ln[2], y1: ln[3] };
     else if (t.startsWith('line:')) {
-      if (d.x0 === d.x1 && d.y0 === d.y1) return;
-      cmd = { t: 'transit', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1, kind: t.split(':')[1] as LineKind };
+      if (ln[0] === ln[2] && ln[1] === ln[3]) return;
+      cmd = { t: 'transit', x0: ln[0], y0: ln[1], x1: ln[2], y1: ln[3], kind: t.split(':')[1] as LineKind };
     }
     else if (t.startsWith('zone:')) {
       const [, z, den] = t.split(':');

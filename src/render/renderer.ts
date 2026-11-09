@@ -287,7 +287,8 @@ export class CityRenderer {
       this.cars.setStations(g, this.buildingList);
       this.stationsMesh.rebuild(g, this.buildingList);
     }
-    if (this.dirty.trees) this.trees.rebuild(g, this.buildings.allTrees());
+    // 大通りの中央分離帯のケヤキは、道路の層が分離帯の形から決めた位置に植える
+    if (this.dirty.trees) this.trees.rebuild(g, this.buildings.allTrees(), this.roads.medianTrees);
     if (this.dirty.overlay) {
       buildOverlay(this.terrain.overlayData, g, this.maps, this.dataView);
       this.terrain.commitOverlay();

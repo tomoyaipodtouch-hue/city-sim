@@ -68,6 +68,8 @@ export interface RoadPlan {
   uturns: [number, number][]; // 大通りの端で折り返すための接続（from → to）
   reason: string;
   bridgeCells: number;
+  centre?: [number, number][]; // 大通りの中心線（格子点の折れ線）。プレビュー用
+  unlinks?: [number, number][]; // 取り除く既存の折り返し（from → to）。大通りの続きを引いたとき
 }
 
 // 斜めの接続が、既存の逆向きの斜めの接続と交差するか
@@ -82,13 +84,13 @@ function crossesDiagonal(g: Grid, i: number, d: number, level = 0) {
   return (c[ay * n + ax] & (1 << dd)) !== 0;
 }
 
-// 進行方向の左側にある、並行するマスへのずれ（大通りの反対車線）
+// 進行方向の左側にある、並行するマスへのずれ（2マス幅の高速道路の反対車線）
 function leftOffset(d: number): [number, number] {
   if (!isDiag(d)) return [DY[d], -DX[d]];
   return [0, -DX[d]];
 }
 
-// 大通り：引いた線を右側の車線とし、左側に反対車線を作る
+// 2マス幅の高速道路：引いたマスを右側の車線とし、左側に反対車線を作る（大通りは planAvenue で、なぞった線を中心線にする）
 function avenueLanes(g: Grid, path: LinePath): { lanes: { cells: number[]; dirs: number[] }[]; ok: boolean } {
   const { cells, dirs } = path;
   const n = g.n;
@@ -148,6 +150,15 @@ export function planRoad(g: Grid, path: LinePath, type: RoadType): RoadPlan {
     }
   }
   const lanes: Lane[] = raw.map((l) => ({ ...l, oneWay: !!def.oneWay, levels: [] }));
+  return finishRoadPlan(g, path, lanes, type, bad, reasons, uturns);
+}
+
+// 車線が決まったあとの計画（費用、階層、橋、勾配、地形）。pairDeck = 大通りの2本の車線で共通の橋の高さ
+function finishRoadPlan(
+  g: Grid, path: LinePath, lanes: Lane[], type: RoadType, bad: Set<number>, reasons: string[], uturns: [number, number][],
+  pairDeck?: Map<number, number>, extra?: Partial<RoadPlan>,
+): RoadPlan {
+  const why = (r: string) => reasons.push(r);
   let cost = 0;
   let bridgeCells = 0;
   const vacc = new Map<number, [number, number]>();
@@ -155,7 +166,7 @@ export function planRoad(g: Grid, path: LinePath, type: RoadType): RoadPlan {
   const upH = new Map<number, number>();
   const converts = new Set<number>();
   for (const lane of lanes) {
-    const r = planLane(g, lane, type, bad, why, vacc, deck, upH, converts);
+    const r = planLane(g, lane, type, bad, why, vacc, deck, upH, converts, pairDeck);
     cost += r.cost;
     bridgeCells += r.bridge;
   }
@@ -198,13 +209,14 @@ export function planRoad(g: Grid, path: LinePath, type: RoadType): RoadPlan {
   cost = Math.round(cost);
   return {
     ok: bad.size === 0 && path.cells.length > 1, path, lanes, type, cost, bad, vertexH, deck, upH,
-    converts: [...converts], uturns, reason: reasons[0] || '', bridgeCells,
+    converts: [...converts], uturns, reason: reasons[0] || '', bridgeCells, ...extra,
   };
 }
 
 function planLane(
   g: Grid, lane: Lane, type: RoadType, bad: Set<number>, why: (r: string) => void,
   vacc: Map<number, [number, number]>, deck: Map<number, number>, upHs: Map<number, number>, converts: Set<number>,
+  pairDeck?: Map<number, number>,
 ): { cost: number; bridge: number } {
   const def = ROADS[type];
   const n = g.n, V = n + 1;
@@ -247,7 +259,7 @@ function planLane(
     if (g.bldg[i]) { bad.add(i); why('建物があります。先に取り壊してください'); }
     const cur = L ? g.up[i] : g.road[i];
     const len = k > 0 && isDiag(dirs[k - 1]) ? 1.41 : 1;
-    const isW = g.isWater(i % n, (i / n) | 0) || g.deck[i] > 0;
+    const isW = pairDeck ? pairDeck.has(i) : g.isWater(i % n, (i / n) | 0) || g.deck[i] > 0;
     const mul = isW && L === 0 ? BRIDGE_COST_MUL : 1;
     if (cur === 0) cost += def.cost * len * mul;
     else if (ROADS[cur].rank < def.rank) cost += Math.max(0, def.cost - ROADS[cur].cost) * len * mul;
@@ -341,8 +353,8 @@ function planLane(
   for (let k = 0; k < cells.length; k++) if (levels[k] === 1) upHs.set(cells[k], u[k]);
   for (const c of converts) if (!upHs.has(c)) upHs.set(c, g.cellH(c % n, (c / n) | 0) + OVERPASS_LIFT);
 
-  // 地上の部分：橋（水の上の連続したマス）
-  const water = cells.map((i, k) => levels[k] === 0 && (g.isWater(i % n, (i / n) | 0) || g.deck[i] > 0));
+  // 地上の部分：橋（水の上の連続したマス）。大通りは、2本の車線で決めた橋（pairDeck）を使う
+  const water = cells.map((i, k) => levels[k] === 0 && (pairDeck ? pairDeck.has(i) : g.isWater(i % n, (i / n) | 0) || g.deck[i] > 0));
   const t = cells.map((i) => g.roadH(i));
   const fixed = cells.map((i, k) => levels[k] === 1 || g.road[i] !== 0);
   for (let k = 0; k < cells.length; k++) {
@@ -365,7 +377,7 @@ function planLane(
       const dh = Math.max(h0, h1, WATER_LEVEL + 3.5);
       for (let j = k; j <= e; j++) {
         const c = cells[j];
-        const h = g.deck[c] > 0 ? g.deck[c] : dh;
+        const h = pairDeck?.get(c) ?? (g.deck[c] > 0 ? g.deck[c] : dh);
         t[j] = h;
         fixed[j] = true;
         deck.set(c, h);
@@ -422,6 +434,22 @@ function link(g: Grid, a: number, la: number, b: number, lb: number, d: number, 
 
 export function applyRoad(g: Grid, plan: RoadPlan) {
   const def = ROADS[plan.type];
+  const avenue = plan.type === RoadType.Avenue;
+  // 大通りの車線が通るマスのまわりにある、既存の大通りの行き止まりの端（あとで続きになったかを見る）
+  const oldEnds: AvenueEnd[] = [];
+  if (avenue) {
+    const seen = new Set<number>();
+    for (const lane of plan.lanes)
+      for (const c of lane.cells)
+        for (let d = -1; d < 8; d++) {
+          const j = d < 0 ? c : nb(g, c, d);
+          if (j < 0 || seen.has(j)) continue;
+          seen.add(j);
+          const e = avenueEndAt(g, j);
+          if (e) oldEnds.push(e);
+        }
+  }
+  for (const [a, b] of plan.unlinks ?? []) unlinkFlow(g, a, b);
   for (const [vi, h] of plan.vertexH) g.heights[vi] = h;
   for (const [c, h] of plan.deck) g.deck[c] = h;
   // 既存の道路を上空へ移す（地上の高速道路をまたぐ立体交差）
@@ -453,6 +481,11 @@ export function applyRoad(g: Grid, plan: RoadPlan) {
       g.tree[i] = 0;
     }
     for (let k = 0; k < dirs.length; k++) link(g, cells[k], levels[k], cells[k + 1], levels[k + 1], dirs[k], lane.oneWay);
+    // 道路を大通りにしたとき：最初のマスに残った逆向きの流れ（外の両方向の道路へ）を消す
+    if (avenue && dirs.length && levels[0] === 0) {
+      const b = nb(g, cells[0], opp(dirs[0]));
+      if (b >= 0 && twoWayLocal(g.road[b])) g.flow[cells[0]] &= ~(1 << opp(dirs[0]));
+    }
   }
   // 大通りの端の折り返し
   const n = g.n;
@@ -463,8 +496,33 @@ export function applyRoad(g: Grid, plan: RoadPlan) {
     g.conn[b] |= 1 << opp(d);
     g.flow[a] |= 1 << d;
   }
-  if (plan.uturns.length) cleanAvenueUturns(g, plan.lanes.flatMap((l) => [l.cells[0], l.cells[l.cells.length - 1]]));
-  fixWideTransitions(g, plan.lanes.flatMap((l) => [l.cells[0], l.cells[l.cells.length - 1]]));
+  if (avenue) {
+    // 今回引いた車線のつながり（これは消さない）
+    const mine = new Set<number>();
+    for (const l of plan.lanes) for (let k = 0; k < l.dirs.length; k++) mine.add(l.cells[k] * 8 + l.dirs[k]);
+    // 古い端の先に大通りが続いたら、その端の折り返しを外す
+    for (const e of oldEnds) {
+      if (mine.has(e.X * 8 + e.p)) continue;
+      const xa = nb(g, e.X, e.a), ya = nb(g, e.Y, e.a);
+      const goes = xa >= 0 && g.road[xa] === RoadType.Avenue && (g.flow[e.X] & (1 << e.a)) !== 0;
+      const comes = ya >= 0 && g.road[ya] === RoadType.Avenue && (g.flow[ya] & (1 << opp(e.a))) !== 0;
+      if (goes || comes) unlinkFlow(g, e.X, e.Y);
+    }
+  }
+  // 大通りの端に、両方向の道路が続く場合のつなぎ目
+  linkAvenueEnds(g, plan.lanes.flatMap((l) => [l.cells[0], l.cells[l.cells.length - 1]]));
+}
+
+// a → b の流れを外す（逆向きの流れもなければ、つながりも外す）
+function unlinkFlow(g: Grid, a: number, b: number) {
+  const n = g.n;
+  const d = dirOf((b % n) - (a % n), ((b / n) | 0) - ((a / n) | 0));
+  if (d < 0) return;
+  g.flow[a] &= ~(1 << d);
+  if (!(g.flow[b] & (1 << opp(d)))) {
+    g.conn[a] &= ~(1 << d);
+    g.conn[b] &= ~(1 << opp(d));
+  }
 }
 
 // ---- ランプ（高速道路の出入口） ----
@@ -1420,7 +1478,7 @@ export function snapRoadEnds(g: Grid, type: RoadType, x0: number, y0: number, x1
     return g.inb(x, y) ? y * n + x : -1;
   };
   if (def.wide) {
-    // 大通り・高速道路：始点は「ドラッグの向きに流れてきて、そこで終わる車線」、
+    // 2マス幅の高速道路：始点は「ドラッグの向きに流れてきて、そこで終わる車線」、
     // 終点は「ドラッグの向きに流れ出していく車線」に合わせる
     const s = pick(x0, y0, (c) => {
       if (g.road[c] !== type) return 0;
@@ -1440,110 +1498,533 @@ export function snapRoadEnds(g: Grid, type: RoadType, x0: number, y0: number, x1
     });
     return [s[0], s[1], e[0], e[1]];
   }
-  // ふつうの道路：タップしたマスが道路でなければ、すぐ隣の道路の端（行き止まり）につなぐ
+  // ふつうの道路：大通りに突き当てるときは、向こう側の車線まで延ばす（手前の車線や、3マス手前で止めても）
+  const tee = (x: number, y: number, u: number): [number, number] | null => {
+    if (isDiag(u) || def.highway || def.wide || type === RoadType.Ramp) return null;
+    for (let t = 0; t <= 3; t++) {
+      const cx = x + DX[u] * t, cy = y + DY[u] * t;
+      if (!g.inb(cx, cy)) return null;
+      const c = cy * n + cx;
+      if (!g.road[c]) continue;
+      if (g.road[c] !== RoadType.Avenue || g.up[c]) return null;
+      // c は手前の車線、その先が反対向きの車線（大通りは2マス幅）
+      const f = ahead(c, u);
+      if (f < 0 || g.road[f] !== RoadType.Avenue) return null;
+      const beyond = ahead(f, u);
+      if (beyond >= 0 && g.road[beyond] === RoadType.Avenue) return null;
+      for (const m of [(u + 2) & 7, (u + 6) & 7])
+        if (g.flow[c] & (1 << m) && g.flow[f] & (1 << opp(m)) && !(g.flow[c] & (1 << opp(m)))) return [f % n, (f / n) | 0];
+      return null;
+    }
+    return null;
+  };
+  const ts = tee(x0, y0, opp(dd)), te = tee(x1, y1, dd);
+  // タップしたマスが道路でなければ、すぐ隣の道路の端（行き止まり）につなぐ
   const endScore = (c: number) => (g.road[c] && !isHighway(g.road[c]) && g.road[c] !== RoadType.Ramp && degree(c) <= 1 ? 2 : 0);
-  const s = g.road[y0 * n + x0] ? [x0, y0] : pick(x0, y0, endScore);
-  const e = g.road[y1 * n + x1] ? [x1, y1] : pick(x1, y1, endScore);
+  const s = ts ?? (g.road[y0 * n + x0] ? [x0, y0] : pick(x0, y0, endScore));
+  const e = te ?? (g.road[y1 * n + x1] ? [x1, y1] : pick(x1, y1, endScore));
   return [s[0], s[1], e[0], e[1]];
 }
 
-// 大通りの端の折り返し（Uターン）は、その先に大通りが続いたら取り除く（交差点のようにならないように）
-export function cleanAvenueUturns(g: Grid, cells: Iterable<number>) {
-  const n = g.n;
-  const seen = new Set<number>();
-  for (const c0 of cells) {
-    const x0 = c0 % n, y0 = (c0 / n) | 0;
-    for (let oy = -1; oy <= 1; oy++)
-      for (let ox = -1; ox <= 1; ox++) {
-        const x = x0 + ox, y = y0 + oy;
-        if (!g.inb(x, y)) continue;
-        const c = y * n + x;
-        if (seen.has(c)) continue;
-        seen.add(c);
-        const t = g.road[c];
-        if (!t || !ROADS[t].wide || isHighway(t)) continue;
-        for (let d = 0; d < 8; d++) {
-          if (!(g.flow[c] & (1 << d))) continue;
-          const j = (() => { const jx = x + DX[d], jy = y + DY[d]; return g.inb(jx, jy) ? jy * n + jx : -1; })();
-          if (j < 0 || g.road[j] !== t) continue;
-          // c からほかの向きへも同じ大通りが続き、j がその逆向きに流れる車線なら、c → j は折り返し
-          let other = -1;
-          for (let d2 = 0; d2 < 8; d2++) {
-            if (d2 === d || !(g.flow[c] & (1 << d2))) continue;
-            const kx = x + DX[d2], ky = y + DY[d2];
-            if (g.inb(kx, ky) && g.road[ky * n + kx] === t) other = d2;
-          }
-          if (other < 0) continue;
-          if (!(g.flow[j] & (1 << opp(other)))) continue;
-          g.flow[c] &= ~(1 << d);
-          if (!(g.flow[j] & (1 << opp(d)))) {
-            g.conn[c] &= ~(1 << d);
-            g.conn[j] &= ~(1 << opp(d));
-          }
-        }
-      }
+// ---------------- 大通りの行き止まりの端 ----------------
+const nb = (g: Grid, c: number, d: number) => {
+  const x = (c % g.n) + DX[d], y = ((c / g.n) | 0) + DY[d];
+  return g.inb(x, y) ? y * g.n + x : -1;
+};
+// 両方向に通れる一般の道路（細い道・道路）
+const twoWayLocal = (t: number) => t !== 0 && !!ROADS[t] && !ROADS[t].wide && !ROADS[t].oneWay && !isHighway(t) && t !== RoadType.Ramp;
+
+// マス c に、allow 以外のマスから流れ込んでいないか
+function onlyFrom(g: Grid, c: number, allow: number[]) {
+  for (let d = 0; d < 8; d++) {
+    const j = nb(g, c, opp(d));
+    if (j < 0 || !g.road[j] || !(g.flow[j] & (1 << d))) continue;
+    if (!allow.includes(j)) return false;
   }
+  return true;
 }
 
-// ---------------- 2車線（大通り）と1車線の道路のつなぎ目 ----------------
-// 大通りの端に、両方向に通れる道路がまっすぐ続く場合：
-//   出ていく車線 → 道路、道路 → 入ってくる車線 とつなぎ直し（片方は斜め）、端の折り返しは取り除く
-export function fixWideTransitions(g: Grid, around: Iterable<number>) {
+// 大通りの行き止まりの端（折り返しのある端）
+export interface AvenueEnd {
+  X: number; // 端に着く車線のマス（ここで折り返す）
+  Y: number; // 端から出ていく車線のマス（X の隣）
+  a: number; // X の車線の進む向き（端の外向き）
+  p: number; // 折り返しの向き（X → Y）
+}
+
+// マス X が大通りの行き止まりの端なら、その端を返す。交差点や、続いている車線は端ではない
+export function avenueEndAt(g: Grid, X: number): AvenueEnd | null {
+  if (X < 0 || g.road[X] !== RoadType.Avenue) return null;
+  const fx = g.flow[X];
+  for (const p of [0, 2, 4, 6]) {
+    if (!(fx & (1 << p))) continue;
+    const Y = nb(g, X, p);
+    if (Y < 0 || g.road[Y] !== RoadType.Avenue) continue;
+    // 反対車線は進む向きの左側（右側通行）。斜めの車線では、折り返しは斜め45°ずれる
+    for (const a of [(p + 2) & 7, (p + 1) & 7, (p + 3) & 7]) {
+      const B = nb(g, X, opp(a));
+      if (B < 0 || !g.road[B] || !(g.flow[B] & (1 << a))) continue;
+      if (!(g.flow[Y] & (1 << opp(a)))) continue;
+      const Yn = nb(g, Y, opp(a));
+      if (Yn < 0 || !g.road[Yn]) continue;
+      const Xa = nb(g, X, a), Ya = nb(g, Y, a);
+      if (Xa >= 0 && g.road[Xa] === RoadType.Avenue && fx & (1 << a)) continue; // 先へ続いている
+      if (fx & ~((1 << p) | (1 << a)) || g.flow[Y] & ~((1 << opp(a)) | (1 << a))) continue; // ほかの向きへも出ていく
+      if (!onlyFrom(g, X, [B, Xa]) || !onlyFrom(g, Y, [X, Ya])) continue; // ほかから入ってくる（交差点）
+      return { X, Y, a, p };
+    }
+  }
+  return null;
+}
+
+// 端の中心線の格子点（斜めの車線では、2つの候補）
+function avenueEndPoints(g: Grid, e: AvenueEnd): Pt[] {
   const n = g.n;
-  const at = (c: number, d: number) => {
-    const x = (c % n) + DX[d], y = ((c / n) | 0) + DY[d];
-    return g.inb(x, y) ? y * n + x : -1;
-  };
-  const twoWayLocal = (t: number) => t !== 0 && !ROADS[t].wide && !ROADS[t].oneWay && !isHighway(t) && t !== RoadType.Ramp;
+  const mx = ((e.X % n) + (e.Y % n)) / 2 + 0.5, my = (((e.X / n) | 0) + ((e.Y / n) | 0)) / 2 + 0.5;
+  const ax = mx + DX[e.a] * 0.5, ay = my + DY[e.a] * 0.5;
+  if (!isDiag(e.a)) return [[Math.round(ax), Math.round(ay)]];
+  return [[ax + DX[e.p] * 0.5, ay + DY[e.p] * 0.5], [ax - DX[e.p] * 0.5, ay - DY[e.p] * 0.5]];
+}
+
+// ---------------- 大通りの端と、両方向の道路のつなぎ目 ----------------
+// 大通りの行き止まりの端の先に、両方向に通れる道路があれば、折り返しをやめて道路につなぐ：
+//   ・同じ列の道路へ：出ていく車線 → 道路（まっすぐ）、道路 → 入ってくる車線（斜め）
+//   ・横切る道路へ：両方の車線を、それぞれ前の道路のマスにつなぐ（T字路）
+export function linkAvenueEnds(g: Grid, around: Iterable<number>) {
+  const n = g.n;
   const seen = new Set<number>();
+  const ok = (R: number) => R >= 0 && twoWayLocal(g.road[R]) && !g.up[R] && !(g.deck[R] > 0);
+  const dir = (a: number, b: number) => dirOf((b % n) - (a % n), ((b / n) | 0) - ((a / n) | 0));
   for (const c0 of around)
     for (let oy = -2; oy <= 2; oy++)
       for (let ox = -2; ox <= 2; ox++) {
-        const x0 = (c0 % n) + ox, y0 = ((c0 / n) | 0) + oy;
-        if (!g.inb(x0, y0)) continue;
-        const X = y0 * n + x0;
+        const x = (c0 % n) + ox, y = ((c0 / n) | 0) + oy;
+        if (!g.inb(x, y)) continue;
+        const X = y * n + x;
         if (seen.has(X)) continue;
         seen.add(X);
-        const t = g.road[X];
-        if (!t || !ROADS[t].wide || isHighway(t)) continue;
-        for (const d of [0, 2, 4, 6]) {
-          const R = at(X, d);
-          if (R < 0 || !twoWayLocal(g.road[R]) || !(g.conn[X] & (1 << d))) continue;
-          if (g.up[R]) continue;
-          for (const p of [(d + 2) & 7, (d + 6) & 7]) {
-            const Y = at(X, p);
-            if (Y < 0 || g.road[Y] !== t) continue;
-            // Y の車線は、ここで終わっている（R の横は空き地）
-            const RY = at(R, p);
-            if (RY < 0 || g.road[RY] || at(Y, d) < 0 || g.road[at(Y, d)]) continue;
-            // X と Y は逆向きに流れる平行な車線
-            const back = (d + 4) & 7;
-            const xOut = (g.flow[X] & (1 << d)) !== 0; // X から R へ流れる
-            const yAxis = (g.conn[Y] & (1 << back)) !== 0;
-            if (!yAxis) continue;
-            const diag = dirOf((R % n) - (Y % n), ((R / n) | 0) - ((Y / n) | 0)); // Y → R の向き（斜め）
-            if (diag < 0) continue;
-            g.conn[Y] |= 1 << diag;
-            g.conn[R] |= 1 << opp(diag);
-            if (xOut) {
-              // X → R（そのまま）、R → Y（斜め）
-              g.flow[R] &= ~(1 << back);
-              g.flow[R] |= 1 << opp(diag);
-              g.flow[Y] &= ~(1 << diag);
-            } else {
-              // R → X（そのまま）、Y → R（斜め）
-              g.flow[X] &= ~(1 << d);
-              g.flow[Y] |= 1 << diag;
-              g.flow[R] &= ~(1 << opp(diag));
-            }
-            // 端の折り返し（X と Y の間）を取り除く
-            g.flow[X] &= ~(1 << p);
-            g.flow[Y] &= ~(1 << opp(p));
-            g.conn[X] &= ~(1 << p);
-            g.conn[Y] &= ~(1 << opp(p));
-          }
-        }
+        const e = avenueEndAt(g, X);
+        if (!e || isDiag(e.a)) continue;
+        const { Y, a } = e;
+        const R1 = nb(g, X, a), R2 = nb(g, Y, a);
+        const r1 = ok(R1), r2 = ok(R2);
+        if (!r1 && !r2) continue;
+        unlinkFlow(g, X, Y);
+        if (r1) link(g, X, 0, R1, 0, a, true);
+        if (r2) link(g, R2, 0, Y, 0, opp(a), true);
+        if (r1 && !r2) link(g, R1, 0, Y, 0, dir(R1, Y), true);
+        if (r2 && !r1) link(g, X, 0, R2, 0, dir(X, R2), true);
       }
+}
+
+// ---------------- 大通り（指でなぞった線 = 中央分離帯） ----------------
+// 座標は格子点（マスの角）。格子点 (x, y) は、マス (x, y) の北西の角。
+// 東西の線 y：北側の行 y-1 が西向き、南側の行 y が東向き。南北の線 x：西側の列 x-1 が南向き、東側の列 x が北向き。
+// どちらもドラッグの向きによらない（右側通行：進む向きの右側の車線を走る）。
+// 斜めの部分は、隣の直線の車線をそのまま斜めにずらして続ける（直線がなければ、西の端に東西の直線があるとみなす）。
+type Pt = [number, number];
+
+// 1回のドラッグの折れ線（planLine と同じ順：直線の方が長ければ直線→斜め、そうでなければ斜め→直線）
+export function avenuePolyline(x0: number, y0: number, x1: number, y1: number): Pt[] {
+  const dx = x1 - x0, dy = y1 - y0, ad = Math.abs(dx), bd = Math.abs(dy);
+  const diag = Math.min(ad, bd), straight = Math.max(ad, bd) - diag;
+  if (!diag || !straight) return [[x0, y0], [x1, y1]];
+  const sx = Math.sign(dx), sy = Math.sign(dy);
+  const f: Pt = straight >= diag ? (ad > bd ? [sx * straight, 0] : [0, sy * straight]) : [sx * diag, sy * diag];
+  return [[x0, y0], [x0 + f[0], y0 + f[1]], [x1, y1]];
+}
+const segDir = (a: Pt, b: Pt) => dirOf(Math.sign(b[0] - a[0]), Math.sign(b[1] - a[1]));
+
+// 中心線の1区間ぶんの車線のマス。f = 進む向きの車線、b = 反対車線（f と同じ並び）
+interface AvSeg { d: number; f: number[]; b: number[] }
+// 既存の大通りの端につなぐときの、つなぎ先のマス（f = 行きの車線の隣、b = 帰りの車線の隣。どちらも行きの並び）
+interface AvAnchor { f: number; b: number; d: number }
+
+function avenueSegs(g: Grid, pts: Pt[], sA: AvAnchor | null, eA: AvAnchor | null): AvSeg[] | null {
+  const n = g.n;
+  const at = (x: number, y: number) => (g.inb(x, y) ? y * n + x : -1);
+  const segs: (AvSeg | null)[] = [];
+  const geo = pts.slice(0, -1).map((a, s) => {
+    const b = pts[s + 1];
+    const ux = Math.sign(b[0] - a[0]), uy = Math.sign(b[1] - a[1]);
+    return { a, b, ux, uy, L: Math.max(Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1])), d: dirOf(ux, uy) };
+  });
+  // 直線：線の右側が行き、左側が帰り
+  for (const s of geo) {
+    if (isDiag(s.d)) { segs.push(null); continue; }
+    const rx = -s.uy, ry = s.ux;
+    const f: number[] = [], b: number[] = [];
+    for (let k = 0; k < s.L; k++) {
+      const px = s.a[0] + s.ux * (k + 0.5), py = s.a[1] + s.uy * (k + 0.5);
+      const fc = at(Math.floor(px + rx * 0.5), Math.floor(py + ry * 0.5)), bc = at(Math.floor(px - rx * 0.5), Math.floor(py - ry * 0.5));
+      if (fc < 0 || bc < 0) return null;
+      f.push(fc);
+      b.push(bc);
+    }
+    segs.push({ d: s.d, f, b });
+  }
+  // 斜め：前（なければ後ろ）の直線の車線のマスから、斜めにずらして続ける
+  const xy = (c: number): Pt => [c % n, (c / n) | 0];
+  for (let s = 0; s < geo.length; s++) {
+    if (segs[s]) continue;
+    const { a, b, ux, uy, L, d } = geo[s];
+    const prev = s > 0 ? segs[s - 1] : null, next = s + 1 < segs.length ? segs[s + 1] : null;
+    let F: Pt, B: Pt, fromPrev: boolean;
+    if (prev) { F = xy(prev.f[prev.f.length - 1]); B = xy(prev.b[prev.b.length - 1]); fromPrev = true; }
+    else if (sA) { F = xy(sA.f); B = xy(sA.b); fromPrev = true; }
+    else if (next) { F = xy(next.f[0]); B = xy(next.b[0]); fromPrev = false; }
+    else if (eA) { F = xy(eA.f); B = xy(eA.b); fromPrev = false; }
+    else if (ux > 0) { F = [a[0] - 1, a[1]]; B = [a[0] - 1, a[1] - 1]; fromPrev = true; } // 西の端に東向きの直線があるとみなす
+    else { F = [b[0] - 1, b[1] - 1]; B = [b[0] - 1, b[1]]; fromPrev = false; } // 西の端に西向きの直線が続くとみなす
+    const f: number[] = [], bb: number[] = [];
+    for (let k = 0; k < L; k++) {
+      const m = fromPrev ? k + 1 : k - L;
+      const fc = at(F[0] + ux * m, F[1] + uy * m), bc = at(B[0] + ux * m, B[1] + uy * m);
+      if (fc < 0 || bc < 0) return null;
+      f.push(fc);
+      bb.push(bc);
+    }
+    segs[s] = { d, f, b: bb };
+  }
+  return segs as AvSeg[];
+}
+
+// 車線の部分をつなぐ。同じマスは1つにし、直角に曲がるところは外側の角のマスを入れ、1マスあいていれば間を埋める
+function stitchLane(g: Grid, pieces: { cells: number[]; d: number }[], fwd: boolean): number[] | null {
+  const n = g.n;
+  const out: number[] = [];
+  let prevD = -1;
+  for (const pc of pieces) {
+    if (!pc.cells.length) continue;
+    let cells = pc.cells;
+    if (out.length) {
+      const P = out[out.length - 1], Q = cells[0];
+      const px = P % n, py = (P / n) | 0, qx = Q % n, qy = (Q / n) | 0;
+      const dist = Math.max(Math.abs(qx - px), Math.abs(qy - py));
+      if (dist === 0) cells = cells.slice(1);
+      else if (dist === 1) {
+        if (qx !== px && qy !== py && !isDiag(prevD) && !isDiag(pc.d) && prevD !== pc.d) {
+          // 直角の曲がり角：まっすぐ進んでから曲がる（外側の角のマスを通る）
+          const C = fwd ? nb(g, P, prevD) : nb(g, Q, opp(pc.d));
+          if (C < 0) return null;
+          out.push(C);
+        }
+      } else if (dist === 2) {
+        const mx = px + Math.sign(qx - px), my = py + Math.sign(qy - py);
+        out.push(g.idx(mx, my));
+      } else return null;
+    }
+    out.push(...cells);
+    prevD = pc.d;
+  }
+  return out;
+}
+
+// 格子点 Q を中心線が通る、外向き w に直交する大通り（T字の相手）があるか：Q のまわりの4マスが、続いている車線
+function teeAt(g: Grid, qx: number, qy: number, w: number) {
+  if (isDiag(w)) return false;
+  const cell = (x: number, y: number) => (g.inb(x, y) ? g.idx(x, y) : -1);
+  const thru = (c: number, d: number) => {
+    if (c < 0 || g.road[c] !== RoadType.Avenue || !(g.flow[c] & (1 << d))) return false;
+    const b = nb(g, c, opp(d));
+    return b >= 0 && g.road[b] === RoadType.Avenue && (g.flow[b] & (1 << d)) !== 0;
+  };
+  if (w === 2 || w === 6) return thru(cell(qx - 1, qy - 1), 4) && thru(cell(qx, qy - 1), 4) && thru(cell(qx - 1, qy), 0) && thru(cell(qx, qy), 0);
+  return thru(cell(qx - 1, qy - 1), 2) && thru(cell(qx - 1, qy), 2) && thru(cell(qx, qy - 1), 6) && thru(cell(qx, qy), 6);
+}
+
+// 両方向の道路の行き止まりのマスの外向き（道路が続いていない向き）。行き止まりでなければ -1
+function roadEndDir(g: Grid, c: number) {
+  if (c < 0 || !twoWayLocal(g.road[c]) || g.up[c] || g.deck[c] > 0) return -1;
+  const m = g.conn[c];
+  if (!m || m & (m - 1)) return -1;
+  const q = 31 - Math.clz32(m);
+  return isDiag(q) ? -1 : opp(q);
+}
+
+// 格子点 Q で終わる大通り（外向き w）の端のすぐ先を、両方向の道路が横切っているか
+function roadSideAt(g: Grid, qx: number, qy: number, w: number) {
+  if (isDiag(w)) return false;
+  const ux = DX[w], uy = DY[w], rx = -uy, ry = ux;
+  const cell = (x: number, y: number) => (g.inb(Math.floor(x), Math.floor(y)) ? g.idx(Math.floor(x), Math.floor(y)) : -1);
+  const c1 = cell(qx - ux * 0.5 + rx * 0.5, qy - uy * 0.5 + ry * 0.5), c2 = cell(qx - ux * 0.5 - rx * 0.5, qy - uy * 0.5 - ry * 0.5);
+  if (c1 < 0 || c2 < 0) return false;
+  const r1 = nb(g, c1, w), r2 = nb(g, c2, w);
+  const ok = (c: number) => c >= 0 && twoWayLocal(g.road[c]) && !g.up[c] && !(g.deck[c] > 0);
+  if (!ok(r1) || !ok(r2)) return false;
+  const n = g.n;
+  const d = dirOf((r2 % n) - (r1 % n), ((r2 / n) | 0) - ((r1 / n) | 0));
+  return d >= 0 && (g.conn[r1] & (1 << d)) !== 0;
+}
+
+interface AvJoin { kind: 'avenue' | 'tee' | 'road' | 'sharp'; pt: Pt; end?: AvenueEnd }
+
+// 大通りの端 P のつなぎ先を探す。body = 端から大通りの本体へ向かう向き
+// 優先：既存の大通りの端（続き・45°・直角） > T字（相手の中心線まで延ばす／縮める） > 道路の行き止まり > 横切る道路
+function avenueJoinAt(g: Grid, P: Pt, body: number): AvJoin | null {
+  const [px, py] = P;
+  const w = opp(body);
+  const d2 = (q: Pt) => Math.hypot(q[0] - px, q[1] - py);
+  // 既存の大通りの端：まっすぐか45°なら2マス以内、直角なら1マス以内
+  let best: AvJoin | null = null, bs = Infinity;
+  let sharp: AvJoin | null = null;
+  for (let y = py - 3; y <= py + 2; y++)
+    for (let x = px - 3; x <= px + 2; x++) {
+      if (!g.inb(x, y)) continue;
+      const e = avenueEndAt(g, g.idx(x, y));
+      if (!e) continue;
+      const diff = (body - e.a + 8) & 7;
+      // 直角は縦と横の大通りだけ（斜めどうしの直角は、車線が交差してしまう）
+      const right = (diff === 2 || diff === 6) && !isDiag(e.a);
+      const tol = diff === 0 || diff === 1 || diff === 7 ? 2 : right ? 1 : -1;
+      for (const V of avenueEndPoints(g, e)) {
+        const cheb = Math.max(Math.abs(V[0] - px), Math.abs(V[1] - py));
+        // 端から急に折り返す向き
+        if (tol < 0 && diff !== 4 && cheb <= 1) sharp = { kind: 'sharp', pt: V };
+        if (cheb > tol) continue;
+        const s = cheb * 10 + d2(V);
+        if (s < bs) { bs = s; best = { kind: 'avenue', pt: V, end: e }; }
+      }
+    }
+  if (best) return best;
+  if (sharp) return sharp;
+  if (isDiag(body)) return null;
+  // T字：相手の大通りの上（向こう側の車線の1マス先まで）か、3マス手前まで
+  for (const t of [0, 1, -1, 2, -2, 3]) {
+    const qx = px + DX[w] * t, qy = py + DY[w] * t;
+    if (teeAt(g, qx, qy, w)) return { kind: 'tee', pt: [qx, qy] };
+  }
+  // 道路の行き止まりの続き：道路が2本の車線のどちらかにそろうように、1マス以内でつなぐ
+  for (let y = py - 2; y <= py + 1; y++)
+    for (let x = px - 2; x <= px + 1; x++) {
+      if (!g.inb(x, y)) continue;
+      const c = g.idx(x, y);
+      if (roadEndDir(g, c) !== body) continue;
+      const ox = x + 0.5 + DX[body] * 0.5, oy = y + 0.5 + DY[body] * 0.5;
+      const sx = -DY[body] * 0.5, sy = DX[body] * 0.5;
+      for (const V of [[ox + sx, oy + sy], [ox - sx, oy - sy]] as Pt[]) {
+        const cheb = Math.max(Math.abs(V[0] - px), Math.abs(V[1] - py));
+        if (cheb > 1) continue;
+        const s = cheb * 10 + d2(V);
+        if (s < bs) { bs = s; best = { kind: 'road', pt: V }; }
+      }
+    }
+  if (best) return best;
+  // 横切る道路：端がちょうど道路の手前に来るように
+  for (const t of [0, 1, -1, 2]) {
+    const qx = px + DX[w] * t, qy = py + DY[w] * t;
+    if (roadSideAt(g, qx, qy, w)) return { kind: 'road', pt: [qx, qy] };
+  }
+  return null;
+}
+
+export interface AvenueSnap { x0: number; y0: number; x1: number; y1: number; start: AvJoin | null; end: AvJoin | null }
+
+// 大通りの始点・終点を、つなぎ先にそろえる。片方だけそろえたときは、まっすぐな線のままになるように、もう片方も横にずらす
+export function snapAvenue(g: Grid, x0: number, y0: number, x1: number, y1: number): AvenueSnap {
+  if (x0 === x1 && y0 === y1) return { x0, y0, x1, y1, start: null, end: null };
+  const pts = avenuePolyline(x0, y0, x1, y1);
+  const d0 = segDir(pts[0], pts[1]), d1 = segDir(pts[pts.length - 2], pts[pts.length - 1]);
+  const s = avenueJoinAt(g, [x0, y0], d0);
+  const e = avenueJoinAt(g, [x1, y1], opp(d1));
+  let [sx, sy] = s ? s.pt : [x0, y0];
+  let [ex, ey] = e ? e.pt : [x1, y1];
+  const dx = x1 - x0, dy = y1 - y0;
+  const aligned = dx === 0 || dy === 0 || Math.abs(dx) === Math.abs(dy);
+  // 線の向きに直交する分だけずらす
+  const side = (ox: number, oy: number): Pt => {
+    const ux = Math.sign(dx), uy = Math.sign(dy);
+    if (!ux) return [ox, 0];
+    if (!uy) return [0, oy];
+    const k = Math.round((ox * ux - oy * uy) / 2);
+    return [k * ux, -k * uy];
+  };
+  if (s?.kind === 'sharp' || e?.kind === 'sharp') return { x0, y0, x1, y1, start: s, end: e };
+  if (aligned && s && !e && s.kind !== 'tee') {
+    const [ox, oy] = side(sx - x0, sy - y0);
+    ex += ox;
+    ey += oy;
+  } else if (aligned && e && !s && e.kind !== 'tee') {
+    const [ox, oy] = side(ex - x1, ey - y1);
+    sx += ox;
+    sy += oy;
+  }
+  return { x0: sx, y0: sy, x1: ex, y1: ey, start: s, end: e };
+}
+
+// 大通りの橋：2本の車線の、同じ位置のマスどうしを1枚の床版にする。
+// どちらかの車線が水の上なら両方とも橋にし、高さは両岸（両方の車線）でいちばん高い路面に合わせる
+function avenueDecks(g: Grid, segs: AvSeg[], sA: AvAnchor | null, eA: AvAnchor | null): Map<number, number> {
+  const n = g.n;
+  const st: [number, number][] = [];
+  for (const s of segs) for (let k = 0; k < s.f.length; k++) st.push([s.f[k], s.b[k]]);
+  const isW = (c: number) => g.isWater(c % n, (c / n) | 0) || g.deck[c] > 0;
+  const wet = st.map(([f, b]) => isW(f) || isW(b));
+  const deck = new Map<number, number>();
+  for (let k = 0; k < st.length; k++) {
+    if (!wet[k]) continue;
+    let e = k;
+    while (e + 1 < st.length && wet[e + 1]) e++;
+    const hs: number[] = [WATER_LEVEL + 3.5];
+    if (k > 0) hs.push(g.roadH(st[k - 1][0]), g.roadH(st[k - 1][1]));
+    else if (sA) hs.push(g.roadH(sA.f), g.roadH(sA.b));
+    if (e + 1 < st.length) hs.push(g.roadH(st[e + 1][0]), g.roadH(st[e + 1][1]));
+    else if (eA) hs.push(g.roadH(eA.f), g.roadH(eA.b));
+    let H = Math.max(...hs);
+    // すでにある橋の上に引き直すときは、その高さのまま
+    let old = 0;
+    for (let j = k; j <= e; j++) for (const c of st[j]) old = Math.max(old, g.deck[c]);
+    if (old > 0) H = old;
+    for (let j = k; j <= e; j++) for (const c of st[j]) deck.set(c, H);
+    k = e;
+  }
+  return deck;
+}
+
+const SHARP_MSG = '大通りどうしは、この角度ではつなげません（45°までの曲がりか、縦と横の直角だけ）';
+
+function emptyPlan(type: RoadType, reason: string, cells: number[] = [], centre?: Pt[]): RoadPlan {
+  return {
+    ok: false, path: { cells, dirs: [] }, lanes: [], type, cost: 0, bad: new Set(cells), vertexH: new Map(), deck: new Map(), upH: new Map(),
+    converts: [], uturns: [], reason, bridgeCells: 0, centre,
+  };
+}
+
+// 大通りの計画。(x0, y0) → (x1, y1) は格子点で、なぞった線が中心線になる
+export function planAvenue(g: Grid, x0: number, y0: number, x1: number, y1: number): RoadPlan {
+  const type = RoadType.Avenue;
+  const n = g.n;
+  const sn = snapAvenue(g, x0, y0, x1, y1);
+  if (sn.x0 === sn.x1 && sn.y0 === sn.y1) return emptyPlan(type, '');
+  if (sn.start?.kind === 'sharp' || sn.end?.kind === 'sharp') return emptyPlan(type, SHARP_MSG, [], avenuePolyline(x0, y0, x1, y1));
+  const pts = avenuePolyline(sn.x0, sn.y0, sn.x1, sn.y1);
+  const last = pts.length - 1;
+  const d0 = segDir(pts[0], pts[1]), d1 = segDir(pts[last - 1], pts[last]);
+  // 既存の大通りの端へのつなぎ：45°までの曲がりと直角だけ
+  const sharp = (dd: number) => { const k = (dd + 8) & 7; return k === 3 || k === 4 || k === 5; };
+  const se = sn.start?.kind === 'avenue' ? sn.start.end! : null;
+  const ee = sn.end?.kind === 'avenue' ? sn.end.end! : null;
+  if ((se && sharp(d0 - se.a)) || (ee && sharp(opp(ee.a) - d1))) return emptyPlan(type, SHARP_MSG, [], pts);
+  const sA: AvAnchor | null = se ? { f: se.X, b: se.Y, d: se.a } : null;
+  const eA: AvAnchor | null = ee ? { f: ee.Y, b: ee.X, d: opp(ee.a) } : null;
+  // 川岸が斜めで、端のマスの片方だけが水の上になるときは、両方の車線が陸に届くまで端を延ばす（3マスまで）
+  const wetAt = ([f, b]: [number, number]) => g.isWater(f % n, (f / n) | 0) || g.isWater(b % n, (b / n) | 0);
+  for (const atStart of [true, false]) {
+    if (atStart ? sn.start : sn.end) continue;
+    for (let k = 0; k <= 3; k++) {
+      const tryPts = pts.map((p) => [p[0], p[1]] as Pt);
+      if (atStart) tryPts[0] = [pts[0][0] - DX[d0] * k, pts[0][1] - DY[d0] * k];
+      else tryPts[last] = [pts[last][0] + DX[d1] * k, pts[last][1] + DY[d1] * k];
+      const sg = avenueSegs(g, tryPts, sA, eA);
+      if (!sg) break;
+      const s0 = atStart ? sg[0] : sg[sg.length - 1];
+      const end: [number, number] = atStart ? [s0.f[0], s0.b[0]] : [s0.f[s0.f.length - 1], s0.b[s0.b.length - 1]];
+      if (!wetAt(end)) {
+        if (k) pts.splice(0, pts.length, ...tryPts);
+        break;
+      }
+    }
+  }
+  const centre = pts.map((p) => [p[0], p[1]] as Pt);
+  // T字：相手の向こう側の車線まで延ばす（折り返しは作らない）
+  if (sn.start?.kind === 'tee') pts[0] = [pts[0][0] - DX[d0], pts[0][1] - DY[d0]];
+  if (sn.end?.kind === 'tee') pts[last] = [pts[last][0] + DX[d1], pts[last][1] + DY[d1]];
+  const segs = avenueSegs(g, pts, sA, eA);
+  if (!segs) return emptyPlan(type, '大通りがマップの端からはみ出します', [], centre);
+  const fp: { cells: number[]; d: number }[] = [], bp: { cells: number[]; d: number }[] = [];
+  if (sA) { fp.push({ cells: [sA.f], d: sA.d }); bp.push({ cells: [sA.b], d: sA.d }); }
+  for (const s of segs) { fp.push({ cells: s.f, d: s.d }); bp.push({ cells: s.b, d: s.d }); }
+  if (eA) { fp.push({ cells: [eA.f], d: eA.d }); bp.push({ cells: [eA.b], d: eA.d }); }
+  const fwd = stitchLane(g, fp, true), bwdF = stitchLane(g, bp, false);
+  const all = segs.flatMap((s) => [...s.f, ...s.b]);
+  if (!fwd || !bwdF) return emptyPlan(type, '大通りは、この形にはつなげません', all, centre);
+  const bwd = bwdF.slice().reverse();
+  const dirsOf = (cs: number[]) => cs.slice(1).map((c, k) => dirOf((c % n) - (cs[k] % n), ((c / n) | 0) - ((cs[k] / n) | 0)));
+  const fd = dirsOf(fwd), bd = dirsOf(bwd);
+  const bad = new Set<number>();
+  const reasons: string[] = [];
+  const why = (r: string) => reasons.push(r);
+  // 行きと帰りの車線は、同じマスを通らない
+  const fs = new Set(fwd);
+  if (fd.some((d) => d < 0) || bd.some((d) => d < 0) || fs.size !== fwd.length || new Set(bwd).size !== bwd.length || bwd.some((c) => fs.has(c))) {
+    for (const c of all) bad.add(c);
+    why('大通りは、この形には引けません（急な曲がりや、重なり）');
+  }
+  // 反対向きに流れる一方通行の車線と重ならない（つなぎ先のマスは除く）
+  const anchors = new Set([sA?.f, sA?.b, eA?.f, eA?.b].filter((c): c is number => c !== undefined));
+  for (const [cs, ds] of [[fwd, fd], [bwd, bd]] as const)
+    for (let k = 0; k < cs.length; k++) {
+      const c = cs[k];
+      if (anchors.has(c)) continue;
+      const t = g.road[c];
+      if (!t || !(ROADS[t].oneWay || ROADS[t].wide)) continue;
+      const d = ds[Math.min(k, ds.length - 1)];
+      if (d >= 0 && g.flow[c] & (1 << opp(d)) && !(g.flow[c] & (1 << d))) {
+        bad.add(c);
+        why('反対向きの一方通行の車線と重なっています');
+      }
+    }
+  // 端の折り返し（つなぎ先がない端だけ。既存の大通りがそのまま続く場合も作らない）
+  const uturns: [number, number][] = [];
+  const continues = (c: number, d: number) => {
+    const j = nb(g, c, d);
+    return g.road[c] === RoadType.Avenue && (g.flow[c] & (1 << d)) !== 0 && j >= 0 && g.road[j] === RoadType.Avenue;
+  };
+  const startFree = !sn.start || sn.start.kind === 'road';
+  const endFree = !sn.end || sn.end.kind === 'road';
+  if (startFree && !continues(bwd[bwd.length - 1], opp(d0))) uturns.push([bwd[bwd.length - 1], fwd[0]]);
+  if (endFree && !continues(fwd[fwd.length - 1], d1)) uturns.push([fwd[fwd.length - 1], bwd[0]]);
+  // 橋（2本の車線で1枚）
+  const pairDeck = avenueDecks(g, segs, sA, eA);
+  for (const c of [...fwd, ...bwd])
+    if (!pairDeck.has(c) && !anchors.has(c) && g.isWater(c % n, (c / n) | 0)) {
+      bad.add(c);
+      why('橋はまっすぐに架けてください');
+    }
+  const lanes: Lane[] = [
+    { cells: fwd, dirs: fd, oneWay: true, levels: [] },
+    { cells: bwd, dirs: bd, oneWay: true, levels: [] },
+  ];
+  const unlinks: [number, number][] = [];
+  if (se) unlinks.push([se.X, se.Y]);
+  if (ee) unlinks.push([ee.X, ee.Y]);
+  const plan = finishRoadPlan(g, { cells: fwd, dirs: fd }, lanes, type, bad, reasons, uturns, pairDeck, { centre, unlinks });
+  plan.bridgeCells = Math.ceil(plan.bridgeCells / 2); // 橋の長さ（2本の車線で1枚）
+  return plan;
+}
+
+// 道路のコマンドの計画（プレビューと実行で同じものを使う）。大通りは格子点、それ以外はマスの座標
+export function planRoadCmd(g: Grid, type: RoadType, x0: number, y0: number, x1: number, y1: number): RoadPlan {
+  if (type === RoadType.Avenue) return planAvenue(g, x0, y0, x1, y1);
+  const [sx0, sy0, sx1, sy1] = snapRoadEnds(g, type, x0, y0, x1, y1);
+  return planRoad(g, planLine(g, sx0, sy0, sx1, sy1), type);
+}
+
+// 古い保存データ：大通りの橋の2本の車線の高さが違うものを、1枚の床版にそろえる（平均の高さ）
+export function levelAvenueDecks(g: Grid) {
+  const N = g.n * g.n;
+  const seen = new Uint8Array(N);
+  const isDeck = (c: number) => c >= 0 && g.road[c] === RoadType.Avenue && g.deck[c] > 0;
+  for (let i = 0; i < N; i++) {
+    if (seen[i] || !isDeck(i)) continue;
+    // 車線に沿ってつながる橋のマスと、横に並ぶ反対車線の橋のマス
+    const comp = [i];
+    seen[i] = 1;
+    for (let q = 0; q < comp.length; q++) {
+      const c = comp[q];
+      for (let d = 0; d < 8; d++) {
+        const j = nb(g, c, d);
+        if (!isDeck(j) || seen[j] || (isDiag(d) && !(g.conn[c] & (1 << d)))) continue;
+        seen[j] = 1;
+        comp.push(j);
+      }
+    }
+    let lo = Infinity, hi = -Infinity, sum = 0;
+    for (const c of comp) { lo = Math.min(lo, g.deck[c]); hi = Math.max(hi, g.deck[c]); sum += g.deck[c]; }
+    if (hi - lo < 0.02) continue;
+    const h = Math.max(WATER_LEVEL + 3.5, sum / comp.length);
+    for (const c of comp) g.deck[c] = h;
+  }
 }
 
 // ---- 都市高速（片側1車線）のランプ：高速道路の横に1×5マス ----

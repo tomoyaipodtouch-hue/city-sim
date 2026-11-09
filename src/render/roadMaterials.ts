@@ -1,15 +1,16 @@
 // 道路のマテリアル：路面（アスファルト・コンクリート）、白線、歩道や壁
 // 路面の頂点には aRd =（中心線からの横の位置 m、道に沿った位置 m、車道の半分の幅 m、模様の種類）を入れておく。
-// 模様の種類 = 車線の数 + 4×素材（0 アスファルト / 1 コンクリート）+ 16×縁石あり + 32×道ごとの乱数
+// 模様の種類 = 車線の数 + 4×素材（0 アスファルト / 1 コンクリート / 2 大通りのアスファルト）+ 16×縁石あり + 32×道ごとの乱数
 // 交差点や円の路面は、横の位置 0、半分の幅の代わりに「ふちからの距離」を入れる
 import * as THREE from 'three';
 import { surfaceNoise, SURF_GLSL } from './surfaceNoise';
 import { AO_DECL, aoExpr, aoUniforms } from './ao';
 import { AMB_IRR_GLSL, AMB_IRR_PARS, ambUniforms } from './materials';
 
-export const SURF = { asphalt: 0, concrete: 1 } as const;
-// 歩道・壁などの種類（aRd.w）
-export const SOLID = { plain: 0, walk: 2, curb: 3, concrete: 4 } as const;
+// avenue：大通り（車線が 3.25m と狭いので、縁石ぞいの側溝を細くする）
+export const SURF = { asphalt: 0, concrete: 1, avenue: 2 } as const;
+// 歩道・壁などの種類（aRd.w）。grass・hedge は大通りの中央分離帯の芝と植え込み
+export const SOLID = { plain: 0, walk: 2, curb: 3, concrete: 4, grass: 5, hedge: 6 } as const;
 
 export function surfCode(lanes: number, kind: number, curb: boolean, seed: number) {
   return lanes + 4 * kind + (curb ? 16 : 0) + 32 * (seed & 63);
@@ -40,11 +41,14 @@ function inject(m: THREE.Material, key: string, ao: number, body: string, decl =
 // コンクリートの路面（高速道路・高架）は、板の目地と板ごとの色の違い
 export function createRoadSurfaceMaterial() {
   const m = new THREE.MeshLambertMaterial({ vertexColors: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
-  return inject(m, 'road-surface-3', 0.32, `
+  return inject(m, 'road-surface-4', 0.32, `
     vec2 p = vRw.xz;
     float code = floor(vRd.w + 0.5);
     float lanes = mod(code, 4.0);
     float conc = mod(floor(code / 4.0), 4.0);
+    float av = step(1.5, conc); // 大通り
+    conc *= 1.0 - av;
+    float gw = mix(0.42, 0.25, av); // 縁石ぞいの側溝の幅
     float curb = mod(floor(code / 16.0), 2.0);
     float seed = floor(code / 32.0);
     float lat = vRd.x;
@@ -121,10 +125,10 @@ export function createRoadSurfaceMaterial() {
     float crack = nC.b * smoothstep(0.5, 0.7, nM.a + (sv - 0.5) * 0.3) * fine;
     // 縁石ぞいの側溝（コンクリートの帯）と、ごみのたまる黒ずみ。縁石のない道は路肩の汚れ
     if (curb > 0.5) {
-      float gut = 1.0 - smoothstep(0.42, 0.42 + fw, de);
+      float gut = 1.0 - smoothstep(gw, gw + fw, de);
       c = mix(c, vec3(0.2, 0.196, 0.186) * (0.9 + 0.2 * nM.g), gut * 0.9);
-      c *= 1.0 - sLine(de - 0.42, 0.04, fw) * 0.5;
-      c *= 1.0 - (1.0 - smoothstep(0.42, 1.0, de)) * (1.0 - gut) * 0.12 * (0.6 + 0.8 * nC.g);
+      c *= 1.0 - sLine(de - gw, 0.04, fw) * 0.5;
+      c *= 1.0 - (1.0 - smoothstep(gw, 1.0, de)) * (1.0 - gut) * 0.12 * (0.6 + 0.8 * nC.g);
       trk *= 1.0 - gut;
       crack *= 1.0 - gut;
     } else {
@@ -155,7 +159,7 @@ export function createMarkMaterial() {
 // 歩道（タイルの目地、縁石の石）、縁石の側面、コンクリートの壁・床版（細かいむらと雨の筋）
 export function createRoadSolidMaterial() {
   const m = new THREE.MeshLambertMaterial({ vertexColors: true });
-  return inject(m, 'road-solid-3', 0.0, `
+  return inject(m, 'road-solid-4', 0.0, `
     float kind = floor(vRd.w + 0.5);
     // テクスチャと画素の大きさは、分岐の外で求める（分岐の中だとミップマップの選び方が乱れる）
     bool up = abs(vRn.y) > 0.5;
@@ -191,11 +195,21 @@ export function createRoadSolidMaterial() {
         // 縁石の側面
         c *= 1.0 + (nF.r - 0.5) * 0.18;
         c *= 0.94 + 0.12 * nM.g;
-      } else {
+      } else if (kind < 4.5) {
         // コンクリート：細かいむらと、縦の面には雨の筋
         c *= 0.9 + 0.2 * nM.g;
         c *= 1.0 + (nF.r - 0.5) * 0.16;
         c *= 1.0 - smoothstep(0.5, 0.75, up ? 0.5 : streak) * 0.14;
+      } else if (kind < 5.5) {
+        // 分離帯の芝：まだらな緑と、ところどころ土の色
+        float soil = smoothstep(0.62, 0.8, nM.a * 0.7 + nF.g * 0.3);
+        c *= 0.82 + 0.3 * nM.g;
+        c *= 1.0 + (nF.r - 0.5) * 0.35;
+        c = mix(c, vec3(0.36, 0.3, 0.22), soil * 0.55);
+      } else {
+        // 植え込み：葉の明暗。下を向いた面ほど暗い
+        c *= 0.7 + 0.55 * nF.r * (0.7 + 0.6 * nM.b);
+        c *= 0.75 + 0.25 * clamp(vRn.y, 0.0, 1.0);
       }
       diffuseColor.rgb = c;
     }`);

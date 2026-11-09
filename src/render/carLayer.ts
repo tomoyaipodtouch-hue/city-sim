@@ -7,7 +7,7 @@ import { CIVIC, CivicId, isHighway, LINES, LineKind, ROADS, RoadType, ZoneType }
 import type { Building } from '../sim/world';
 import { RailLayer, TRACK_GAP } from './railLayer';
 import { isUrbanHighway, urbanTurnOk } from '../sim/traffic';
-import { ROAD_LIFT } from './roadLayer';
+import { ROAD_LIFT, avenueMedianDir, drawWidth } from './roadLayer';
 import { findTurnbacks, Turnback, Island, islandSpread, ISLAND_GAP } from './turnback';
 import { BOGIE, boxTruck, cityBus, garbageTruck, TRAIN_SPEC, TrainKind, hatchback, kei, minivan, person, pickup, sedan, suv, taxi, tractor, trailerBox, trailerTank, trainCar, vc } from './vehicles';
 import { createVehicleMaterial, vehicleUniforms } from './vehicleMaterial';
@@ -26,6 +26,11 @@ const TRAIN_ACC = 1.5; // 終点を出る列車の加速（m/s²）
 const LEFT_TERMINAL = -2; // lastStop：終点の駅で向きを変えて、その駅を出ていくところ（駅を出るまで止まらない）
 const FIX_LEN = 16; // 向きを変えたときの横のずれを、この道のり（m）でなくす
 const A_LAT = 16; // 道路の曲がり角で、横にかかる加速度の上限（m/s²）。ゲームとして気持ちよく曲がれる速さにする
+// 大通り（片側2車線、3.25m の車線）の車線の中心：車線の境（マスの中心）からの横の位置
+const AV_LANE = 1.6;
+// 大通りの外側の歩道（幅 4.5m）で人が歩く位置：車道の縁から 1.6〜3.2m（縁石ぞいの街路樹と街灯の列の外）
+const AV_WALK = 1.6, AV_WALK_SPREAD = 1.6;
+const BUS_DWELL = 4.5; // バス停に止まる秒数（後ろの車が待ちくたびれて重ならない長さ）
 
 // 車は「今いるマス（from）」の中を、入ってきた辺の中点から出ていく辺の中点まで、
 // マスの中心を制御点にした曲線（2次ベジェ曲線）に沿って進む。道路の描き方と同じ形になる。
@@ -71,6 +76,13 @@ interface Car extends Cell {
   rs?: number; // 後ろの車軸にいちばん近い道の上の点の、トラクターからの道のり（後ろの車との間隔に使う）
   nx?: [number, number] | null; // 道路の車：次に進むノードと向き（マスの後半で先に決めておく）
   ly?: number; // 車線を移るあいだの、車体の向きのずれ（ラジアン）
+  rt?: number; // 道路の車：走っている道路の種類（大通りの交差点のマスでは、入ってきた道路のまま）
+  wa?: number; // 歩く人：このマスに入ったときの横の位置（進む向きの右が正）
+  wb?: number; // 歩く人：このマスを出るときの横の位置
+  wp?: ([number, number] | null)[]; // 歩く人：to の先に進むマスと向き（2つ先まで決めておく。交差点の中で道路を渡る場所を決めるのに使う）
+  // 歩く人のこのマスの道すじ：入口 S、角 K、出口 E、角の丸みの半径 r（負ならまっすぐ）、S から丸みの始まりまで、丸みの長さ、入る向き、出る向き
+  wg?: number[];
+  wl?: number; // 歩く人：このマスの道すじの長さ（m）
 }
 
 // 走る場所：道路（車・トラック・バス）、歩道、線路（鉄道・高架鉄道・モノレール・地下鉄）
@@ -354,11 +366,143 @@ export class CarLayer {
     return this.frustum.intersectsSphere(this.sph);
   }
 
+  // 大通りのマスごとの、中央分離帯のある向き（交差点のマス・分からないマスは -1）と、大通りの交差点のマスの印
+  private avMed = new Int8Array(0);
+  private avJct = new Uint8Array(0);
+  private scanAvenues(g: Grid) {
+    const N = g.n * g.n;
+    if (this.avMed.length !== N) {
+      this.avMed = new Int8Array(N);
+      this.avJct = new Uint8Array(N);
+    }
+    const med = this.avMed.fill(-1), jct = this.avJct.fill(0);
+    for (let i = 0; i < N; i++) {
+      if (g.road[i] !== RoadType.Avenue) continue;
+      if (CarLayer.arms(g.conn[i]) >= 3) jct[i] = 1;
+      else med[i] = avenueMedianDir(g, i);
+    }
+  }
+
+  // 歩く人が node のマスで歩く側（進む向きの右 = 1、左 = -1、決まりがない = 0）。
+  // 大通りでは、中央分離帯と反対の外側の歩道だけを歩く。向き d0 では決まらない（分離帯の方へ進む）ときは d1 で決める
+  private walkSide(node: number, d0: number, d1: number) {
+    const md = node < this.avMed.length ? this.avMed[node] : -1;
+    if (md < 0) return 0;
+    for (const d of [d0, d1]) {
+      if (d < 0) continue;
+      // 進む向きの右（-tz, tx）と、分離帯の向きの内積
+      const dot = (DX[d] * DY[md] - DY[d] * DX[md]) / (Math.hypot(DX[d], DY[d]) * Math.hypot(DX[md], DY[md]));
+      if (Math.abs(dot) > 0.3) return dot > 0 ? -1 : 1;
+    }
+    return 0;
+  }
+  // 歩く人の、道路の中心から歩く位置までの横の距離（歩道の上。大通りは人ごとに少しずらして、1列に並ばないように）。
+  // 大通りの交差点のマスでは、歩いてきた道路の縁石から少し外（横断歩道の上）
+  private walkMag(node: number, c: Car) {
+    const g = this.grid!, jct = node < this.avJct.length && this.avJct[node] === 1;
+    const t = jct ? c.rt ?? g.road[node] : g.road[node];
+    if (jct || t === RoadType.Avenue) return drawWidth(t) / 2 + AV_WALK + AV_WALK_SPREAD * (((c.vs ??= Math.random()) * 7.31) % 1);
+    return (ROADS[t] || ROADS[1]).width / 2 + 0.9;
+  }
+  // 歩く人が node から向き d のマス j へ進めるか
+  private walkLink(node: number, j: number, d: number) {
+    const g = this.grid!, n = g.n, N = n * n;
+    if (node >= N || j >= N || !(g.conn[node] & (1 << d))) return false;
+    const x = (node % n) + DX[d], y = ((node / n) | 0) + DY[d];
+    return g.inb(x, y) && y * n + x === j && g.road[j] !== 0 && !isHighway(g.road[j]) && g.road[j] !== RoadType.Ramp;
+  }
+  private static arms(m: number) {
+    let k = 0;
+    for (; m; m &= m - 1) k++;
+    return k;
+  }
+  // 歩く人がマスに入ったとき（出てきたとき）：このマスを出るときの横の位置を決める。
+  // 歩く側は、大通りのマスではその外側。ほかのマスでは、この先（交差点のマスを通りぬけた先まで）の大通りの外側。
+  // 側を変えるのは、曲がるマスか、大通りのすぐ手前のマスだけ（交差点の横断歩道を渡る。交差点の中をななめに横切らないように）
+  private walkEnter(f: Fleet, c: Car, spawn: boolean) {
+    const g = this.grid!, N = this.avMed.length;
+    // 2つ先まで進むマスを決めておく
+    const plan = c.wp ?? (c.wp = []);
+    while (plan.length < 2) {
+      const last = plan.length ? plan[plan.length - 1] : [c.to, c.d];
+      if (!last) break;
+      plan.push(this.pickNext(f, last[0], last[1]));
+    }
+    if (!(c.from < N && this.avJct[c.from])) c.rt = g.road[c.from];
+    const here = this.walkSide(c.from, c.din, c.d);
+    const ahead = this.walkSide(c.to, c.d, plan[0] ? plan[0][1] : -1);
+    let need = ahead;
+    // 次が交差点のマスなら、その先（2つ先まで）を見る
+    for (let k = 0, q: [number, number] = [c.to, c.d]; !need && k < plan.length && q[0] < N && CarLayer.arms(g.conn[q[0]]) >= 3; k++) {
+      const nq = plan[k];
+      if (!nq) break;
+      need = this.walkSide(nq[0], nq[1], -1);
+      q = nq;
+    }
+    // 出てきたときは、はじめから歩く側にいる
+    if (spawn || c.wb === undefined) c.wa = (here || need || (c.lane ? 1 : -1)) * this.walkMag(c.from, c);
+    else c.wa = c.wb;
+    const cur = Math.sign(c.wa) || 1;
+    const side = here || (need && need !== cur && (ahead || c.din !== c.d) ? need : cur);
+    c.lane = side > 0 ? 1 : 0;
+    c.wb = side * this.walkMag(c.to < N ? c.to : c.from, c);
+    this.walkPath(c);
+  }
+  // 歩く人のこのマスの道すじ：入口 S（入る向きの線の上）から、出る向きの線と交わる角 K を丸めて通り、出口 E へ（歩道に沿って角で曲がる）。
+  // まっすぐ進むとき・道路の反対側へ渡るとき・角がうまく決まらないときは、S から E へまっすぐ
+  private walkPath(c: Car) {
+    const n = this.grid!.n, cx = ((c.from % n) + 0.5) * CELL, cz = (((c.from / n) | 0) + 0.5) * CELL;
+    const al = Math.hypot(DX[c.din], DY[c.din]), bl = Math.hypot(DX[c.d], DY[c.d]);
+    const ux = DX[c.din] / al, uz = DY[c.din] / al, vx = DX[c.d] / bl, vz = DY[c.d] / bl;
+    const wa = c.wa!, wb = c.wb!;
+    const sx = cx - DX[c.din] * CELL * 0.5 - uz * wa, sz = cz - DY[c.din] * CELL * 0.5 + ux * wa;
+    const ex = cx + DX[c.d] * CELL * 0.5 - vz * wb, ez = cz + DY[c.d] * CELL * 0.5 + vx * wb;
+    const W = c.wg ?? (c.wg = new Array(13).fill(0));
+    W[0] = sx; W[1] = sz; W[4] = ex; W[5] = ez; W[6] = -1;
+    W[9] = ux; W[10] = uz; W[11] = vx; W[12] = vz;
+    let len = Math.hypot(ex - sx, ez - sz);
+    // S + u·l1 = E - v·l2 となる角 K
+    const cr = ux * vz - uz * vx, qx = ex - sx, qz = ez - sz;
+    if (c.din !== c.d && wa * wb > 0 && Math.abs(cr) > 0.3) {
+      const l1 = (qx * vz - vx * qz) / cr, l2 = (ux * qz - qx * uz) / cr;
+      if (l1 > 0.05 && l2 > 0.05 && l1 < 20 && l2 < 20) {
+        const r = Math.min(2.5, 0.45 * l1, 0.45 * l2);
+        const kx = sx + ux * l1, kz = sz + uz * l1;
+        const chord = Math.hypot(vx * r + ux * r, vz * r + uz * r);
+        const la = (2 * r + chord) / 2;
+        W[2] = kx; W[3] = kz; W[6] = r; W[7] = l1 - r; W[8] = la;
+        len = l1 - r + la + l2 - r;
+      }
+    }
+    c.wl = Math.max(0.5, len);
+  }
+
+  // バス停で止まる向きか：待合所のある側（道路の層と同じ決め方。大通りは外側、ほかはまっすぐな腕のうち番号の小さい向きの右）が、
+  // 進む向きの右にあり、マスをまっすぐ通るとき
+  private busStops(c: Car) {
+    const g = this.grid!, i = c.from;
+    if (i >= g.n * g.n || !g.bstop[i] || !g.road[i] || c.din !== c.d) return false;
+    const m = g.conn[i];
+    let a = -1;
+    for (let d = 0; d < 8; d++) if (m & (1 << d) && (a < 0 || (a & 1 && !(d & 1)))) a = d;
+    if (a < 0) return false;
+    const al = Math.hypot(DX[a], DY[a]);
+    let px = -DY[a] / al, pz = DX[a] / al;
+    if (g.road[i] === RoadType.Avenue) {
+      const md = avenueMedianDir(g, i);
+      if (md >= 0 && DX[md] * px + DY[md] * pz > 0) { px = -px; pz = -pz; }
+    }
+    const l = Math.hypot(DX[c.d], DY[c.d]);
+    return (-DY[c.d] * px + DX[c.d] * pz) / l > 0.5;
+  }
+
   setData(g: Grid, traffic: Float32Array, cong: Float32Array, freight: Float32Array, riders?: Float32Array, garbage?: Uint8Array, garbageLeft?: Uint8Array) {
     this.grid = g;
+    this.scanAvenues(g);
     this.traffic = traffic;
     this.cong = cong;
     // 道路が変わったかもしれないので、先に決めた行き先は決め直す
+    // （歩く人の決めておいた道すじは、進むときに道路がつながっているかを確かめる）
     for (const f of this.fleets) for (const c of f.cars) c.nx = undefined;
     const N = g.n * g.n;
     const walkable = (v: number) => v < N && g.road[v] !== 0 && !isHighway(g.road[v]) && g.road[v] !== RoadType.Ramp;
@@ -526,10 +670,18 @@ export class CarLayer {
       for (const lv of [0, 1]) g.forEachOut(lv * N + by * n + bx, (v, d) => { if (v === from && d === nx[1]) ok = true; });
       if (!ok) return null;
     }
+    // バスは右（大通りでは外側）の車線を走る（バス停に寄れるように）
     const car: Car = {
-      from, to: nx[0], din: nx[1], d: nx[1], t: Math.random(), hA: this.trackH(f, from), alive: true, lane: Math.random() < 0.5 ? 0 : 1,
+      from, to: nx[0], din: nx[1], d: nx[1], t: Math.random(), hA: this.trackH(f, from), alive: true, lane: f === this.bus || Math.random() < 0.5 ? 1 : 0,
       col: (Math.random() * f.colors.length) | 0, col2: (Math.random() * Math.max(1, f.trailerColors.length)) | 0, hist: [],
     };
+    if (f.track === 'walk') {
+      // 腕が2本のマス（曲がり角・大通りの行き止まりの転回場）では、もう1本の腕から入ってきたことにする（歩く側を決めるのに使う）
+      const m = this.grid!.conn[from];
+      if (CarLayer.arms(m) === 2)
+        for (let d = 0; d < 8; d++) if (m & (1 << d) && d !== car.d) car.din = opp(d);
+      this.walkEnter(f, car, true);
+    }
     if (f.mid) {
       this.seedHistory(f, car);
       // 行き止まりのすぐ近くでは、後ろの車両が線路の外にはみ出すので出さない（ほかの場所で出し直す）
@@ -672,6 +824,8 @@ export class CarLayer {
   private islands: Island[] = [];
   setIslands(islands: Island[]) { this.islands = islands; }
   setTurnbacks(g: Grid) {
+    // 道路が変わったので、大通りの分離帯の向きも調べ直す
+    this.scanAvenues(g);
     for (const k of ['rail', 'erail', 'mono', 'sub'] as const) this.turnbacks.set(k, findTurnbacks(g, k));
     for (const f of this.lineFleets) for (const c of f.cars) c.tbKey = -1;
   }
@@ -947,7 +1101,8 @@ export class CarLayer {
     // t = マスの中の位置、r = そこから車の後ろの端までの長さ、L = そのマスの長さ。
     // トレーラーは荷台が後ろのマスまでのびているので、荷台がかかるマスにも後ろの端を入れておく（後ろの車が荷台にめりこまないように）
     const lanes = new Map<number, { c: Car; t: number; r: number; L: number }[]>();
-    const laneAt = (c: Car, from: number) => ((ROADS[g.nodeType(from)] || ROADS[1]).oneWay ? c.lane : 0);
+    // 大通りの交差点のマスでは、入ってきた道路の車線の数で分ける（横切る一般の道路は1本）
+    const laneAt = (c: Car, from: number) => ((ROADS[from < this.avJct.length && this.avJct[from] && c.rt !== undefined ? c.rt : g.nodeType(from)] || ROADS[1]).oneWay ? c.lane : 0);
     const laneOf = (c: Car) => laneAt(c, c.from);
     const addLane = (key: number, e: { c: Car; t: number; r: number; L: number }) => {
       const a = lanes.get(key);
@@ -1008,11 +1163,11 @@ export class CarLayer {
         // 次のマスで曲がる（マスの後半から減速を始める）
         const nextTurn = road && !!c.nx && c.nx[1] !== c.d && !hwCurve(tt, g.nodeType(c.nx[0]));
         const merging = tf === RoadType.Ramp && isHighway(tt);
-        const len = CarLayer.cellLen(c);
+        const len = walk && c.wl ? c.wl : CarLayer.cellLen(c);
         const cg = line || walk ? 1 : Math.max(this.cong![c.from], 1);
         const kmh = walk ? 4.5 + (c.col % 3) * 0.6 : line ? LINES[f.track as LineKind].speedKmh * 1.2 : (merging ? ROADS[tt].speedKmh : def.speedKmh) * (f.track === 'bus' ? 0.8 : f.trailer ? 0.85 : 1);
         // カーブの速さの割合は車の種類ごと。マスの境目で急に変わらないよう、なめらかに近づける（一時停止中は変わらない）
-        const turnK = walk ? 0.6 : line || f.halfLen <= 3 ? TURN_CAR : f.trailer ? TURN_TRAILER : TURN_BIG;
+        const turnK = walk ? 1 : line || f.halfLen <= 3 ? TURN_CAR : f.trailer ? TURN_TRAILER : TURN_BIG;
         const vNom = ((kmh / 3.6) * 0.9) / cg;
         let sk = turning || nextTurn ? turnK : 1;
         if (road && (turning || nextTurn)) {
@@ -1090,6 +1245,21 @@ export class CarLayer {
           if (c.leave && (c.leave.s += adv * len) - CarLayer.trainBack(f) > c.leave.d0 + 2) c.leave = null;
           if (c.fix && c.fix.set && (c.fix.s += adv * len) >= FIX_LEN) c.fix = null;
         }
+        // バス：バス停のマスでは、減速してマスの中ほどで止まり、しばらくして出る（大通りでは外側の歩道の待合所の前）
+        const stopHere = () => f === this.bus && this.busStops(c) && (c.lastStop !== c.from || (c.stop ?? 0) > 0);
+        if (stopHere()) {
+          if ((c.stop ?? 0) > 0) {
+            c.stop! -= dt;
+            adv = 0;
+          } else {
+            adv *= 0.6;
+            if (c.t <= 0.5 && c.t + adv >= 0.5) {
+              adv = 0.5 - c.t;
+              c.stop = BUS_DWELL;
+              c.lastStop = c.from;
+            }
+          }
+        }
         if (!line && !walk && adv > 0) {
           // 前の車（同じマスの先、または次のマス）との間をあける
           const lb = laneOf(c), me = f.halfLen;
@@ -1119,10 +1289,20 @@ export class CarLayer {
               Object.assign(c, nc);
               // 別の場所へ移ったので、車線の位置・トレーラーの向き・速さは新しく決め直す
               c.sk = c.lo = c.rx = c.rz = c.rs = c.ly = c.nx = undefined;
+              c.rt = nc.rt;
             }
             continue;
           }
-          const nx = c.nx !== undefined ? c.nx : this.pickNext(f, c.to, c.d);
+          // 歩く人は、決めておいたマスへ進む（道路が変わって進めなくなっていたら、決め直す）
+          let nx = c.nx !== undefined ? c.nx : null;
+          if (walk) {
+            const q = c.wp?.shift();
+            nx = q && this.walkLink(c.to, q[0], q[1]) ? q : null;
+            if (!nx) {
+              c.wp = [];
+              nx = this.pickNext(f, c.to, c.d);
+            }
+          } else if (c.nx === undefined) nx = this.pickNext(f, c.to, c.d);
           c.nx = undefined;
           if (!nx) {
             // 列車は行き止まりで止まり、しばらくして向きを変える（マップの端なら隣の都市へ出ていく）
@@ -1158,12 +1338,22 @@ export class CarLayer {
           c.din = c.d;
           c.to = nx[0];
           c.d = nx[1];
+          if (walk) this.walkEnter(f, c, false);
         }
         if (!c.alive) continue;
         this.place(f, c, c.t);
-        // 右側通行。一方通行・大通り・高速道路は2車線を使い分ける。電車は複線の、進む向きの右側の線路を走る
-        const rd = line || walk ? def : ROADS[g.nodeType(c.from)] || ROADS[1]; // マスが変わったときは新しいマスの道路
-        let lane = walk ? (def.width / 2 + 0.9) * (c.lane ? 1 : -1) : line ? TRACK_GAP : rd.oneWay ? (c.lane ? 1 : -1) * rd.width * 0.2 : (rd.width / 2) * 0.48;
+        // 走っている道路の種類（マスが変わったときは新しいマスの道路）。大通りの交差点のマスでは、入ってきた道路のまま
+        // （大通りを横切る一般の道路の車が、交差点の中で大通りの車線の位置へ寄らないように）
+        let rt = line || walk ? 0 : g.nodeType(c.from);
+        if (!line && !walk) {
+          if (c.from < this.avJct.length && this.avJct[c.from] && c.rt !== undefined) rt = c.rt;
+          else c.rt = rt;
+        }
+        // 右側通行。一方通行・大通り・高速道路は2車線を使い分ける（大通りは 3.25m の車線の中心）。電車は複線の、進む向きの右側の線路を走る
+        const rd = line || walk ? def : ROADS[rt] || ROADS[1];
+        let lane = walk ? (def.width / 2 + 0.9) * (c.lane ? 1 : -1) : line ? TRACK_GAP : rd.oneWay ? (c.lane ? 1 : -1) * (rt === RoadType.Avenue ? AV_LANE : rd.width * 0.2) : (rd.width / 2) * 0.48;
+        // バス停で止まるバスは、車道の端の停車スペース（縁石から 0.4〜2.8m）に寄せる
+        if (stopHere()) lane = drawWidth(g.road[c.from]) / 2 - 1.6;
         if (!walk && !line) {
           // 道路の種類が変わるところ（2車線と1車線など）では、横に跳ばずに少しずつ移る（1 m 進むあいだに 0.3 m まで）
           if (c.lo === undefined) c.lo = lane;
@@ -1175,8 +1365,42 @@ export class CarLayer {
           }
           lane = c.lo;
         }
-        const x = P.x - P.tz * lane, z = P.z + P.tx * lane, h = P.h;
-        let tx = P.tx, tz = P.tz;
+        let x = P.x - P.tz * lane, z = P.z + P.tx * lane, tx = P.tx, tz = P.tz;
+        const h = P.h;
+        if (walk && c.wg) {
+          // 歩く人：このマスの道すじ（歩道に沿って角で曲がる。道路を渡るときはまっすぐ）の上の、歩いた道のりの点
+          const W = c.wg, sl = c.t * (c.wl ?? 1);
+          if (W[6] < 0) {
+            const ex = W[4] - W[0], ez = W[5] - W[1], el = Math.hypot(ex, ez) || 1;
+            x = W[0] + ex * c.t;
+            z = W[1] + ez * c.t;
+            tx = ex / el;
+            tz = ez / el;
+          } else {
+            const r = W[6], l1 = W[7], la = W[8];
+            const ux = W[9], uz = W[10], vx = W[11], vz = W[12];
+            if (sl < l1) {
+              x = W[0] + ux * sl;
+              z = W[1] + uz * sl;
+              tx = ux;
+              tz = uz;
+            } else if (sl < l1 + la) {
+              // 角の丸み（K1 → K → K2 の2次ベジェ曲線）
+              const u = (sl - l1) / la, k1x = W[2] - ux * r, k1z = W[3] - uz * r, k2x = W[2] + vx * r, k2z = W[3] + vz * r;
+              x = (1 - u) * (1 - u) * k1x + 2 * u * (1 - u) * W[2] + u * u * k2x;
+              z = (1 - u) * (1 - u) * k1z + 2 * u * (1 - u) * W[3] + u * u * k2z;
+              const dx = (1 - u) * ux + u * vx, dz = (1 - u) * uz + u * vz, dl = Math.hypot(dx, dz) || 1;
+              tx = dx / dl;
+              tz = dz / dl;
+            } else {
+              const q = sl - l1 - la;
+              x = W[2] + vx * (r + q);
+              z = W[3] + vz * (r + q);
+              tx = vx;
+              tz = vz;
+            }
+          }
+        }
         if (!line && !walk && c.ly) {
           const cs = Math.cos(c.ly), sn = Math.sin(c.ly);
           [tx, tz] = [tx * cs + tz * sn, tz * cs - tx * sn];

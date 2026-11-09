@@ -8,12 +8,12 @@ import {
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
 import {
-  applyCloverleaf, applyDiamond, applyTerrain, applyURamp, linkURampMiddles, linkUrbanEnds, planTrees, planEStop, estopGroup, estopRoads, platformCells, planURamp, snapRoadEnds, planTerrain, TerrainOp, applyRamp, applyTransitLine, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoad, planZone,
+  applyCloverleaf, applyDiamond, applyTerrain, applyURamp, linkURampMiddles, linkUrbanEnds, planTrees, planEStop, estopGroup, estopRoads, platformCells, planURamp, planTerrain, TerrainOp, applyRamp, planRoadCmd, levelAvenueDecks, applyTransitLine, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planZone,
 } from './plan';
 import { CELL } from './constants';
 import { ADVISORS, Advice, computeRating, Loan, LOAN_AMOUNTS, loanRate, makeAdvice, MAX_LOANS, newLoan, ordinanceCost, ordinanceEffects, OrdinanceEffects, OrdinanceId, ORDINANCES, payLoan, rewardUnlocked, REWARD_REQ } from './governance';
 import { defaultServiceState, makeServiceMaps, ServiceMaps, ServiceState, updateServices } from './services';
-import { assignTrips, buildJunctions, buildRoadGraph, buildTransitModel, congestionFactor, Destination, LAYER, Origin } from './traffic';
+import { assignTrips, buildJunctions, buildRoadGraph, buildTransitModel, congestionFactor, Destination, junctionGroup, LAYER, normalizeAvenueJunctions, Origin } from './traffic';
 
 export enum BState {
   Building = 0,
@@ -347,6 +347,8 @@ export class World {
     w.rating = d.rating ?? 55;
     linkUrbanEnds(g);
     linkURampMiddles(g); // 以前の版で、ランプの横に後から引いた一般道がつながっていなかった
+    levelAvenueDecks(g); // 大通りの橋は、2本の車線で1枚の床版（以前の版は車線ごとに高さが違った）
+    normalizeAvenueJunctions(g); // 大通りの交差点は1つの制御。ロータリーは信号にする
     w.recomputeAll();
     // 高層ビル街の中心ほど高くなるように、高密度の建物の高さを合わせ直す
     w.reshapeSkyline();
@@ -371,9 +373,8 @@ export class World {
     const g = this.g;
     switch (c.t) {
       case 'road': {
-        const [sx0, sy0, sx1, sy1] = snapRoadEnds(g, c.road, c.x0, c.y0, c.x1, c.y1);
-        const path = planLine(g, sx0, sy0, sx1, sy1);
-        const plan = planRoad(g, path, c.road);
+        // 大通りは格子点（なぞった線が中心線）、それ以外はマスの座標
+        const plan = planRoadCmd(g, c.road, c.x0, c.y0, c.x1, c.y1);
         if (!plan.ok) return { ok: false, msg: plan.reason || '道路を引けません' };
         if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
         applyRoad(g, plan);
@@ -554,9 +555,14 @@ export class World {
       }
       case 'junction': {
         if (c.cell < 0 || c.cell >= g.n * g.n || !g.road[c.cell]) return { ok: false, msg: '交差点が見つかりません' };
-        g.ictl[c.cell] = c.ctl;
-        g.isplit[c.cell] = Math.max(10, Math.min(90, Math.round(c.split)));
-        g.iflags[c.cell] = c.flags;
+        // 大通りの交差点は、まとまりのマスすべてに同じ設定をする（ロータリーにはできないので信号にする）
+        const grp = junctionGroup(g, c.cell);
+        const ctl = grp.avenue && c.ctl === Ctl.Roundabout ? Ctl.Signal : c.ctl;
+        for (const cell of grp.cells) {
+          g.ictl[cell] = ctl;
+          g.isplit[cell] = Math.max(10, Math.min(90, Math.round(c.split)));
+          g.iflags[cell] = c.flags;
+        }
         this.maps.jctl.set(buildJunctions(g, this.maps.traffic).ctl);
         this.mapsVersion++;
         this.gridVersion++;

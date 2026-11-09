@@ -4,8 +4,9 @@
 import * as THREE from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Grid } from '../sim/grid';
-import { CELL } from '../sim/constants';
+import { CELL, DX, DY } from '../sim/constants';
 import { ROADS, RoadType } from '../sim/defs';
+import { AV_W, ROAD_LIFT, avenueMedianDir } from './roadLayer';
 import { hash2 } from '../sim/rng';
 import { shared, AMB_IRR_GLSL, AMB_IRR_PARS, ambUniforms } from './materials';
 import type { TreeSpot } from './buildingGen';
@@ -695,6 +696,12 @@ const GREENS = [0x557a2c, 0x5f8434, 0x4a6e2a, 0x6a8c38, 0x587d36, 0x748f3a, 0x4f
 const COPPER = [0x6a4a46, 0x5e4852].map(hex);
 const GOLDEN = [0x8e9e44, 0x99a24c].map(hex);
 const DARKS = [0x2f5532, 0x37603a, 0x2c4e34, 0x3a6036, 0x30583f, 0x42673a].map(hex);
+// 大通りの中央分離帯のケヤキ（葉の色は大通りごとに1つ選ぶ）。形は横に広い広葉樹
+const ZELKOVA = [0x557a2c, 0x5f8434, 0x587d36, 0x4f7034];
+const ZELKOVA_SHAPE = 3;
+// 大通りの並木の位置：外側の歩道は縁石から 0.9m（街灯の列）、分離帯は縁石から 2.75m（2本の車線の分で2列）
+const AV_TREE = AV_W / 2 + 0.9;
+const AV_MED_TREE = AV_W / 2 + 2.75;
 
 // 植え方の違い（0=自然の林, 1=公園や庭, 2=街路樹）
 interface Pick { shape: number; color: THREE.Color }
@@ -939,7 +946,56 @@ export class TreeLayer {
     U.uRingD.value.set(cx, cz, hq ? r2 - 0.5 : -1);
   }
 
-  rebuild(g: Grid, extra: TreeSpot[]) {
+  // 大通り（グリーンベルト型）の並木。外側の歩道は 16m ごと（マスの境、街灯の間）、中央分離帯はケヤキを 8m ごとに2列。
+  // 樹種は大通りごとにそろえる（2本の車線の間の境の線ごとに決める）。交差点・行き止まりの手前、橋・高架・踏切には植えない
+  private avenueTrees(g: Grid, put: (kind: number, x: number, y: number, z: number, s: number, seed: number, src: number, sp?: number, colHex?: number, shape?: number) => void, median?: TreeSpot[]) {
+    const n = g.n, AV = RoadType.Avenue;
+    // まっすぐ（斜めも）な地上の大通りのマスなら、その軸の向き（0..3）。ほかは -1
+    const axisOf = (x: number, y: number) => {
+      if (!g.inb(x, y)) return -1;
+      const j = y * n + x;
+      if (g.road[j] !== AV || g.up[j] || g.deck[j] > 0 || g.lift[j] > 0.3 || g.rail[j]) return -1;
+      const m = g.conn[j];
+      for (let d = 0; d < 4; d++) if (m === ((1 << d) | (1 << (d + 4)))) return d;
+      return -1;
+    };
+    // 軸 a に直交する向きの座標（同じ大通りの車線のマスは同じ値）
+    const perp = (a: number, x: number, y: number) => (a === 0 ? y : a === 2 ? x : a === 1 ? x - y : x + y);
+    const H = (i: number, x: number, z: number, up: number) => g.groundAt(x, z) + ROAD_LIFT + g.lift[i] + up;
+    for (let y = 0; y < n; y++)
+      for (let x = 0; x < n; x++) {
+        const a = axisOf(x, y);
+        if (a < 0) continue;
+        const i = y * n + x;
+        const md = avenueMedianDir(g, i);
+        if (md < 0 || ((md - a) & 3) !== 2) continue;
+        const al = Math.hypot(DX[a], DY[a]), ml = Math.hypot(DX[md], DY[md]);
+        const ux = DX[a] / al, uz = DY[a] / al, mx = DX[md] / ml, mz = DY[md] / ml;
+        const cx = (x + 0.5) * CELL, cz = (y + 0.5) * CELL;
+        const key = perp(a, x, y) + (perp(a, DX[md], DY[md]) > 0 ? 1 : 0);
+        const same = (qx: number, qy: number) => axisOf(qx, qy) === a && avenueMedianDir(g, qy * n + qx) === md;
+        // 外側の歩道：マスの先の境に1本（先のマスも同じ大通りのとき）
+        if (same(x + DX[a], y + DY[a])) {
+          const L = (CELL * al) / 2, hs = hash2(x * 5 + 1, y * 3, 13);
+          const wx = cx + ux * L - mx * AV_TREE, wz = cz + uz * L - mz * AV_TREE;
+          put(0, wx, H(i, wx, wz, 0.15), wz, 0.6 + hs * 0.12, hs, 2, hash2(key, a, 31));
+        }
+        // 中央分離帯（まっすぐな区間だけ。斜めの区間は分離帯が狭いので植え込みだけ）：反対車線のマスもまっすぐなとき
+        if (median || a & 1 || axisOf(x + DX[md], y + DY[md]) !== a) continue;
+        const zc = ZELKOVA[Math.floor(hash2(key, a, 37) * ZELKOVA.length) % ZELKOVA.length];
+        for (const sd of [-1, 1]) {
+          // 交差点・行き止まりの側（分離帯の先が丸くなるところ）には植えない
+          if (axisOf(x + DX[a] * sd, y + DY[a] * sd) !== a) continue;
+          const hs = hash2(x * 7 + sd, y * 11, 17);
+          const wx = cx + ux * 4 * sd + mx * AV_MED_TREE, wz = cz + uz * 4 * sd + mz * AV_MED_TREE;
+          put(0, wx, H(i, wx, wz, 0.18), wz, 0.88 + hs * 0.16, hs, 2, -1, zc, ZELKOVA_SHAPE);
+        }
+      }
+    if (median) for (const t of median) put(0, t.x, t.y, t.z, t.s, hash2(Math.floor(t.x), Math.floor(t.z), 4), 2, -1, t.col ?? ZELKOVA[0], ZELKOVA_SHAPE);
+  }
+
+  // median：大通りの中央分離帯の並木の位置（道路の層が分離帯の形から決めたもの）。渡されなければ、マスの並びから決める
+  rebuild(g: Grid, extra: TreeSpot[], median?: TreeSpot[]) {
     const n = g.n;
     // 前の区画（中身が同じなら、そのまま使う）
     const old = new Map<number, Chunk>();
@@ -997,13 +1053,13 @@ export class TreeLayer {
         }
       }
     for (const t of extra) put(t.kind, t.x, t.y, t.z, t.s, hash2(Math.floor(t.x), Math.floor(t.z), 4), 1, -1, t.col, t.shape);
-    // 街路樹：まっすぐな一般道・一方通行・大通り・街路の歩道に、街灯と1マスずつ交互に植える
+    // 街路樹：まっすぐな一般道・一方通行・街路の歩道に、街灯と1マスずつ交互に植える（大通りは下で別に植える）
     for (let y = 0; y < n; y++)
       for (let x = 0; x < n; x++) {
         if (!((x + y) & 1)) continue;
         const i = y * n + x;
         const t = g.road[i];
-        if (!(t === RoadType.Street || t === RoadType.Road || t === RoadType.OneWay || t === RoadType.Avenue)) continue;
+        if (!(t === RoadType.Street || t === RoadType.Road || t === RoadType.OneWay)) continue;
         if (g.up[i] || g.deck[i] > 0 || g.lift[i] > 0.3 || g.bstop[i] || g.rail[i]) continue;
         const m = g.conn[i];
         const ew = m === ((1 << 0) | (1 << 4)) || m === (1 << 0) || m === (1 << 4);
@@ -1022,6 +1078,7 @@ export class TreeLayer {
           put(0, wx, g.roadH(i) + 0.45, wz, 0.55 + hs * 0.15, hs, 2, sp);
         }
       }
+    this.avenueTrees(g, put, median);
     for (let ci = 0; ci < lists.length; ci++) {
       const L = lists[ci];
       const prev = old.get(ci);

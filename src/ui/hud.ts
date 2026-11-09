@@ -13,6 +13,7 @@ import type { MapStyle } from '../sim/terrain';
 import type { NewCityOpts } from '../sim/protocol';
 import { BRIDGE_STYLES } from '../render/bridgeStyles';
 import { platformCells } from '../sim/plan';
+import { junctionGroup } from '../sim/traffic';
 import { OrientMode, toApp } from './orient';
 
 const ICONS: Record<string, string> = {
@@ -314,7 +315,24 @@ export class Hud {
   showDragUI(on: boolean) {
     this.cancelZone.classList.toggle('hidden', !on);
     this.cancelZone.classList.remove('over');
+    if (on) this.placeCancel();
     if (!on) this.cost.classList.add('hidden');
+  }
+
+  // キャンセルの枠は、地図の上ではなくツールバーの上に重ねる（上や横へなぞった指が、うっかり枠に入らないように）
+  private placeCancel() {
+    const t = this.toolbar, s = this.cancelZone.style;
+    if (!t.offsetWidth || !t.offsetHeight) return;
+    const vertical = t.offsetHeight > t.offsetWidth;
+    s.left = `${t.offsetLeft}px`;
+    s.top = `${t.offsetTop}px`;
+    s.width = `${t.offsetWidth}px`;
+    s.height = `${t.offsetHeight}px`;
+    s.transform = 'none';
+    s.borderRadius = '0';
+    s.boxSizing = 'border-box';
+    s.writingMode = vertical ? 'vertical-rl' : '';
+    s.letterSpacing = vertical ? '0.15em' : '';
   }
 
   showPreview(info: PreviewInfo | null | undefined, x: number, y: number, over: boolean) {
@@ -331,7 +349,8 @@ export class Hud {
       this.cost.classList.add('bad');
     }
     this.cost.style.left = `${x}px`;
-    this.cost.style.top = `${y - 30}px`;
+    // 画面の上の端では、指の下に出す（隠れないように）
+    this.cost.style.top = `${y - 30 < 6 ? y + 36 : y - 30}px`;
     this.cost.classList.remove('hidden');
   }
 
@@ -341,7 +360,7 @@ export class Hud {
     const b = this.cancelZone.getBoundingClientRect();
     const [x0, y0] = toApp(b.left, b.top), [x1, y1] = toApp(b.right, b.bottom);
     const r = { left: Math.min(x0, x1), right: Math.max(x0, x1), top: Math.min(y0, y1), bottom: Math.max(y0, y1) };
-    return x >= r.left - 10 && x <= r.right + 10 && y >= r.top - 10 && y <= r.bottom + 14;
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
   }
 
   // ---------------- データ表示 ----------------
@@ -552,13 +571,17 @@ export class Hud {
   private junctionPanel(cell: number): HTMLElement {
     const g = this.game.grid!;
     const box = el('div', 'jpanel');
+    // 大通りの交差点は、まわりの交差点のマスとまとめて1つの交差点（設定はすべてのマスに送られる）。ロータリーにはできない
+    const avenue = junctionGroup(g, cell).avenue;
     const state = { ctl: g.ictl[cell], split: g.isplit[cell], flags: g.iflags[cell] };
+    if (avenue && state.ctl === CTL_ROUNDABOUT) state.ctl = CTL_SIGNAL;
     const send = () => {
       void this.game.exec({ t: 'junction', cell, ctl: state.ctl, split: state.split, flags: state.flags });
     };
-    box.append(el('h5', '', '交差点の設定'));
+    box.append(el('h5', '', avenue ? '交差点の設定（大通りの交差点全体）' : '交差点の設定'));
     const seg = el('div', 'seg wrap');
     CTL_NAMES.forEach((name, k) => {
+      if (avenue && k === CTL_ROUNDABOUT) return;
       const b = el('button', state.ctl === k ? 'on' : '', name);
       b.onclick = () => {
         sfx.click();
@@ -591,7 +614,7 @@ export class Hud {
       fl.append(b);
     }
     box.append(fl);
-    box.append(el('p', 'muted', '「自動」は交通量に合わせて、信号なし・一時停止・信号を切り替えます。'));
+    box.append(el('p', 'muted', '「自動」は交通量に合わせて、信号なし・一時停止・信号を切り替えます。' + (avenue ? '大通りの交差点には、ラウンドアバウトは作れません。' : '')));
     return box;
   }
 
@@ -1045,6 +1068,7 @@ export class Hud {
 }
 
 const CTL_NAMES = ['自動', '信号なし', '一時停止', '信号', 'ラウンドアバウト'];
+const CTL_SIGNAL = 3, CTL_ROUNDABOUT = 4;
 
 const LEGENDS: Partial<Record<DataView, string>> = {
   traffic: '少ない<i class="grad" style="background:linear-gradient(90deg,#3cc85a,#f0dc3c,#f07828,#c81e28)"></i>渋滞',
