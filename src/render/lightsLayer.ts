@@ -131,7 +131,7 @@ export class StreetLights {
         let nx = -P.tz, nz = P.tx;
         if (nx * U.sx + nz * U.sz < 0) { nx = -nx; nz = -nz; }
         const off = UR_HALF + 0.12, cx = P.x + nx * off, cz = P.z + nz * off;
-        const base = P.h + (U.level ? 0.9 : 0.6);
+        const base = P.h + 0.9;
         lamp.push(cx - nx * 2.0, base + 7.2, cz - nz * 2.0);
         pool.push(cx - nx * 2.6, P.h + 0.05, cz - nz * 2.6, 11);
         poles.push(cx, base, cz, Math.atan2(nz, -nx));

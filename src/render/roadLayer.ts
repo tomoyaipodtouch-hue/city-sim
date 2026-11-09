@@ -1586,7 +1586,7 @@ export class RoadLayer {
     };
     // 橋脚（丸みのある1本柱）：輪の列（高さ、道に沿った半径、横の半径、角の丸み p：2 = だ円、大きいほど角ばる）をつないだ形
     const pier = (x: number, z: number, ux: number, uz: number, rings: [number, number, number, number][], c: THREE.Color) => {
-      const SEG = 16, px = -uz, pz = ux;
+      const SEG = 12, px = -uz, pz = ux;
       const ringPts = (r: [number, number, number, number]) => {
         const out: number[][] = [];
         for (let q = 0; q < SEG; q++) {
@@ -1622,7 +1622,7 @@ export class RoadLayer {
     const footing = (x: number, z: number, ux: number, uz: number, ha: number, hb: number, y: number) => {
       pier(x, z, ux, uz, [[y - 0.8, ha, hb, 6], [y + 0.08, ha, hb, 6]], COL.footing);
       const P = (a: number, b: number) => [x + ux * a - uz * b, y + 0.08, z + uz * a + ux * b];
-      const SEG = 16, c = O.v(x, y + 0.08, z, COL.footing);
+      const SEG = 12, c = O.v(x, y + 0.08, z, COL.footing);
       const ring: number[] = [];
       for (let q = 0; q < SEG; q++) {
         const th = (q / SEG) * Math.PI * 2, cs = Math.cos(th), sn = Math.sin(th);
