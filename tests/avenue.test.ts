@@ -991,6 +991,22 @@ describe('avenue: drawing feedback', () => {
     }
   });
 
+  spec('dragging again along one leg of an L corner, a crossing or a bridge changes nothing', () => {
+    const cases: [() => World, Line[], Line][] = [
+      [flat, [[8, 24, 30, 24], [30, 24, 30, 6]], [30, 24, 30, 6]],
+      [flat, [[8, 24, 40, 24], [24, 6, 24, 40]], [24, 40, 24, 6]],
+      [riverNS, [[6, 24, 40, 24]], [40, 24, 6, 24]],
+    ];
+    for (const [mk, lines, again] of cases) {
+      const w = mk();
+      for (const l of lines) draw(w, l);
+      const before = Array.from(w.g.flow);
+      expect(planRoadCmd(w.g, AV, ...again).noop, again.join(',')).toBe(true);
+      w.exec({ t: 'road', x0: again[0], y0: again[1], x1: again[2], y1: again[3], road: AV });
+      expect(Array.from(w.g.flow)).toEqual(before);
+    }
+  });
+
   spec('dragging along an existing avenue that crosses over a highway changes nothing and says so', () => {
     const w = flat(64);
     draw(w, [32, 2, 32, 62], RoadType.UrbanGroundHighway);

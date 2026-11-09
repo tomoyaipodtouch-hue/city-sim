@@ -2074,14 +2074,20 @@ export function planAvenue(g: Grid, x0: number, y0: number, x1: number, y1: numb
     }
   // 端の折り返し（つなぎ先がない端だけ。既存の大通りがそのまま続く場合も作らない）
   const uturns: [number, number][] = [];
-  const continues = (c: number, d: number) => {
-    const j = nb(g, c, d);
-    return g.road[c] === RoadType.Avenue && (g.flow[c] & (1 << d)) !== 0 && j >= 0 && g.road[j] === RoadType.Avenue;
+  // 端のマスから、今回の車線の外の大通りへ流れていく（まっすぐ続く、または角で曲がって続く）
+  const laneSet = new Set([...fwd, ...bwd]);
+  const continues = (c: number) => {
+    if (g.road[c] !== RoadType.Avenue) return false;
+    for (let d = 0; d < 8; d++) {
+      const j = nb(g, c, d);
+      if (g.flow[c] & (1 << d) && j >= 0 && g.road[j] === RoadType.Avenue && !laneSet.has(j)) return true;
+    }
+    return false;
   };
   const startFree = !sn.start || sn.start.kind === 'road';
   const endFree = !sn.end || sn.end.kind === 'road';
-  if (startFree && !continues(bwd[bwd.length - 1], opp(d0))) uturns.push([bwd[bwd.length - 1], fwd[0]]);
-  if (endFree && !continues(fwd[fwd.length - 1], d1)) uturns.push([fwd[fwd.length - 1], bwd[0]]);
+  if (startFree && !continues(bwd[bwd.length - 1])) uturns.push([bwd[bwd.length - 1], fwd[0]]);
+  if (endFree && !continues(fwd[fwd.length - 1])) uturns.push([fwd[fwd.length - 1], bwd[0]]);
   // 橋（2本の車線で1枚）
   const pairDeck = avenueDecks(g, segs, sA, eA);
   for (const c of [...fwd, ...bwd])

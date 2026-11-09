@@ -482,6 +482,15 @@ export class CarLayer {
     }
   }
 
+  // 大通りの交差点のまとまりの手前で止まる位置（まとまりの縁からの長さ）。to = まとまりの最初のマス、d = 進む向き。
+  // 縦横の交差点は、縁の約 1m 手前か、信号の交差点の停止線。
+  // 斜めに交わる大通りの交差点は、横断歩道が斜めの縁に沿うので、停止線はマスの縁から遠い（縦横の腕で約 8m、斜めの腕で約 6m）
+  private holdBack(g: Grid, to: number, d: number) {
+    const m = g.conn[to], kc = this.avCl[to];
+    if (g.road[to] === RoadType.Avenue && (m & 0xaa) !== 0 && (m & 0x55) !== 0) return d & 1 ? 6 : 8;
+    return Math.max(1.1, kc >= 0 && !(d & 1) ? this.clStop[kc * 4 + (d >> 1)] : 0);
+  }
+
   // 大通りの交差点のマスで、向き d（斜めも）に進むときに歩く側：まとまりの外側（右 = 1、左 = -1、両側とも外か内なら 0）
   private jctSide(node: number, d: number) {
     const g = this.grid!;
@@ -1552,11 +1561,7 @@ export class CarLayer {
           // まとまりの入口：最初のマスがもう車でいっぱい（3台以上）なら、入らずに手前で待つ（交差点の中で詰まらないように）
           let red = false;
           if (box && !inBox(c.from)) {
-            // 止まる位置（まとまりの縁からの長さ）。縦横の交差点は、縁の約 1m 手前か、信号の交差点の停止線。
-            // 斜めに交わる大通りの交差点は、横断歩道が斜めの縁に沿うので、停止線はマスの縁から遠い（縦横の腕で約 8m、斜めの腕で約 6m）
-            const kc = this.avCl[c.to], a = c.d & 3;
-            const m = g.conn[c.to], skew = g.road[c.to] === RoadType.Avenue && (m & 0xaa) !== 0 && (m & 0x55) !== 0;
-            const back = skew ? (c.d & 1 ? 6 : 8) : Math.max(1.1, kc >= 0 && !(c.d & 1) ? this.clStop[kc * 4 + (c.d >> 1)] : 0);
+            const kc = this.avCl[c.to], a = c.d & 3, back = this.holdBack(g, c.to, c.d);
             let k = 0;
             for (let d = 0; d < 16; d++) k += lanes.get(c.to * 16 + d)?.length ?? 0;
             if (k >= 3 && (v = (1 - c.t) * len - me - back + 1.5) < gap) {
