@@ -108,6 +108,12 @@ export class Bgm {
 
   private start() {
     let c: AudioContext;
+    // 音の出し方は、AudioContext を作る前に決める（あとからだと、ほかのアプリの音楽を止めてしまうことがある）
+    try {
+      const nav = navigator as unknown as { audioSession?: { type: string } };
+      const type = bgmSettings.enabled ? 'playback' : 'ambient';
+      if (nav.audioSession && nav.audioSession.type !== type) nav.audioSession.type = type;
+    } catch { /* 対応していない */ }
     try {
       c = new AudioContext();
     } catch {

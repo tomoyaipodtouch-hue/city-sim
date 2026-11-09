@@ -64,6 +64,8 @@ export interface Settings {
   dayNight: 'auto' | 'day' | 'night';
   camPitch: number; // カメラの角度のずれ（度）。マイナスで地面に近く（横から）、プラスで真上寄り
   orient: OrientMode; // 縦持ちのときの表示（auto = 縦の配置、cw / ccw = 横ロックモード）
+  mixMusic?: boolean; // ほかのアプリの音楽を流しながら遊ぶ（BGM は止める）
+  keepAwake?: boolean; // ゲーム中は画面を自動で消さない
 }
 
 export interface HudActions {
@@ -105,7 +107,7 @@ export class Hud {
   private hidden = false;
   private barEls: Record<string, HTMLElement> = {};
   nowPlaying = '';
-  settings: Settings = { shadows: true, lowRes: false, cars: true, sound: true, fps: false, hq: false, bgm: true, bgmVol: 50, dayNight: 'auto', camPitch: 0, orient: 'auto' };
+  settings: Settings = { shadows: true, lowRes: false, cars: true, sound: true, fps: false, hq: false, bgm: true, bgmVol: 50, dayNight: 'auto', camPitch: 0, orient: 'auto', mixMusic: false, keepAwake: true };
 
   constructor(private game: GameClient, private r: CityRenderer, private tools: ToolController, private act: HudActions) {
     this.root = document.getElementById('ui')!;
@@ -943,15 +945,17 @@ export class Hud {
       ['lowRes', '解像度を下げる', '画面の細かさを下げて、動作を軽くします'],
       ['cars', '車の表示', '道路を走る車を表示します'],
       ['bgm', 'BGM', ''],
+      ['mixMusic', 'ほかのアプリの音楽を流す', 'YouTube Music などを聴きながら遊べます。オンのあいだ BGM は止まり、効果音は音楽と重ねて鳴ります'],
       ['sound', '効果音', ''],
+      ['keepAwake', '画面を自動で消さない', 'ゲームを開いているあいだ、画面が暗くなったりロックされたりしないようにします'],
       ['fps', 'フレームレートの表示', '動作の重さを確認するときに使います'],
     ];
     for (const [k, name, desc] of items) {
       const row = el('div', 'row', `<div><div>${name}</div>${desc ? `<div class="desc">${desc}</div>` : ''}</div>`);
-      const t = el('button', 'toggle' + (this.settings[k] ? ' on' : ''));
+      const t = el('button', 'toggle' + (this.settings[k] ?? (k === 'keepAwake') ? ' on' : ''));
       t.onclick = () => {
         this.settings[k] = !this.settings[k];
-        t.classList.toggle('on', this.settings[k]);
+        t.classList.toggle('on', !!this.settings[k]);
         this.applySettings();
       };
       row.append(t);

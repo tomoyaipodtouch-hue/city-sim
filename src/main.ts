@@ -106,7 +106,10 @@ const hud: Hud = new Hud(game, renderer, tools, {
       renderer.setQuality(q);
     }
     renderer.dayMode = s.dayNight ?? 'auto';
-    bgmSettings.enabled = s.bgm ?? true;
+    // ほかのアプリの音楽を流すときは、BGM を止める（音の出し方もほかの音とまざる形になる）
+    bgmSettings.enabled = (s.bgm ?? true) && !s.mixMusic;
+    keepAwake = s.keepAwake ?? true;
+    void updateWakeLock();
     bgmSettings.volume = (s.bgmVol ?? 50) / 100;
     bgm.applyVolume();
     renderer.rig.pitchOffset = s.camPitch ?? 0;
@@ -184,9 +187,37 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
 // 開発用
 (window as unknown as Record<string, unknown>).__pm = { game, renderer, tools, hud };
 
+// 画面を自動で消さない（Wake Lock）。画面が隠れると外れるので、戻ったときやタップのたびに取り直す
+let keepAwake = true;
+let wakeLock: { release: () => Promise<void> } | null = null;
+let wakeBusy = false;
+async function updateWakeLock() {
+  if (wakeBusy) return;
+  wakeBusy = true;
+  try {
+    const nav = navigator as Navigator & { wakeLock?: { request: (t: 'screen') => Promise<{ release: () => Promise<void>; addEventListener: (e: string, f: () => void) => void }> } };
+    if (keepAwake && !document.hidden) {
+      if (!wakeLock && nav.wakeLock) {
+        const l = await nav.wakeLock.request('screen');
+        l.addEventListener('release', () => { if (wakeLock === l) wakeLock = null; });
+        wakeLock = l;
+      }
+    } else if (wakeLock) {
+      const l = wakeLock;
+      wakeLock = null;
+      await l.release();
+    }
+  } catch { /* 対応していない、または許可されなかった */ }
+  wakeBusy = false;
+}
+document.addEventListener('visibilitychange', () => void updateWakeLock());
+
 // 音（BGM と効果音）：タップしたときに始める（iPhone は「指をはなした」ときでないと音を出させてくれない）。
 // 電話やほかのアプリの音で止められることがあるので、ずっと見張って、止まっていたら次のタップで動かし直す
-const unlockAudio = () => bgm.unlock();
+const unlockAudio = () => {
+  bgm.unlock();
+  void updateWakeLock();
+};
 for (const ev of ['touchend', 'click', 'keydown'] as const) window.addEventListener(ev, unlockAudio, true);
 bgm.onSong = (name) => (hud.nowPlaying = name);
 
