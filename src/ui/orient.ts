@@ -44,7 +44,13 @@ export function applyOrient() {
   for (const k of ['--sl', '--sr', '--st', '--sb']) s.removeProperty(k);
   if (rot === 0) {
     topPx = 0;
-    s.width = s.height = s.transform = '';
+    s.width = s.transform = '';
+    // ホーム画面から開いた縦画面では、iPhone が画面の高さをホームバーの手前までしか教えないことがある。
+    // 画面の下まで #app を広げる（下の帯が空かないように）
+    const nav = navigator as Navigator & { standalone?: boolean };
+    const standalone = nav.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+    const full = Math.max(screen.width, screen.height);
+    s.height = standalone && portrait && full > H && full - H < 120 ? `${full}px` : '';
     return;
   }
   // 上の帯の下だけを使う（横画面の幅 = 縦の高さ - 帯の高さ）。帯の側の余白はもういらない
