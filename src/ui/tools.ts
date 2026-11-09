@@ -129,7 +129,7 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { tool: 'plop:ferry_p', name: CIVIC.ferry_p.name, note: yen(CIVIC.ferry_p.cost) },
       { tool: 'plop:ferry_c', name: CIVIC.ferry_c.name, note: yen(CIVIC.ferry_c.cost) },
       { tool: 'plop:seaport', name: CIVIC.seaport.name, note: yen(CIVIC.seaport.cost) },
-      { tool: 'plop:seaport_l', name: `${CIVIC.seaport_l.name}（8×12・水辺）`, note: yen(CIVIC.seaport_l.cost) },
+      { tool: 'plop:seaport_l', name: `${CIVIC.seaport_l.name}（12×16・水辺）`, note: yen(CIVIC.seaport_l.cost) },
       { tool: 'plop:airport_s', name: `${CIVIC.airport_s.name}（11×44）`, note: yen(CIVIC.airport_s.cost) },
       { tool: 'plop:airport_l', name: `${CIVIC.airport_l.name}（17×80）`, note: yen(CIVIC.airport_l.cost) },
     ],

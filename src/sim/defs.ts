@@ -261,7 +261,7 @@ export const CIVIC: Record<CivicId, CivicDef> = {
   sub_station: { id: 'sub_station', name: '地下鉄の駅', w: 1, h: 1, cost: 3500, upkeep: 70, transit: 'sub', desc: '地下鉄の線路の上か隣に、道路に接するように置く' },
   ferry_p: { id: 'ferry_p', name: '旅客フェリー乗り場', w: 2, h: 2, cost: 3000, upkeep: 60, ferry: 'passenger', waterfront: true, desc: '水辺に、道路に接するように置く。同じ水域の乗り場どうしが航路で結ばれる' },
   ferry_c: { id: 'ferry_c', name: 'カーフェリー乗り場', w: 3, h: 3, cost: 6000, upkeep: 110, ferry: 'car', waterfront: true, desc: '車ごと乗れるフェリー。水域がマップの端まで続いていれば、隣の都市へも行ける' },
-  seaport_l: { id: 'seaport_l', name: '大型コンテナターミナル', w: 8, h: 12, rotate: true, cost: 90000, upkeep: 900, seaport: true, portScale: 3, waterfront: true, pollution: 10, desc: '大きなガントリークレーンが並ぶコンテナ港。工業、とくに倉庫業の需要が大きく上がり、まわりに大きな倉庫が建つ。水域がマップの端まで続いている必要がある' },
+  seaport_l: { id: 'seaport_l', name: '大型コンテナターミナル', w: 12, h: 16, rotate: true, cost: 90000, upkeep: 900, seaport: true, portScale: 3, waterfront: true, pollution: 10, desc: '大きなガントリークレーンが並ぶコンテナ港。工業、とくに倉庫業の需要が大きく上がり、まわりに大きな倉庫が建つ。水域がマップの端まで続いている必要がある' },
   seaport: { id: 'seaport', name: '港', w: 4, h: 4, cost: 25000, upkeep: 300, seaport: true, waterfront: true, pollution: 6, desc: '工業、とくに倉庫業の需要が上がり、トラックが荷物を運べる。水域がマップの端まで続いている必要がある' },
   airport_s: { id: 'airport_s', name: '空港（小）', w: 11, h: 44, rotate: true, cost: 30000, upkeep: 350, airport: 1, pollution: 4, desc: '商業とオフィスの需要が上がる。周りは騒音で地価が下がる' },
   airport_l: { id: 'airport_l', name: '空港（大）', w: 17, h: 80, rotate: true, cost: 90000, upkeep: 900, airport: 2, pollution: 10, desc: '商業とオフィスの需要が大きく上がる。周りは騒音で地価が下がる' },

@@ -11,7 +11,7 @@ import { LOGI } from '../src/render/logiRegistry';
 function harbor(port: 'seaport_l' | 'freight_st' | null) {
   const w = new World(64);
   const V = 65;
-  for (let y = 0; y < V; y++) for (let x = 0; x < V; x++) w.g.heights[y * V + x] = x >= 59 ? -4 : 8;
+  for (let y = 0; y < V; y++) for (let x = 0; x < V; x++) w.g.heights[y * V + x] = x >= (port === 'seaport_l' ? 63 : 59) ? -4 : 8;
   w.sandbox = true;
   const ok = (c: Parameters<World['exec']>[0]) => {
     const r = w.exec(c);
@@ -23,7 +23,7 @@ function harbor(port: 'seaport_l' | 'freight_st' | null) {
   ok({ t: 'plop', id: 'coal', x: 4, y: 41 });
   ok({ t: 'plop', id: 'pump', x: 10, y: 40 });
   ok({ t: 'plop', id: 'pump', x: 13, y: 40 });
-  if (port === 'seaport_l') ok({ t: 'plop', id: 'seaport_l', x: 53, y: 20 });
+  if (port === 'seaport_l') ok({ t: 'plop', id: 'seaport_l', x: 55, y: 20 });
   if (port === 'freight_st') {
     // 西の端まで続く線路と、線路と道路に接する貨物駅
     ok({ t: 'transit', x0: 0, y0: 46, x1: 40, y1: 46, kind: 'rail' });
@@ -48,7 +48,7 @@ describe('warehousing (IL)', () => {
   it('grows next to a container terminal, with some big lots there', () => {
     const w = harbor('seaport_l');
     const port = [...w.buildings.values()].find((b) => b.type === 'seaport_l')!;
-    expect(port.w * port.h).toBe(96);
+    expect(port.w * port.h).toBe(192);
     const ind = grow(w, 240);
     const full = (b: { x: number; y: number; w: number; h: number }) => logiReach(port, b.x + b.w / 2, b.y + b.h / 2).full;
     const near = ind.filter(full);
