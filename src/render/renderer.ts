@@ -197,8 +197,10 @@ export class CityRenderer {
   }
 
   setDataView(v: DataView) {
+    const was = this.dataView !== 'none';
     this.dataView = v;
     this.dirty.overlay = true;
+    if (was !== (v !== 'none')) this.fadeBuildings();
     this.kick();
   }
 
@@ -217,17 +219,34 @@ export class CityRenderer {
       }
     };
     if (this.terrain) fade((this.terrain.mesh as THREE.Mesh).material, on ? 0.35 : 1);
-    this.buildings.group.traverse((o) => {
-      // 滝の水（もともと透けている）は、地下を見るときは隠す
-      if (o.userData.fx) { o.visible = !on; return; }
-      fade((o as THREE.Mesh).material, on ? 0.2 : 1);
-    });
-    fade(this.buildings.material, on ? 0.2 : 1);
+    this.fadeBuildings();
     this.roads.group.traverse((o) => fade((o as THREE.Mesh).material, on ? 0.35 : 1));
     // 道路の橋の構造物（橋脚・塔・ケーブルなど）も、路面と同じように薄くする
     fade(this.roadBridges.mesh.material, on ? 0.35 : 1);
     this.trees.group.visible = !on;
     this.kick();
+  }
+
+  // 建物を透かす：地下の画面では 2 割、データ表示では 3.5 割の濃さ。データ表示では影も落とさない（地図の色が見やすいように）
+  private fadeBuildings() {
+    const data = this.dataView !== 'none';
+    const op = this.underground ? 0.2 : data ? 0.35 : 1;
+    const fade = (m: THREE.Material | THREE.Material[] | undefined) => {
+      for (const mm of Array.isArray(m) ? m : m ? [m] : []) {
+        if (mm.opacity === op && mm.transparent === op < 1) continue;
+        mm.transparent = op < 1;
+        mm.opacity = op;
+        mm.depthWrite = op >= 1;
+        mm.needsUpdate = true;
+      }
+    };
+    this.buildings.group.traverse((o) => {
+      // 滝の水（もともと透けている）は、地下を見るときは隠す
+      if (o.userData.fx) { o.visible = !this.underground; return; }
+      fade((o as THREE.Mesh).material);
+      if ((o as THREE.Mesh).isMesh) o.castShadow = !data && !this.underground;
+    });
+    fade(this.buildings.material);
   }
 
   setShowGrid(on: boolean) {
@@ -282,6 +301,7 @@ export class CityRenderer {
       const sig = [...sc].sort((a, b) => a - b).join(',');
       if (sig !== this.lastStationSig) { this.lastStationSig = sig; const isl = findIslands(g, this.buildingList); this.rails.rebuild(g, sc, isl); this.cars.setIslands(isl); }
       if (this.buildings.update(g, this.buildingList, heights)) this.dirty.trees = true;
+      if (this.dataView !== 'none' || this.underground) this.fadeBuildings();
       updateAO(g, this.buildingList);
       this.lights.setBeacons(this.buildings.allBeacons());
       this.props.setFx(this.buildings.allFx());
