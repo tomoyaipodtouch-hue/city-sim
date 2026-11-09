@@ -148,6 +148,9 @@ export class Hud {
           this.selectTool(on ? g.tool : '', g.id);
         } else if (this.subGroup === g.id && !this.sub.classList.contains('hidden')) {
           this.closeSub();
+        } else if (this.tools.tool && this.group === g.id && this.sub.classList.contains('hidden')) {
+          // そのメニューのツールを使っているときに押したら、ツールをやめる
+          this.selectTool('');
         } else this.openSub(g.id);
       };
       this.toolbar.append(b);
