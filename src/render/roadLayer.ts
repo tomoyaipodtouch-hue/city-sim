@@ -251,6 +251,7 @@ interface RP {
   hw: number;
   sw: number;
   t: number;
+  fw?: number; // 地面に合わせる帯でも、この割合だけ h の高さ（平らな隣の帯との境目でそろえる）
 }
 
 interface Arm {
@@ -294,6 +295,7 @@ interface MP {
   h: number;
   al: number;
   free?: boolean; // 反対車線が見つからなかった（外側の縁で地面とのすき間を隠す）
+  fw?: number; // RP の fw と同じ
 }
 
 // 大通りの交差点（マスのかたまり）の腕。横の位置は、かたまりの中心からの p 向きの距離
@@ -440,7 +442,7 @@ export class RoadLayer {
     let lineKeep = false; // ほかの道路の路面の上でも消さない（斜めの大通りの交差点の横断歩道・停止線）
     // 横断歩道の範囲（中心 c から向き u に s1..s2、横は ±hw）。車線の線は、この中では引かない
     const zebra: { cx: number; cz: number; ux: number; uz: number; s1: number; s2: number; hw: number }[] = [];
-    const H = (x: number, z: number, fb: number) => (onGround ? g.groundAt(x, z) + ROAD_LIFT + liftCur : fb);
+    const H = (x: number, z: number, fb: number, fw = 0) => (onGround ? (fw > 0 ? lerp(g.groundAt(x, z) + ROAD_LIFT + liftCur, fb, fw) : g.groundAt(x, z) + ROAD_LIFT + liftCur) : fb);
     const trees: TreeSpot[] = [];
     junctionLamps.length = 0;
     junctionPools.length = 0;
@@ -501,6 +503,16 @@ export class RoadLayer {
       return a;
     };
     const jcl = this.jctl.length === NC ? this.jctl : null;
+    // 地上のマスでも、橋・高架・持ち上げた道路につながるマスは、地面に合わせずに平らに描く（下のマスごとの描き方と同じ判定）
+    const ngOf = (j: number, d: number) => {
+      const k = nb(j, d);
+      return k < 0 || (g.arriveLevel(0, k, d) === 0 && g.deck[k] === 0 && g.lift[k] <= 0.3);
+    };
+    const flatDrawn = (j: number) => {
+      if (j < 0 || j >= NC || !g.road[j] || !groundCell(j)) return false;
+      const ds = arms0(j).dirs;
+      return ds.length > 0 && ds.length < 3 && ds.some((d) => !ngOf(j, d));
+    };
 
     // 交差点のマス（地上、腕が3本以上）。1 = 大通り、3 = ほかの一般の道路。+1 = 斜めの腕もある（まとめずに、マスごとに描く）
     const jc = new Uint8Array(NC);
@@ -817,8 +829,7 @@ export class RoadLayer {
         const walk: Region[] = [];
         for (const sx of [0, 1]) {
           if (!armTo(Y, X, sx)) continue;
-          // 縁石の外（側 sx）で、両側の角の丸みの始まりの間
-          let a0 = -Infinity, a1 = Infinity;
+          // 縁石の外（側 sx）の歩道の幅の帯で、両側の角の丸みの始まりの間
           const bounds: number[] = [];
           for (const sy of [0, 1]) {
             const cn = corners.find((q) => (isA ? q.sx === sx && q.sy === sy : q.sy === sx && q.sx === sy));
@@ -826,17 +837,14 @@ export class RoadLayer {
               const T = isA ? cn.Ta : cn.Tb;
               bounds.push(T[0] * X.ux + T[1] * X.uz);
             } else {
-              // 角がない（X が Y のこの側へのびていない）：その向きはどこまでも
+              // 角がない（X が Y のこの側へのびていない）：Y の縁石の先まで（交差点のマスの中の X の歩道の切れ端を消す）
+              const K = meet(X.nx, X.nz, sx ? X.hi : X.lo, Y.nx, Y.nz, sy ? Y.hi : Y.lo);
               const toward = (X.ux * Y.nx + X.uz * Y.nz > 0) === (sy === 1) ? 1 : -1;
-              bounds.push(toward > 0 ? Infinity : -Infinity);
+              bounds.push(K[0] * X.ux + K[1] * X.uz + toward * 10);
             }
           }
-          a0 = Math.min(...bounds);
-          a1 = Math.max(...bounds);
-          const R: Region = sx ? [-X.nx, -X.nz, -X.hi] : [X.nx, X.nz, X.lo];
-          if (a0 > -Infinity) R.push(-X.ux, -X.uz, -a0);
-          if (a1 < Infinity) R.push(X.ux, X.uz, a1);
-          walk.push(R);
+          const wide = AV_SW + 1.5;
+          walk.push([...(sx ? strip(X.nx, X.nz, X.hi, X.hi + wide) : strip(X.nx, X.nz, X.lo - wide, X.lo)), ...strip(X.ux, X.uz, Math.min(...bounds), Math.max(...bounds))]);
         }
         return {
           surf: [box],
@@ -963,7 +971,7 @@ export class RoadLayer {
         const m = Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / step);
         for (let s2 = 1; s2 <= m; s2++) {
           const u = s2 / m;
-          out.push({ x: lerp(a.x, b.x, u), z: lerp(a.z, b.z, u), h: lerp(a.h, b.h, u), hw: lerp(a.hw, b.hw, u), sw: lerp(a.sw, b.sw, u), t: b.t });
+          out.push({ x: lerp(a.x, b.x, u), z: lerp(a.z, b.z, u), h: lerp(a.h, b.h, u), hw: lerp(a.hw, b.hw, u), sw: lerp(a.sw, b.sw, u), t: b.t, fw: lerp(a.fw ?? 0, b.fw ?? 0, u) });
         }
       }
       return out;
@@ -978,7 +986,7 @@ export class RoadLayer {
         const l = Math.hypot(b.x - a.x, b.z - a.z);
         for (const s of list) {
           const u = (s - acc) / (l || 1);
-          if (u > 0.01 && u < 0.99) out.push({ x: lerp(a.x, b.x, u), z: lerp(a.z, b.z, u), h: lerp(a.h, b.h, u), hw: lerp(a.hw, b.hw, u), sw: lerp(a.sw, b.sw, u), t: b.t });
+          if (u > 0.01 && u < 0.99) out.push({ x: lerp(a.x, b.x, u), z: lerp(a.z, b.z, u), h: lerp(a.h, b.h, u), hw: lerp(a.hw, b.hw, u), sw: lerp(a.sw, b.sw, u), t: b.t, fw: lerp(a.fw ?? 0, b.fw ?? 0, u) });
         }
         out.push(b);
         acc += l;
@@ -1078,8 +1086,8 @@ export class RoadLayer {
         // 植え込み：縁石（0.25m の石）と芝、縁石ぞいの低い植え込み
         const st = (q: MP) => Math.min(0.25, q.w);
         const I0 = at(a, 0), I1 = at(b, 0), T0 = at(a, st(a)), T1 = at(b, st(b)), O0 = at(a, a.w), O1 = at(b, b.w);
-        const hI0 = H(I0[0], I0[1], a.h), hI1 = H(I1[0], I1[1], b.h), hT0 = H(T0[0], T0[1], a.h), hT1 = H(T1[0], T1[1], b.h);
-        const hO0 = H(O0[0], O0[1], a.h), hO1 = H(O1[0], O1[1], b.h);
+        const hI0 = H(I0[0], I0[1], a.h, a.fw), hI1 = H(I1[0], I1[1], b.h, b.fw), hT0 = H(T0[0], T0[1], a.h, a.fw), hT1 = H(T1[0], T1[1], b.h, b.fw);
+        const hO0 = H(O0[0], O0[1], a.h, a.fw), hO1 = H(O1[0], O1[1], b.h, b.fw);
         const gr = onGround && (a.free || b.free), skirt = medSkirt;
         // 縁石ぞいの植え込み（幅が 2m 以上のところ）
         let hedge: number[][] | null = null;
@@ -1091,7 +1099,7 @@ export class RoadLayer {
             const hq = hh(q);
             return prof.map(([l, f]) => {
               const [x, z] = at(q, l);
-              return [x, H(x, z, q.h) + KERB + f * hq, z, l, f * hq];
+              return [x, H(x, z, q.h, q.fw) + KERB + f * hq, z, l, f * hq];
             });
           };
           hedge = [...sec(a, l1a), ...sec(b, l1b)];
@@ -1105,7 +1113,7 @@ export class RoadLayer {
             const x = lerp(a.x, b.x, u) + lerp(a.nx, b.nx, u) * 2.75, z = lerp(a.z, b.z, u) + lerp(a.nz, b.nz, u) * 2.75;
             const hs = (hashInt(Math.round(x), Math.round(z)) & 255) / 255;
             // 形は丸い広葉樹（ケヤキ）にそろえ、葉の色は夏の緑の中で少しだけ変える
-            tq.push({ x, y: H(x, z, lerp(a.h, b.h, u)) + KERB, z, s: 0.85 + hs * 0.2, kind: 0, shape: 0, col: ZELKOVA[(hs * ZELKOVA.length) | 0] });
+            tq.push({ x, y: H(x, z, lerp(a.h, b.h, u), lerp(a.fw ?? 0, b.fw ?? 0, u)) + KERB, z, s: 0.85 + hs * 0.2, kind: 0, shape: 0, col: ZELKOVA[(hs * ZELKOVA.length) | 0] });
           }
         }
         const nx = (a.nx + b.nx) / 2, nz = (a.nz + b.nz) / 2;
@@ -1229,9 +1237,9 @@ export class RoadLayer {
         const [px, pz] = nrm[k];
         const lx = p.x - px * p.hw, lz = p.z - pz * p.hw, rx = p.x + px * p.hw, rz = p.z + pz * p.hw;
         S.aux = [-p.hw * sgn, along[k], p.hw, code];
-        L.push(S.v(lx, H(lx, lz, p.h) - drop, lz, asph));
+        L.push(S.v(lx, H(lx, lz, p.h, p.fw) - drop, lz, asph));
         S.aux = [p.hw * sgn, along[k], p.hw, code];
-        R.push(S.v(rx, H(rx, rz, p.h) - drop, rz, asph));
+        R.push(S.v(rx, H(rx, rz, p.h, p.fw) - drop, rz, asph));
       });
       S.aux = AUX0;
       for (let k = 0; k + 1 < pts.length; k++) {
@@ -1252,7 +1260,7 @@ export class RoadLayer {
             const nx = side * nrm[k][0], nz = side * nrm[k][1];
             const diag = Math.abs(nrm[k][0]) > 0.3 && Math.abs(nrm[k][1]) > 0.3;
             const mw = medWAt(p.x, p.z, nx, nz, p.hw, diag, S.owner);
-            return { x: p.x + nx * p.hw, z: p.z + nz * p.hw, nx, nz, w: Math.abs(mw), h: p.h, al: along[k], free: mw < 0 };
+            return { x: p.x + nx * p.hw, z: p.z + nz * p.hw, nx, nz, w: Math.abs(mw), h: p.h, al: along[k], free: mw < 0, fw: p.fw };
           });
           if (zones.length) {
             // 帯の z.s0..z.s1 の分離帯は、別の形（安全地帯の舗装、橋と同じ低い壁など）
@@ -1276,7 +1284,7 @@ export class RoadLayer {
           const ix = p.x + side * px * p.hw, iz = p.z + side * pz * p.hw;
           const wv = barrier ? 0.55 : p.sw;
           const ox = ix + side * px * wv, oz = iz + side * pz * wv;
-          const hi = H(ix, iz, p.h), ho = H(ox, oz, p.h);
+          const hi = H(ix, iz, p.h, p.fw), ho = H(ox, oz, p.h, p.fw);
           if (barrier) {
             const a = O.v(ix, hi + up, iz, COL.barrier), b = O.v(ox, ho + up, oz, COL.barrier);
             if (k > 0 && prev) {
@@ -1335,12 +1343,12 @@ export class RoadLayer {
           const t0 = s / steps, t1 = (s + 1) / steps;
           const mid = acc + l * (t0 + t1) * 0.5;
           if (dash && mid % 9 > 3) continue;
-          const pa = { x: lerp(a.x, b.x, t0), z: lerp(a.z, b.z, t0), h: lerp(a.h, b.h, t0), o: lerp(off(a), off(b), t0), t: t0 };
-          const pb = { x: lerp(a.x, b.x, t1), z: lerp(a.z, b.z, t1), h: lerp(a.h, b.h, t1), o: lerp(off(a), off(b), t1), t: t1 };
-          const mv = (q: { x: number; z: number; h: number; o: number; t: number }, o: number) => {
+          const pa = { x: lerp(a.x, b.x, t0), z: lerp(a.z, b.z, t0), h: lerp(a.h, b.h, t0), o: lerp(off(a), off(b), t0), t: t0, fw: lerp(a.fw ?? 0, b.fw ?? 0, t0) };
+          const pb = { x: lerp(a.x, b.x, t1), z: lerp(a.z, b.z, t1), h: lerp(a.h, b.h, t1), o: lerp(off(a), off(b), t1), t: t1, fw: lerp(a.fw ?? 0, b.fw ?? 0, t1) };
+          const mv = (q: { x: number; z: number; h: number; o: number; t: number; fw: number }, o: number) => {
             const px = lerp(na[0], nb2[0], q.t), pz = lerp(na[1], nb2[1], q.t);
             const vx = q.x + px * o, vz = q.z + pz * o;
-            return [vx, H(vx, vz, q.h) + 0.02, vz];
+            return [vx, H(vx, vz, q.h, q.fw) + 0.02, vz];
           };
           lineQ.push({ p: [...mv(pa, pa.o - width / 2), ...mv(pa, pa.o + width / 2), ...mv(pb, pb.o + width / 2), ...mv(pb, pb.o - width / 2)], c, o: S.owner, o2: lineAlso, zb: lineZb, k: lineKeep });
         }
@@ -1534,7 +1542,7 @@ export class RoadLayer {
     // 交差点の中を照らす光：地面の坂に沈まないよう、光の板の範囲でいちばん高い路面の高さに置く
     const poolAt = (x: number, z: number, size: number, hOf: (x: number, z: number) => number) => {
       let hm = -Infinity;
-      for (const [a, b] of [[0, 0], [-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1], [0, 1], [-1, 0], [1, 0]]) hm = Math.max(hm, hOf(x + a * size * 0.3, z + b * size * 0.3));
+      for (const [a, b] of [[0, 0], [-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1], [0, 1], [-1, 0], [1, 0]]) hm = Math.max(hm, hOf(x + a * size * 0.45, z + b * size * 0.45));
       junctionPools.push(x, hm - ROAD_LIFT, z, size);
     };
 
@@ -1725,7 +1733,8 @@ export class RoadLayer {
         junctionLamps.push(qx, hAt(qx, qz) - ROAD_LIFT, qz, dx / dl, dz / dl, ph - ROAD_LIFT);
       }
       // 交差点の中（信号のある大通りの交差点は、まわりの道でいちばん明るい）。4つに分けて、それぞれの場所の路面の高さに置く
-      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) poolAt(cl.cx + (sx * cl.hx) / 2, cl.cz + (sz * cl.hz) / 2, Math.hypot(cl.hx, cl.hz) * 0.95, hAt);
+      // （4つの光が重なって、まん中も明るくなる大きさ）
+      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) poolAt(cl.cx + (sx * cl.hx) / 3, cl.cz + (sz * cl.hz) / 3, Math.hypot(cl.hx, cl.hz) * 1.25, hAt);
       onGround = false;
       liftCur = 0;
     };
@@ -1834,7 +1843,17 @@ export class RoadLayer {
       S.owner = c.a;
       discCode = surfCode(0, SURF.asphalt, true, hashInt(c.a, 77));
       ribbon(ptsA, AV, sides);
-      ribbon(arc, AV, q.la > 0 ? [false, true] : [true, false], undefined, 0, { endN: [nA, nB] });
+      ribbon(arc, AV, [false, false], undefined, 0, { endN: [nA, nB] });
+      // 外側の歩道：折り返しの半円と同じ中心の半円（両端でまっすぐな歩道につながる。先は少し細くして、マスの外へ出ないように）
+      {
+        const kerb: { x: number; z: number; nx: number; nz: number; w: number }[] = [];
+        for (let k = 0; k <= SEG * 2; k++) {
+          const th = (k / (SEG * 2)) * Math.PI, ns = Math.sin(th), nl = (q.la / q.e) * Math.cos(th);
+          const [x, z] = q.P(q.sC + (q.e + hw) * ns, (q.e + hw) * nl);
+          kerb.push({ x, z, nx: q.ux * ns + q.px * nl, nz: q.uz * ns + q.pz * nl, w: lerp(AV_SW, 3.0, ns) });
+        }
+        walkAlong(kerb, 0);
+      }
       // 分離帯の先：半円（縁石、縁の石、芝）
       {
         const r0 = Math.max(0.5, q.e - hw - 0.04), seg = 10;
@@ -2071,7 +2090,7 @@ export class RoadLayer {
       {
         const bq = quad(A, A.lo, A.hi, B, B.lo, B.hi);
         const size = Math.max(...bq.map(([x, z]) => Math.hypot(x - dc.cx, z - dc.cz))) * 1.1;
-        for (const [x, z] of bq) poolAt((x + dc.cx) / 2, (z + dc.cz) / 2, size, hAt);
+        for (const [x, z] of bq) poolAt(dc.cx + (x - dc.cx) / 3, dc.cz + (z - dc.cz) / 3, size, hAt);
       }
       onGround = false;
       liftCur = 0;
@@ -2388,6 +2407,25 @@ export class RoadLayer {
             pts.push({ x: p0 * ax + p1 * cx + p2 * bx, z: p0 * az + p1 * cz + p2 * bz, h: p0 * a.eh + p1 * ch + p2 * b.eh, hw: half / 2, sw: swv, t });
           }
         }
+        // 地面に合わせる帯が、平らに描く隣のマスにつながる端：最後の 3m で、隣と同じ平らな高さへ移る（境目にすき間や段ができないように）
+        if (onGround)
+          for (const [e, q] of [[0, a], [1, b]] as const) {
+            if (!q.ng || !flatDrawn(q.nn)) continue;
+            let acc = 0;
+            const order = e === 0 ? pts : [...pts].reverse();
+            let k2 = 1;
+            for (; k2 < order.length; k2++) {
+              const l = Math.hypot(order[k2].x - order[k2 - 1].x, order[k2].z - order[k2 - 1].z);
+              if (acc + l >= 3) {
+                const u = (3 - acc) / (l || 1), A0 = order[k2 - 1], B0 = order[k2];
+                order.splice(k2, 0, { x: lerp(A0.x, B0.x, u), z: lerp(A0.z, B0.z, u), h: lerp(A0.h, B0.h, u), hw: lerp(A0.hw, B0.hw, u), sw: lerp(A0.sw, B0.sw, u), t: B0.t, fw: 0 });
+                break;
+              }
+              acc += l;
+            }
+            order[0] = { ...order[0], fw: 1 };
+            pts = e === 0 ? order : order.reverse();
+          }
         // 大通り：進む向きから見て左側が中央分離帯（反対車線）
         let med = -1;
         if (isAv) {

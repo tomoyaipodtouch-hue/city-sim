@@ -74,6 +74,8 @@ export interface RoadPlan {
   sideJoins?: [number, number, number, number][];
   startKind?: string; // 大通りの端のつなぎ方（'avenue' 続き、'tee' T字、'road' 道路）。プレビューの説明用
   endKind?: string;
+  noop?: boolean; // 何も変わらない（すでに同じ大通りがある）。失敗ではないので、プレビューは灰色で見せて、指を離しても何もしない
+  note?: string; // プレビューに書き添える注意（引くのは止めない）
 }
 
 // 斜めの接続が、既存の逆向きの斜めの接続と交差するか
@@ -2081,7 +2083,31 @@ export function planAvenue(g: Grid, x0: number, y0: number, x1: number, y1: numb
   const unlinks: [number, number][] = [];
   if (se) unlinks.push([se.X, se.Y]);
   if (ee) unlinks.push([ee.X, ee.Y]);
+  // すでに同じ向きの大通りがある：何もしない（失敗ではなく、知らせるだけ）
+  // （最後のマスは次のマスがないので、大通りのマスであることだけを見る。端の折り返しの流れはあってもよい）
+  const same = (cs: number[], ds: number[]) => cs.every((c, k) => g.road[c] === RoadType.Avenue && !g.up[c] && (k >= ds.length || (g.flow[c] & (1 << ds[k])) !== 0));
+  if (!bad.size && same(fwd, fd) && same(bwd, bd)) {
+    const p0 = emptyPlan(type, 'すでに大通りです', [], centre);
+    p0.noop = true;
+    return p0;
+  }
   const plan = finishRoadPlan(g, { cells: fwd, dirs: fd }, lanes, type, bad, reasons, uturns, pairDeck, { centre, unlinks });
+  // 外側の隣のマスが、平行な別の大通りの車線：歩道どうしがくっつく（止めはしないが、知らせる）
+  if (plan.ok) {
+    const mine = new Set([...fwd, ...bwd]);
+    for (const [cs, ds] of [[fwd, fd], [bwd, bd]] as const) {
+      const other = cs === fwd ? new Set(bwd) : new Set(fwd);
+      for (let k = 0; k < cs.length && !plan.note; k++) {
+        const d = ds[Math.min(k, ds.length - 1)];
+        if (d < 0 || isDiag(d)) continue;
+        for (const sd of [(d + 2) & 7, (d + 6) & 7]) {
+          const twin = nb(g, cs[k], opp(sd)), out = nb(g, cs[k], sd);
+          if (twin < 0 || out < 0 || !other.has(twin) || mine.has(out)) continue;
+          if (g.road[out] === RoadType.Avenue && (g.flow[out] & ((1 << d) | (1 << opp(d)))) !== 0) plan.note = 'となりの大通りと歩道が重なります';
+        }
+      }
+    }
+  }
   plan.bridgeCells = Math.ceil(plan.bridgeCells / 2); // 橋の長さ（2本の車線で1枚）
   plan.startKind = sn.start?.kind;
   plan.endKind = sn.end?.kind;

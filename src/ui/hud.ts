@@ -344,9 +344,11 @@ export class Hud {
     if (info) {
       this.cost.textContent = over ? 'キャンセル' : info.text;
       this.cost.classList.toggle('bad', info.bad || over);
+      this.cost.classList.toggle('calm', !!info.info && !over);
     } else if (over) {
       this.cost.textContent = 'キャンセル';
       this.cost.classList.add('bad');
+      this.cost.classList.remove('calm');
     }
     this.cost.style.left = `${x}px`;
     // 画面の上の端では、指の下に出す（隠れないように）

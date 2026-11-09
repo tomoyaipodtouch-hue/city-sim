@@ -38,6 +38,7 @@ import { RoadType } from '../src/sim/defs';
 import { Ctl } from '../src/sim/grid';
 import { DX, DY, dirOf, opp } from '../src/sim/constants';
 import { buildJunctions } from '../src/sim/traffic';
+import { planRoadCmd } from '../src/sim/plan';
 
 type P = [number, number];
 type Line = [number, number, number, number]; // 格子点 (x0, y0) → (x1, y1)
@@ -897,6 +898,65 @@ describe('avenue: bridges are one deck for both directions', () => {
     for (let i = 0; i < g.road.length; i++) if (g.road[i] === AV && g.deck[i] > 0 && bit(g.flow[i], W)) g.deck[i] += 0.6;
     const w2 = World.load(w.serialize());
     clean(w2, bridgeIssues(w2, l), [6, 21, 42, 26]);
+  });
+});
+
+// =====================================================================
+describe('avenue: diagonal overpass over a ground highway', () => {
+  spec('the two lanes of a diagonal overpass ramp rise together (same height at the same place along the avenue)', () => {
+    const w = flat(64);
+    // 地面に坂をつける（取り付け部分の高さが、マスの地面の高さにも左右されるように）
+    const g = w.g;
+    for (let vy = 0; vy <= g.n; vy++) for (let vx = 0; vx <= g.n; vx++) g.setVh(vx, vy, 6 + vx * 0.15 + vy * 0.05);
+    draw(w, [32, 2, 32, 62], RoadType.UrbanGroundHighway);
+    draw(w, [16, 16, 48, 48]);
+    // 斜めの車線のマスの、道に沿った位置（x + y）ごとの路面の高さ。2本の車線は x + y の偶奇が違う
+    const h = new Map<number, number>();
+    for (let i = 0; i < g.road.length; i++) {
+      if (g.road[i] !== AV || g.up[i]) continue;
+      const x = i % g.n, y = (i / g.n) | 0;
+      if (Math.abs(x - y) > 2 || g.lift[i] <= 0.3) continue;
+      h.set(x + y, g.roadH(i));
+    }
+    let decks = 0;
+    for (let i = 0; i < g.road.length; i++) if (g.up[i] === AV) decks++;
+    // 坂の途中（前後 2 マスも持ち上がった取り付け部分のところ）で、片方の車線の高さが、もう片方の車線の前後の平均とそろう
+    const issues: string[] = [];
+    let checked = 0;
+    for (const [u, hu] of h) {
+      const a = h.get(u - 1), b = h.get(u + 1);
+      if (a === undefined || b === undefined || !h.has(u - 2) || !h.has(u + 2)) continue;
+      checked++;
+      if (Math.abs(hu - (a + b) / 2) > 0.2) issues.push(`x+y=${u}: ${hu.toFixed(2)} vs other lane ${((a + b) / 2).toFixed(2)}`);
+    }
+    expect(decks).toBe(2);
+    expect(checked).toBeGreaterThan(1);
+    clean(w, issues, [14, 14, 50, 50]);
+  });
+});
+
+describe('avenue: drawing feedback', () => {
+  spec('dragging along an existing avenue (either way) changes nothing and says so', () => {
+    for (const l of [[8, 24, 40, 24], [40, 24, 8, 24]] as Line[]) {
+      const w = flat();
+      draw(w, [8, 24, 40, 24]);
+      const before = Array.from(w.g.flow);
+      const plan = planRoadCmd(w.g, AV, ...l);
+      expect(plan.noop).toBe(true);
+      expect(plan.reason).toBe('すでに大通りです');
+      const r = w.exec({ t: 'road', x0: l[0], y0: l[1], x1: l[2], y1: l[3], road: AV });
+      expect(r.ok).toBe(false);
+      expect(Array.from(w.g.flow)).toEqual(before);
+    }
+  });
+
+  spec('an avenue drawn right beside another one is allowed, with a note about the touching sidewalks', () => {
+    const w = flat();
+    draw(w, [8, 20, 40, 20]);
+    const plan = planRoadCmd(w.g, AV, 8, 22, 40, 22);
+    expect(plan.ok).toBe(true);
+    expect(plan.note).toBe('となりの大通りと歩道が重なります');
+    expect(planRoadCmd(w.g, AV, 8, 30, 40, 30).note).toBeUndefined();
   });
 });
 

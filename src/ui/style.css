@@ -145,6 +145,7 @@ button:disabled { opacity: 0.38; cursor: default; }
   white-space: nowrap; transform: translate(-50%, -150%); font-variant-numeric: tabular-nums;
 }
 .cost.bad { color: #ffb4ae; }
+.cost.calm { color: #b9bec5; }
 .cancel {
   position: absolute; top: calc(var(--st) + 8px); left: 50%; transform: translateX(-50%); width: 220px; height: 46px; border-radius: 23px;
   background: rgba(30, 30, 34, 0.85); border: 2px dashed rgba(255,255,255,0.35); display: flex; align-items: center; justify-content: center;

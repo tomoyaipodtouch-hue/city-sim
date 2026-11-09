@@ -156,6 +156,7 @@ export interface DragState {
   fy1: number;
   line: [number, number, number, number] | null; // 線を引くツールの始点・終点（向きをそろえたあと。大通りは格子点）
   key: string; // 前回のプレビューと同じなら作り直さない
+  noop?: boolean; // 引いても何も変わらない（すでに同じ大通りがある）
 }
 
 // 8方向（東から時計回り）
@@ -185,6 +186,7 @@ function snap8(sx: number, sy: number, fx: number, fy: number, hard: boolean): [
 export interface PreviewInfo {
   text: string;
   bad: boolean;
+  info?: boolean; // 失敗ではない知らせ（灰色で見せる）
 }
 
 const ZONE_HEX = [0, 0x49c25a, 0x4a8ff0, 0xe9b52a, 0xb9a24e];
@@ -277,7 +279,7 @@ export class ToolController {
       pv.setArrows(g, arrows, plan.ok ? 0x1f6fe0 : 0xffffff);
       if (type === RoadType.Avenue) {
         // 中心線（中央分離帯）を緑の線で見せる
-        pv.setLineColor(plan.ok ? 0x2fa24a : 0xe5534b);
+        pv.setLineColor(plan.ok ? 0x2fa24a : plan.noop ? 0xb9bec5 : 0xe5534b);
         pv.setGridLine(g, plan.centre ?? [[lx0, ly0], [lx1, ly1]]);
         if (lx0 === lx1 && ly0 === ly1) return { text: 'ドラッグして大通りを引く（指の線が中央分離帯）', bad: false };
       } else {
@@ -289,6 +291,9 @@ export class ToolController {
       const kinds = [plan.startKind, plan.endKind];
       const join = kinds.includes('tee') ? 'T字でつなぎます' : kinds.includes('avenue') ? '続けてつなぎます' : kinds.includes('road') ? '道路につなぎます' : sideJ.length ? '横の道路もつなぎます' : '';
       if (join) extra += `（${join}）`;
+      if (plan.note) extra += `（${plan.note}）`;
+      d.noop = !!plan.noop;
+      if (plan.noop) return { text: plan.reason, bad: false, info: true };
       return plan.ok ? { text: `${yen(plan.cost)}${extra}`, bad: false } : { text: plan.reason || '引けません', bad: true };
     }
     if (t.startsWith('line:') && d.line) {
@@ -402,7 +407,8 @@ export class ToolController {
     let cmd: Command | null = null;
     const ln = d.line ?? this.lineEnds(d);
     if (t.startsWith('road:')) {
-      if (ln[0] === ln[2] && ln[1] === ln[3]) return;
+      // すでに同じ大通りがある（プレビューで灰色の知らせ）ときは、何もしない
+      if ((ln[0] === ln[2] && ln[1] === ln[3]) || d.noop) return;
       cmd = { t: 'road', x0: ln[0], y0: ln[1], x1: ln[2], y1: ln[3], road: Number(t.split(':')[1]) as RoadType };
     } else if (t === 'pline') cmd = { t: 'pline', x0: ln[0], y0: ln[1], x1: ln[2], y1: ln[3] };
     else if (t.startsWith('line:')) {
