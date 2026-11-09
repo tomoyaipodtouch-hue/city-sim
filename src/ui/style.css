@@ -31,10 +31,10 @@ html, body {
   font-size: var(--fs-m); user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; overscroll-behavior: none;
 }
 #app { position: fixed; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; transform-origin: 0 0; }
-/* ホーム画面から開いたとき（iPhone、上の帯を透かす設定）、画面の高さが上の帯の分だけ短く伝えられ、
-   いちばん下に同じ高さの空きができる。ページと #app をその分だけ高くして、画面の下まで広げる */
+/* ホーム画面から開いたとき（iPhone、上の帯を透かす設定）、高さ 100% は上の帯の分だけ短く、
+   いちばん下に空きができる。100vh は画面の下まで届くので、そちらを使う */
 @media (display-mode: standalone), (display-mode: fullscreen) {
-  html, body, #app { height: calc(100vh + env(safe-area-inset-top, 0px)); }
+  html, body, #app { height: 100vh; }
 }
 #view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
 #ui { position: absolute; inset: 0; pointer-events: none; }
