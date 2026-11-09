@@ -4246,10 +4246,12 @@ function ctText(mb: MeshBuilder, s: string, x: number, z: number, h: number, y: 
   }
 }
 // コンテナの色：船会社の色に、日焼けと汚れのむら
-const CT_LINES = [0xb5332a, 0x2a5f93, 0x1e7c8c, 0xd08a1e, 0x3f6e3a, 0x7c8288, 0x6b2f2a, 0xe0ddd5, 0x1d3f6e, 0x8a4a9a, 0xc96a24, 0x2f8f6a];
+const CT_LINES = [0xa8352c, 0x2a5f93, 0x1e6f7c, 0xc98a2a, 0x3f6440, 0x7c8288, 0x6b3a2e, 0xd8d6cf, 0x1d3a5e, 0x5d6670, 0xb8662a, 0x3d6b5a, 0x8f969c, 0x2a5f93];
 function ctCol(rng: Rng, hex: number) {
   const c = new THREE.Color(hex), k = rng.next();
-  c.lerp(new THREE.Color(0x8a8378), k * k * 0.35);
+  const l = 0.3 * c.r + 0.59 * c.g + 0.11 * c.b;
+  c.lerp(new THREE.Color(l, l, l), 0.18); // 少し色あせ
+  c.lerp(new THREE.Color(0x8a8378), k * k * 0.4);
   return c.multiplyScalar(0.86 + rng.next() * 0.16);
 }
 // コンテナ 1 個（波板の金属の模様）
