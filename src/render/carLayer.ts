@@ -281,9 +281,9 @@ export class CarLayer {
     // トラック：箱型、箱型のトレーラー、タンクのトレーラー
     // （後ろの車軸は形の車輪の真ん中：箱 z = -11.6/-12.8、タンク -11.2/-12.4。尾灯は箱 z = -14.1・高さ 1.05、タンク -13.5・1.32）
     this.trucks = [
-      new Fleet(boxTruck(), 160, CAB_COLORS, 'road', 4.4, 0.45),
-      new Fleet(tractor(), 140, CAB_COLORS, 'road', 3.1, 0.4).withTrailer(trailerBox(), [0xf0f1f0, 0xe2e4e6, 0xcfd3d7, 0xa8432f, 0x2d5f9a], TRAILER_AXLE, [14.1, 1.05]),
-      new Fleet(tractor(), 60, CAB_COLORS, 'road', 3.1, 0.15).withTrailer(trailerTank(), [0xd8dce0, 0xc8ccd0, 0xe8eaec], 11.8, [13.5, 1.32]),
+      new Fleet(boxTruck(), 260, CAB_COLORS, 'road', 4.4, 0.8),
+      new Fleet(tractor(), 70, CAB_COLORS, 'road', 3.1, 0.14).withTrailer(trailerBox(), [0xf0f1f0, 0xe2e4e6, 0xcfd3d7, 0xa8432f, 0x2d5f9a], TRAILER_AXLE, [14.1, 1.05]),
+      new Fleet(tractor(), 30, CAB_COLORS, 'road', 3.1, 0.06).withTrailer(trailerTank(), [0xd8dce0, 0xc8ccd0, 0xe8eaec], 11.8, [13.5, 1.32]),
     ];
     this.packers = new Fleet(garbageTruck(), 60, [0x2e7d4f, 0x2e6da4, 0x3f7f3f, 0x5b6067], 'road', 3.7);
     this.bus = new Fleet(cityBus(), 200, [0x1f7a4a, 0x1f5fa8, 0xc8702a, 0xa3262e, 0x2f3a4a], 'bus', 6.0);
@@ -733,6 +733,28 @@ export class CarLayer {
     return (-DY[c.d] * px + DX[c.d] * pz) / l > 0.5;
   }
 
+  // 港・貨物駅・倉庫業の敷地（トレーラーが出てくる場所）
+  private logi: { x: number; y: number; w: number; h: number }[] = [];
+  setLogistics(list: Building[]) {
+    this.logi = [];
+    for (const b of list) {
+      const d = b.civic ? CIVIC[b.type as CivicId] : undefined;
+      if (b.civic ? d && (d.seaport || d.freightRail) : b.type === 'IL') this.logi.push({ x: b.x, y: b.y, w: b.w, h: b.h });
+    }
+  }
+
+  // トレーラーの出てくる重み：物流の敷地から 4 マス以内はそのまま、ほかは 1/5
+  private trailerVol(g: Grid, freight: Float32Array) {
+    const n = g.n, N = n * n, R = 4;
+    const near = new Uint8Array(N);
+    for (const r of this.logi)
+      for (let y = Math.max(0, r.y - R); y < Math.min(n, r.y + r.h + R); y++)
+        for (let x = Math.max(0, r.x - R); x < Math.min(n, r.x + r.w + R); x++) near[y * n + x] = 1;
+    const tv = new Float32Array(freight.length);
+    for (let v = 0; v < freight.length; v++) tv[v] = near[v % N] ? freight[v] : freight[v] * 0.2;
+    return tv;
+  }
+
   setData(g: Grid, traffic: Float32Array, cong: Float32Array, freight: Float32Array, riders?: Float32Array, garbage?: Uint8Array, garbageLeft?: Uint8Array) {
     this.grid = g;
     this.scanAvenues(g);
@@ -745,9 +767,11 @@ export class CarLayer {
     const N = g.n * g.n;
     const walkable = (v: number) => v < N && g.road[v] !== 0 && !isHighway(g.road[v]) && g.road[v] !== RoadType.Ramp;
     const exists = (f: Fleet, v: number) => (f.track === 'road' ? g.nodeType(v) !== 0 : f.track === 'bus' ? v < N && g.road[v] !== 0 : f.track === 'walk' ? walkable(v) : g[f.track][v] !== 0);
-    const build = (f: Fleet, vol: Float32Array, scale: number) => {
+    // count：台数を決める交通量（なければ vol と同じ）。vol は出てくる場所の重み
+    const build = (f: Fleet, vol: Float32Array, scale: number, count?: Float32Array) => {
       const nodes: number[] = [], w: number[] = [];
-      let total = 0;
+      let total = 0, ctotal = 0;
+      if (count) for (let v = 0; v < count.length; v++) if (count[v] >= 1 && exists(f, v)) ctotal += count[v];
       const len = f.track === 'road' ? 2 * N : N;
       for (let v = 0; v < len; v++) {
         if (vol[v] < 1 || !exists(f, v)) continue;
@@ -758,13 +782,18 @@ export class CarLayer {
       f.nodes = Int32Array.from(nodes);
       f.cdf = Float32Array.from(w);
       f.vol = vol;
-      f.target = Math.min(f.max, Math.round(total * scale * f.share));
+      f.target = Math.min(f.max, Math.round((count ? ctotal : total) * scale * f.share));
       // 道路や線路がなくなった車両は消す
       f.cars = f.cars.filter((c) => exists(f, c.from) && exists(f, c.to));
     };
-    for (const f of this.cars) build(f, traffic, 0.012);
-    // トラックは交通量に重み 2.5 で入っているので、台数は少なめ
-    for (const f of this.trucks) build(f, freight, 0.003);
+    // 乗用車：トラックの分（交通量に重み 2.5 で入っている）を除いた交通量から
+    const carVol = new Float32Array(traffic.length);
+    for (let v = 0; v < traffic.length; v++) carVol[v] = Math.max(0, traffic[v] - freight[v]);
+    for (const f of this.cars) build(f, carVol, 0.012);
+    // トラック：箱型が多く、トレーラーは港・貨物駅・倉庫業のまわりから出てくる
+    build(this.trucks[0], freight, 0.003);
+    const tv = this.trailerVol(g, freight);
+    for (let k = 1; k < this.trucks.length; k++) build(this.trucks[k], tv, 0.003, freight);
     // ゴミ収集車：ゴミの多い場所の一般の道路を回る。処理施設があって、処理できている分だけ走る
     if (garbage && garbageLeft) {
       const n = g.n;

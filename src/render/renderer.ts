@@ -177,6 +177,7 @@ export class CityRenderer {
 
   setBuildings(list: Building[]) {
     this.buildingList = list;
+    this.cars.setLogistics(list);
     this.dirty.buildings = true;
     this.kick();
   }
