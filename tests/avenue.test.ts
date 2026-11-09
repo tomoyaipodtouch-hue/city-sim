@@ -26,6 +26,9 @@
 // ・L字：2回目の始点が、1本目の端の格子点から1マス以内なら、その格子点から曲がる。角は交差点にしない。
 // ・T字：突き当てる線の端が、相手の大通りの上か、2マス手前までなら、相手の中心線まで延ばして（縮めて）つなぐ。
 //   相手の向こう側に飛び出さない。相手の2本の車線は、交差点を通り抜けて続く。
+// ・あとから横切る大通り：行き止まりの大通りの端が、新しい大通りの外側の横に直角に向いていれば、先に突き当てたT字と同じにつなぐ。
+// ・引き直し：すでにある大通りをなぞっても、足りない折り返しやつなぎ目（途中を取り壊したあとなど）があれば、つなぎ直す。
+//   何も足りなければ何も変えずに「すでに大通りです」と知らせる。
 // ・道路の端から引く・道路の端で止める：道路と大通りの両方の車線がつながる。道路そのものは変えない。
 // ・道路の上をなぞる：その道路が大通りの車線の1本になる（3本目の車線を作らない）。交わる道もそのままつながる。
 // ・交差点（T字、十字）では、どの腕から入っても、ほかのどの腕へも、交差点のまわり（±7マス）だけで行ける
@@ -622,6 +625,44 @@ describe('avenue: T junctions into an avenue', () => {
     });
 });
 
+// 行き止まりの大通りを先に引いておき、その端の横に、あとから横切る大通りを引く
+describe('avenue: T junctions drawn stem first', () => {
+  const cases: [string, Line, Line, Line, P, number][] = [
+    // [どこから, 先に引く行き止まりの大通り, あとから横切る大通り, 突き当てて引いた場合の線, 交差点の中心, 行き止まりの腕]
+    ['stem from the west', [8, 24, 30, 24], [31, 6, 31, 44], [8, 24, 31, 24], [31, 24], W],
+    ['stem from the east', [44, 24, 32, 24], [31, 44, 31, 6], [44, 24, 31, 24], [31, 24], E],
+    ['stem from the north', [24, 6, 24, 22], [44, 23, 4, 23], [24, 6, 24, 23], [24, 23], N],
+    ['stem from the south', [24, 40, 24, 24], [4, 23, 44, 23], [24, 40, 24, 23], [24, 23], S],
+  ];
+  for (const [what, stem, cross, tee, c, arm] of cases)
+    spec(`an avenue drawn past the dead end of another avenue joins it as a T (${what})`, () => {
+      const w = flat();
+      draw(w, stem);
+      const plan = planRoadCmd(w.g, AV, ...cross);
+      expect(plan.ok).toBe(true);
+      expect(plan.note).toBeUndefined();
+      expect(plan.stemJoins?.length).toBe(1);
+      draw(w, cross);
+      const thru = cross[0] === cross[2] ? [N, S] : [E, W];
+      clean(w, [...connected(w), ...moves(w, c, [...thru, arm]), ...junctions(w, around(c, 3)), ...twoWay(w)], [c[0] - 10, c[1] - 10, c[0] + 10, c[1] + 10]);
+      // 先に突き当てたT字と同じつながり
+      const v = flat();
+      draw(v, cross);
+      draw(v, tee);
+      expect(Array.from(w.g.flow)).toEqual(Array.from(v.g.flow));
+      // 引き直しても何も変わらない
+      expect(planRoadCmd(w.g, AV, ...cross).noop).toBe(true);
+    });
+
+  spec('a crossing that leaves a one-cell stub of the old dead end has no sidewalk note', () => {
+    const w = flat();
+    draw(w, [8, 24, 30, 24]);
+    const plan = planRoadCmd(w.g, AV, 28, 6, 28, 44);
+    expect(plan.ok).toBe(true);
+    expect(plan.note).toBeUndefined();
+  });
+});
+
 // =====================================================================
 describe('avenue: crossings', () => {
   const main: Line = [4, 24, 44, 24];
@@ -948,6 +989,55 @@ describe('avenue: drawing feedback', () => {
       expect(r.ok).toBe(false);
       expect(Array.from(w.g.flow)).toEqual(before);
     }
+  });
+
+  spec('dragging along an existing avenue that crosses over a highway changes nothing and says so', () => {
+    const w = flat(64);
+    draw(w, [32, 2, 32, 62], RoadType.UrbanGroundHighway);
+    draw(w, [8, 24, 56, 24]);
+    const plan = planRoadCmd(w.g, AV, 8, 24, 56, 24);
+    expect(plan.noop).toBe(true);
+    expect(w.exec({ t: 'road', x0: 8, y0: 24, x1: 56, y1: 24, road: AV }).ok).toBe(false);
+  });
+
+  spec('redrawing an avenue after a cut in the middle puts the turnaround back at the cut (either way, or only part of it)', () => {
+    for (const l of [[8, 24, 20, 24], [20, 24, 8, 24], [14, 24, 20, 24]] as Line[]) {
+      const w = flat();
+      draw(w, [8, 24, 40, 24]);
+      expect(w.exec({ t: 'bulldoze', x0: 20, y0: 23, x1: 23, y1: 24 }).ok).toBe(true);
+      const plan = planRoadCmd(w.g, AV, ...l);
+      expect(plan.noop).toBeFalsy();
+      draw(w, l);
+      draw(w, [40, 24, 24, 24]);
+      // 切れた両側が、それぞれの中でどこへでも行ける
+      const issues: string[] = [];
+      for (const [x0, x1] of [[8, 19], [24, 39]]) {
+        const keep = (x: number) => x >= x0 && x <= x1;
+        const all = [x0, x1].flatMap((x) => [w.g.idx(x, 23), w.g.idx(x, 24)]);
+        const f = reach(w, all[0], keep), b = reach(w, all[0], keep, true);
+        for (let x = x0; x <= x1; x++)
+          for (const y of [23, 24]) {
+            const q = w.g.idx(x, y);
+            if (!f.has(q) || !b.has(q)) issues.push(`${l.join(',')}: ${at(w, q)} is cut off`);
+          }
+      }
+      clean(w, issues, [6, 21, 42, 26]);
+    }
+  });
+
+  spec('redrawing an avenue joins an old road stub that touches it without a link', () => {
+    const w = flat();
+    draw(w, [8, 24, 40, 24]);
+    draw(w, [20, 14, 20, 22], RD);
+    // 古い保存データ：道路の行き止まりが大通りの車線のマスに触れているが、つながっていない
+    const g = w.g, s = g.idx(20, 22), c = g.idx(20, 23);
+    g.conn[s] &= ~(1 << S);
+    g.flow[s] &= ~(1 << S);
+    g.conn[c] &= ~(1 << N);
+    g.flow[c] &= ~(1 << N);
+    expect(planRoadCmd(g, AV, 8, 24, 40, 24).noop).toBeFalsy();
+    draw(w, [8, 24, 40, 24]);
+    clean(w, [...connected(w), ...moves(w, [20, 24], [E, W, N])], [14, 12, 26, 26]);
   });
 
   spec('an avenue drawn right beside another one is allowed, with a note about the touching sidewalks', () => {
