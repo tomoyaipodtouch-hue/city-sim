@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { Grid } from '../sim/grid';
 import { CELL, DX, DY, WATER_LEVEL, isDiag, opp } from '../sim/constants';
 import { ROADS, RoadType, isHighway } from '../sim/defs';
-import { ROAD_LIFT, type Buf } from './roadLayer';
+import { AV_SW, AV_SW_BRIDGE, AV_W, ROAD_LIFT, type Buf } from './roadLayer';
 import { createInfraMaterial, matColor, PbrBuf, RM } from './infraMaterial';
 
 export const BRIDGE_STYLES = ['桁橋', '吊り橋', '斜張橋', 'トラス橋', 'アーチ橋', 'ラーメン橋'] as const;
@@ -58,7 +58,7 @@ export interface BridgeFrame {
 // 床版の、車線の中心から外側の縁までの長さ（roadLayer の床版と同じ寸法）
 // 大通り：車道 7m の半分と、橋の上の歩道 4m（立体交差は地上と同じ 4.5m）。高速道路：車道の半分と壁の 0.6m
 function deckEdge(t: number, diag: boolean, level: number) {
-  if (t === RoadType.Avenue) return 3.5 + (level ? 4.5 : 4.0);
+  if (t === RoadType.Avenue) return AV_W / 2 + (level ? AV_SW : AV_SW_BRIDGE);
   const def = ROADS[t];
   let w = def?.width ?? 10;
   if (def?.wide && diag) w = Math.min(w, 10.7);

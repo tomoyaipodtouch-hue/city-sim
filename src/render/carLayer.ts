@@ -28,8 +28,9 @@ const FIX_LEN = 16; // 向きを変えたときの横のずれを、この道の
 const A_LAT = 16; // 道路の曲がり角で、横にかかる加速度の上限（m/s²）。ゲームとして気持ちよく曲がれる速さにする
 // 大通り（片側2車線、3.25m の車線）の車線の中心：車線の境（マスの中心）からの横の位置
 const AV_LANE = 1.6;
-// 大通りの外側の歩道（幅 4.5m）で人が歩く位置：車道の縁から 1.6〜3.2m（縁石ぞいの街路樹と街灯の列の外）
-const AV_WALK = 1.6, AV_WALK_SPREAD = 1.6;
+// 大通りの外側の歩道（幅 4.5m、橋は 4.0m）で人が歩く位置：車道の縁から 2.0〜3.5m
+// （縁石ぞいの街路樹・街灯・バス停の待合所の列の外。交差点では幅 4m の横断歩道のまん中あたり）
+const AV_WALK = 2.0, AV_WALK_SPREAD = 1.5;
 const BUS_DWELL = 4.5; // バス停に止まる秒数（後ろの車が待ちくたびれて重ならない長さ）
 
 // 車は「今いるマス（from）」の中を、入ってきた辺の中点から出ていく辺の中点まで、
@@ -376,11 +377,35 @@ export class CarLayer {
       this.avJct = new Uint8Array(N);
     }
     const med = this.avMed.fill(-1), jct = this.avJct.fill(0);
+    const list: number[] = [];
     for (let i = 0; i < N; i++) {
       if (g.road[i] !== RoadType.Avenue) continue;
-      if (CarLayer.arms(g.conn[i]) >= 3) jct[i] = 1;
-      else med[i] = avenueMedianDir(g, i);
+      if (CarLayer.arms(g.conn[i]) >= 3) {
+        jct[i] = 1;
+        list.push(i);
+      } else med[i] = avenueMedianDir(g, i);
     }
+    // 大通りの交差点のまとまりに入る、一般の道路の交差点のマスにも印をつける（まとまりの外側を歩くように）
+    for (let k = 0; k < list.length; k++) {
+      const i = list[k], x = i % g.n, y = (i / g.n) | 0;
+      for (const d of [0, 2, 4, 6]) {
+        if (!(g.conn[i] & (1 << d)) || !g.inb(x + DX[d], y + DY[d])) continue;
+        const j = i + DY[d] * g.n + DX[d], t = g.road[j];
+        if (jct[j] || !t || isHighway(t) || t === RoadType.Ramp || CarLayer.arms(g.conn[j]) < 3) continue;
+        jct[j] = 1;
+        list.push(j);
+      }
+    }
+  }
+
+  // 大通りの交差点のマスで、向き d に進むときに歩く側：まとまりの外側（右 = 1、左 = -1、両側とも外か内なら 0）
+  private jctSide(node: number, d: number) {
+    const g = this.grid!;
+    if (node >= this.avJct.length || !this.avJct[node] || d & 1) return 0;
+    const x = node % g.n, y = (node / g.n) | 0;
+    const inside = (s: number) => !!(g.conn[node] & (1 << s)) && g.inb(x + DX[s], y + DY[s]) && this.avJct[node + DY[s] * g.n + DX[s]] === 1;
+    const r = inside((d + 2) & 7), l = inside((d + 6) & 7);
+    return r === l ? 0 : r ? -1 : 1;
   }
 
   // 歩く人が node のマスで歩く側（進む向きの右 = 1、左 = -1、決まりがない = 0）。
@@ -429,7 +454,10 @@ export class CarLayer {
       plan.push(this.pickNext(f, last[0], last[1]));
     }
     if (!(c.from < N && this.avJct[c.from])) c.rt = g.road[c.from];
-    const here = this.walkSide(c.from, c.din, c.d);
+    // 歩く側は出ていく向き c.d から見た側（向きを変えるマスでも、出口の位置を正しく決める）
+    const here = this.walkSide(c.from, c.d, c.din);
+    // 大通りの交差点のマスの中は、まとまりの外側（外側の横断歩道）を歩く。次が交差点のマスなら、その外側から入る
+    const jHere = this.jctSide(c.from, c.d), jNext = this.jctSide(c.to, c.d);
     const ahead = this.walkSide(c.to, c.d, plan[0] ? plan[0][1] : -1);
     let need = ahead;
     // 次が交差点のマスなら、その先（2つ先まで）を見る
@@ -440,18 +468,19 @@ export class CarLayer {
       q = nq;
     }
     // 出てきたときは、はじめから歩く側にいる
-    if (spawn || c.wb === undefined) c.wa = (here || need || (c.lane ? 1 : -1)) * this.walkMag(c.from, c);
+    if (spawn || c.wb === undefined) c.wa = (this.walkSide(c.from, c.din, c.d) || this.jctSide(c.from, c.din) || need || (c.lane ? 1 : -1)) * this.walkMag(c.from, c);
     else c.wa = c.wb;
     const cur = Math.sign(c.wa) || 1;
-    const side = here || (need && need !== cur && (ahead || c.din !== c.d) ? need : cur);
+    const side = here || jHere || jNext || (need && need !== cur && (ahead || c.din !== c.d) ? need : cur);
     c.lane = side > 0 ? 1 : 0;
     c.wb = side * this.walkMag(c.to < N ? c.to : c.from, c);
     this.walkPath(c);
   }
   // 歩く人のこのマスの道すじ：入口 S（入る向きの線の上）から、出る向きの線と交わる角 K を丸めて通り、出口 E へ（歩道に沿って角で曲がる）。
-  // まっすぐ進むとき・道路の反対側へ渡るとき・角がうまく決まらないときは、S から E へまっすぐ
+  // まっすぐ進むとき（道路の反対側へ渡るときも）・角がうまく決まらないときは、S から E へまっすぐ。
+  // 交差点でない曲がり角（なめらかなカーブの道路・大通りの行き止まりの転回場）の外側は、道路と同じカーブに沿う（角を歩道の外へはみ出さない）
   private walkPath(c: Car) {
-    const n = this.grid!.n, cx = ((c.from % n) + 0.5) * CELL, cz = (((c.from / n) | 0) + 0.5) * CELL;
+    const g = this.grid!, n = g.n, cx = ((c.from % n) + 0.5) * CELL, cz = (((c.from / n) | 0) + 0.5) * CELL;
     const al = Math.hypot(DX[c.din], DY[c.din]), bl = Math.hypot(DX[c.d], DY[c.d]);
     const ux = DX[c.din] / al, uz = DY[c.din] / al, vx = DX[c.d] / bl, vz = DY[c.d] / bl;
     const wa = c.wa!, wb = c.wb!;
@@ -463,7 +492,26 @@ export class CarLayer {
     let len = Math.hypot(ex - sx, ez - sz);
     // S + u·l1 = E - v·l2 となる角 K
     const cr = ux * vz - uz * vx, qx = ex - sx, qz = ez - sz;
-    if (c.din !== c.d && wa * wb > 0 && Math.abs(cr) > 0.3) {
+    const N = this.avJct.length;
+    if (c.din !== c.d && Math.abs(cr) > 0.3 && wa * cr < 0 && wb * cr < 0 && c.from < N && !this.avJct[c.from] && CarLayer.arms(g.conn[c.from]) === 2) {
+      // 入ってきた辺の中点 → マスの中心 → 出ていく辺の中点の2次ベジェ曲線（車と同じ）を、横へ wa → wb だけずらした線
+      W[0] = cx - DX[c.din] * CELL * 0.5; W[1] = cz - DY[c.din] * CELL * 0.5;
+      W[2] = cx; W[3] = cz;
+      W[4] = cx + DX[c.d] * CELL * 0.5; W[5] = cz + DY[c.d] * CELL * 0.5;
+      W[6] = -2; W[7] = wa; W[8] = wb;
+      len = 0;
+      let px = sx, pz = sz;
+      for (let k = 1; k <= 8; k++) {
+        const q = CarLayer.walkCurve(W, k / 8);
+        len += Math.hypot(q[0] - px, q[1] - pz);
+        px = q[0];
+        pz = q[1];
+      }
+      c.wl = Math.max(0.5, len);
+      return;
+    }
+    // 側を変えて曲がるときも、角を通る（交差点の中をななめに横切らず、横断歩道を渡る）
+    if (c.din !== c.d && Math.abs(cr) > 0.3) {
       const l1 = (qx * vz - vx * qz) / cr, l2 = (ux * qz - qx * uz) / cr;
       if (l1 > 0.05 && l2 > 0.05 && l1 < 20 && l2 < 20) {
         const r = Math.min(2.5, 0.45 * l1, 0.45 * l2);
@@ -475,6 +523,24 @@ export class CarLayer {
       }
     }
     c.wl = Math.max(0.5, len);
+  }
+
+  // 歩く人のカーブの道すじ（walkPath の W[6] = -2）の、u（0..1）の位置と向き
+  private static curveOut: [number, number, number, number] = [0, 0, 0, 0];
+  static walkCurve(W: number[], u: number) {
+    const a0 = (1 - u) * (1 - u), a1 = 2 * u * (1 - u), a2 = u * u;
+    const bx = a0 * W[0] + a1 * W[2] + a2 * W[4], bz = a0 * W[1] + a1 * W[3] + a2 * W[5];
+    let dx = (1 - u) * (W[2] - W[0]) + u * (W[4] - W[2]), dz = (1 - u) * (W[3] - W[1]) + u * (W[5] - W[3]);
+    const dl = Math.hypot(dx, dz) || 1;
+    dx /= dl;
+    dz /= dl;
+    const o = W[7] + (W[8] - W[7]) * u;
+    const q = CarLayer.curveOut;
+    q[0] = bx - dz * o;
+    q[1] = bz + dx * o;
+    q[2] = dx;
+    q[3] = dz;
+    return q;
   }
 
   // バス停で止まる向きか：待合所のある側（道路の層と同じ決め方。大通りは外側、ほかはまっすぐな腕のうち番号の小さい向きの右）が、
@@ -1370,7 +1436,13 @@ export class CarLayer {
         if (walk && c.wg) {
           // 歩く人：このマスの道すじ（歩道に沿って角で曲がる。道路を渡るときはまっすぐ）の上の、歩いた道のりの点
           const W = c.wg, sl = c.t * (c.wl ?? 1);
-          if (W[6] < 0) {
+          if (W[6] === -2) {
+            const q = CarLayer.walkCurve(W, c.t);
+            x = q[0];
+            z = q[1];
+            tx = q[2];
+            tz = q[3];
+          } else if (W[6] < 0) {
             const ex = W[4] - W[0], ez = W[5] - W[1], el = Math.hypot(ex, ez) || 1;
             x = W[0] + ex * c.t;
             z = W[1] + ez * c.t;

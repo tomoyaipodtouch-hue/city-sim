@@ -22,7 +22,7 @@ const DIAG_LANE_W = 10.7; // 斜めの区間の、2マス幅の高速道路の1�
 // 大通り（グリーンベルト型）の寸法
 export const AV_W = 7.0; // 車道（3.25m の2車線と、両側の路肩）。マスの中心にそろえる
 export const AV_SW = 4.5; // 外側の歩道
-const AV_SW_BRIDGE = 4.0; // 橋の上の歩道（床版の外側の縁は前と同じ位置）
+export const AV_SW_BRIDGE = 4.0; // 橋の上の歩道（床版の外側の縁は前と同じ位置）
 const AV_MED = (CELL - AV_W) / 2; // 分離帯の半分の幅（まっすぐな区間、4.5m）
 const AV_MED_DIAG = (CELL / Math.SQRT2 - AV_W) / 2; // 斜めの区間（車線の間隔が約 11.3m なので約 2.2m）
 const CORNER_R = 6; // 大通りの交差点の角の縁石の半径
@@ -1515,7 +1515,9 @@ export class RoadLayer {
             pz = -pz;
           }
         }
-        const hw = w / 2, so = hw + Math.max(sw, 1.2) * 0.55;
+        // 大通りの広い歩道では、待合所を縁石の近くに置く（人は待合所のうしろを歩く）
+        const hw = w / 2, so = isAv ? hw + 1.05 : hw + Math.max(sw, 1.2) * 0.55;
+        const dep = 0.8, back = isAv ? 0.6 : 0.5; // 大通りの屋根の奥行きの半分、うしろの柱とガラスの位置
         const at = (s2: number, o: number): [number, number] => [cx + ux * s2 + px * o, cz + uz * s2 + pz * o];
         // 停車スペース（黄色の枠）
         const box: [number, number][] = [at(-4.5, hw - 2.8), at(4.5, hw - 2.8), at(4.5, hw - 0.4), at(-4.5, hw - 0.4)];
@@ -1527,12 +1529,14 @@ export class RoadLayer {
         const [sx, sz] = at(0, so);
         const y0 = ch + 0.16;
         for (const s2 of [-1.4, 1.4]) {
-          const [qx, qz] = at(s2, so + 0.5);
+          const [qx, qz] = at(s2, so + back);
           O.box(qx - 0.06, y0, qz - 0.06, qx + 0.06, y0 + 2.5, qz + 0.06, COL.signal);
         }
-        const [bx0, bz0] = at(-1.5, so + 0.55), [bx1, bz1] = at(1.5, so + 0.55);
+        const [bx0, bz0] = at(-1.5, so + back + 0.05), [bx1, bz1] = at(1.5, so + back + 0.05);
         O.wall(bx0, bz0, y0, y0 + 2.3, bx1, bz1, y0, y0 + 2.3, COL.glass);
-        O.box(Math.min(sx - 1.6, sx + 1.6), y0 + 2.5, Math.min(sz - 1.6, sz + 1.6), Math.max(sx - 1.6, sx + 1.6), y0 + 2.65, Math.max(sz - 1.6, sz + 1.6), COL.signal);
+        // 屋根（大通りは道に沿った細長い屋根。ほかは 3.2m 四方）
+        const [rx0, rz0] = isAv ? at(-1.6, so - dep) : [sx - 1.6, sz - 1.6], [rx1, rz1] = isAv ? at(1.6, so + dep) : [sx + 1.6, sz + 1.6];
+        O.box(Math.min(rx0, rx1), y0 + 2.5, Math.min(rz0, rz1), Math.max(rx0, rx1), y0 + 2.65, Math.max(rz0, rz1), COL.signal);
         const [gx, gz] = at(2.4, so - 0.2);
         O.box(gx - 0.05, y0, gz - 0.05, gx + 0.05, y0 + 2.8, gz + 0.05, COL.signal);
         O.box(gx - 0.35, y0 + 2.3, gz - 0.35, gx + 0.35, y0 + 3.0, gz + 0.35, COL.busSign);
@@ -2066,10 +2070,17 @@ export class RoadLayer {
       for (const w of q.w) O.wall(w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], COL.curb);
     }
     // 分離帯の植え込み（ほかの道路の路面に重なるところは描かない）
+    // 上を高架の道路・鉄道・モノレールが通るところには、木を植えない（高架につきぬけないように）
+    const overhead = (x: number, z: number) => {
+      const qx = Math.floor(x / CELL), qz = Math.floor(z / CELL);
+      if (!g.inb(qx, qz)) return true;
+      const j = qz * n + qx;
+      return !!(g.up[j] || g.erail[j] || g.mono[j]);
+    };
     for (const q of medQ) {
       if (overlaps(q.p, -2)) continue;
       q.draw();
-      if (q.trees) trees.push(...q.trees);
+      if (q.trees) for (const t of q.trees) if (!overhead(t.x, t.z)) trees.push(t);
     }
     // 横断歩道の範囲を、マスごとの入れ物に分けておく
     const zebraAt = new Map<number, typeof zebra>();
