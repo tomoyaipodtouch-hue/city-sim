@@ -26,6 +26,7 @@ export const AV_SW_BRIDGE = 4.0; // 橋の上の歩道（床版の外側の縁�
 const AV_MED = (CELL - AV_W) / 2; // 分離帯の半分の幅（まっすぐな区間、4.5m）
 const AV_MED_DIAG = (CELL / Math.SQRT2 - AV_W) / 2; // 斜めの区間（車線の間隔が約 11.3m なので約 2.2m）
 const CORNER_R = 6; // 大通りの交差点の角の縁石の半径
+export const SIG_STOP = 5.6; // 信号のある大通りの交差点の停止線：横切る車道の縁からの長さ（横断歩道の外）
 const KERB = 0.18; // 分離帯の縁石と植え込みの高さ
 
 const COL = {
@@ -654,7 +655,7 @@ export class RoadLayer {
         a.xw0 = a.K + 1.0;
         a.tip = a.K + (sig ? 0.6 : 0.8);
         a.mEnd = a.K + (sig ? 5.5 : 3.5);
-        a.stop = a.K + (sig ? 5.6 : 1.6);
+        a.stop = a.K + (sig ? SIG_STOP : 1.6);
         if (!a.pair) continue;
         if (!a.lanes.every((l) => l.trim)) {
           a.mEnd = Math.min(a.mEnd, a.mouth);

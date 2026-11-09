@@ -261,8 +261,9 @@ export class ToolController {
       const type = Number(t.split(':')[1]) as RoadType;
       const [lx0, ly0, lx1, ly1] = d.line;
       const plan = planRoadCmd(g, type, lx0, ly0, lx1, ly1);
-      // 大通りの横でつなぐ道路のマスも、つなぎ直すマスとして見せる
-      const sideJ = (plan.sideJoins ?? []).map((q) => q[0]);
+      // 大通りの横でつなぐ道路のマス（と、横に向いている大通りの行き止まりの端）も、つなぎ直すマスとして見せる
+      const stemJ = (plan.stemJoins ?? []).flatMap((q) => [q[0], q[1]]);
+      const sideJ = [...(plan.sideJoins ?? []).map((q) => q[0]), ...stemJ];
       const cells = [...plan.lanes.flatMap((l) => l.cells), ...sideJ];
       const conv = new Set([...plan.converts, ...sideJ]);
       const upper = new Set(plan.lanes.flatMap((l) => l.cells.filter((_, k) => l.levels[k] === 1)));
@@ -289,7 +290,7 @@ export class ToolController {
       let extra = plan.bridgeCells ? `（橋 ${plan.bridgeCells} マス）` : '';
       // 端をつなぎ先へ寄せたときは、どうつなぐかを書き添える
       const kinds = [plan.startKind, plan.endKind];
-      const join = kinds.includes('tee') ? 'T字でつなぎます' : kinds.includes('avenue') ? '続けてつなぎます' : kinds.includes('road') ? '道路につなぎます' : sideJ.length ? '横の道路もつなぎます' : '';
+      const join = kinds.includes('tee') || stemJ.length ? 'T字でつなぎます' : kinds.includes('avenue') ? '続けてつなぎます' : kinds.includes('road') ? '道路につなぎます' : sideJ.length ? '横の道路もつなぎます' : '';
       if (join) extra += `（${join}）`;
       if (plan.note) extra += `（${plan.note}）`;
       d.noop = !!plan.noop;

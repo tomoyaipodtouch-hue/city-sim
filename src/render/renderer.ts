@@ -190,6 +190,7 @@ export class CityRenderer {
       this.roads.jctl = m.jctl;
       this.dirty.grid = true;
     }
+    this.cars.jctl = m.jctl;
     if (this.grid) this.cars.setData(this.grid, m.traffic, m.congestion, m.freight, m.riders, m.garbage, m.garbageLeft);
     this.kick();
   }

@@ -7,7 +7,7 @@ import { CIVIC, CivicId, isHighway, LINES, LineKind, ROADS, RoadType, ZoneType }
 import type { Building } from '../sim/world';
 import { RailLayer, TRACK_GAP } from './railLayer';
 import { isUrbanHighway, urbanTurnOk } from '../sim/traffic';
-import { ROAD_LIFT, avenueMedianDir, drawWidth } from './roadLayer';
+import { ROAD_LIFT, SIG_STOP, avenueMedianDir, drawWidth } from './roadLayer';
 import { findTurnbacks, Turnback, Island, islandSpread, ISLAND_GAP } from './turnback';
 import { BOGIE, boxTruck, cityBus, garbageTruck, TRAIN_SPEC, TrainKind, hatchback, kei, minivan, person, pickup, sedan, suv, taxi, tractor, trailerBox, trailerTank, trainCar, vc } from './vehicles';
 import { createVehicleMaterial, vehicleUniforms } from './vehicleMaterial';
@@ -88,6 +88,8 @@ interface Car extends Cell {
   wl?: number; // 歩く人：このマスの道すじの長さ（m）
   wq?: [number, number]; // 歩く人：次のマスの道すじの入口（大通りと道路の広がるつなぎ目を通るとき）
   bx?: number; // 大通りの交差点のまとまりに入ってきた軸（0..3。まとまりの外では undefined）
+  rw?: number; // まとまりの手前で、横切る軸を待っている秒数（wait とは別に数える）
+  bw?: number; // 前に車はいないが、まとまりの最初のマスがいっぱいで待っている秒数
 }
 
 // 走る場所：道路（車・トラック・バス）、歩道、線路（鉄道・高架鉄道・モノレール・地下鉄）
@@ -380,9 +382,12 @@ export class CarLayer {
   // 1 = 北西-南東、2 = 南北、3 = 北東-南西）の車がいる間は、ほかの軸の車は入らずに待つ（信号の代わり）
   private avCl = new Int32Array(0);
   private clReq = new Float64Array(0); // 軸ごとの、入りたい車がいた最後の時刻
-  private clFirst = new Float64Array(0); // 軸ごとの、入りたい車が待ち始めた時刻（続けて待っている間）
+  private clFirst = new Float64Array(0); // 軸ごとの、入りたい車が止められ始めた時刻（止められている間だけ古くなる）
   private clCnt = new Int32Array(0); // 軸ごとの、まとまりの中にいる車の数（コマごとに数え直す）
+  // まとまりの入口（縦横の進む向き 0..3）ごとの、まとまりの縁から描いた停止線までの長さ（信号の交差点。ほかは 0）
+  private clStop = new Float32Array(0);
   private simT = 0;
+  jctl: Uint8Array = new Uint8Array(0); // 交差点の制御方式（シミュレーションで決まったもの）
   private scanAvenues(g: Grid) {
     const N = g.n * g.n;
     if (this.avMed.length !== N) {
@@ -443,6 +448,37 @@ export class CarLayer {
       this.clReq = new Float64Array(K * 4).fill(-1e9);
       this.clFirst = new Float64Array(K * 4);
       this.clCnt = new Int32Array(K * 4);
+    }
+    // 信号の交差点では、roadLayer が描く停止線（横切る車道の縁から SIG_STOP、横断歩道の外）で止まる
+    const stops = (this.clStop = new Float32Array(K * 4));
+    const ctl = this.jctl.length === N ? this.jctl : null;
+    if (ctl && K) {
+      const n = g.n, box = new Int32Array(K * 4).fill(-1), sig = new Uint8Array(K);
+      for (const i of list) {
+        const k = cl[i], x = i % n, y = (i / n) | 0;
+        if (box[k * 4] < 0) box.set([x, y, x, y], k * 4);
+        box[k * 4] = Math.min(box[k * 4], x);
+        box[k * 4 + 1] = Math.min(box[k * 4 + 1], y);
+        box[k * 4 + 2] = Math.max(box[k * 4 + 2], x);
+        box[k * 4 + 3] = Math.max(box[k * 4 + 3], y);
+        if (ctl[i] === 3 || ctl[i] === 4) sig[k] = 1;
+      }
+      for (const i of list) {
+        const k = cl[i], x = i % n, y = (i / n) | 0;
+        if (!sig[k]) continue;
+        const cx = (box[k * 4] + box[k * 4 + 2] + 1) / 2, cy = (box[k * 4 + 1] + box[k * 4 + 3] + 1) / 2;
+        for (const d of [0, 2, 4, 6]) {
+          // 進む向き d に横切る腕の車道の、入口の側の縁（まとまりの中心からの長さ）
+          for (const s of [(d + 2) & 7, (d + 6) & 7]) {
+            if (!(g.conn[i] & (1 << s)) || !g.inb(x + DX[s], y + DY[s])) continue;
+            const j = i + DY[s] * n + DX[s];
+            if (cl[j] === k || !g.road[j]) continue;
+            const kerb = -((x + 0.5 - cx) * DX[d] + (y + 0.5 - cy) * DY[d]) * CELL + drawWidth(g.road[j]) / 2;
+            const mouth = ((d === 0 || d === 4 ? box[k * 4 + 2] - box[k * 4] : box[k * 4 + 3] - box[k * 4 + 1]) + 1) * CELL / 2;
+            stops[k * 4 + (d >> 1)] = Math.max(stops[k * 4 + (d >> 1)], kerb + SIG_STOP - mouth);
+          }
+        }
+      }
     }
   }
 
@@ -1302,12 +1338,13 @@ export class CarLayer {
       if (a) a.push(e);
       else lanes.set(key, [e]);
     };
+    // トレーラーの荷台の後ろの端：カーブでは荷台が遅れてついてくるので、後ろの車軸の位置から求める
+    const rearOf = (f: Fleet, c: Car) => (f.trailer ? Math.max(TRAILER_REAR, c.rs !== undefined ? c.rs + f.lamp[0] - f.axle : 0) : f.halfLen);
     for (const f of this.fleets) {
       if (f.track !== 'road' && f.track !== 'bus') continue;
       for (const c of f.cars) {
         const len = CarLayer.cellLen(c);
-        // トレーラーの荷台の後ろの端：カーブでは荷台が遅れてついてくるので、後ろの車軸の位置から求める
-        const rear = f.trailer ? Math.max(TRAILER_REAR, c.rs !== undefined ? c.rs + f.lamp[0] - f.axle : 0) : f.halfLen;
+        const rear = rearOf(f, c);
         addLane((c.from * 8 + c.d) * 2 + laneOf(c), { c, t: c.t, r: rear, L: len });
         if (f.trailer) {
           let rem = rear - c.t * len;
@@ -1327,7 +1364,19 @@ export class CarLayer {
       for (const f of this.fleets) {
         if (f.track !== 'road' && f.track !== 'bus') continue;
         for (const c of f.cars) {
-          const k = c.from < CL.length ? CL[c.from] : -1;
+          let k = c.from < CL.length ? CL[c.from] : -1;
+          if (k < 0 && f.trailer && c.bx !== undefined) {
+            // トレーラーの荷台がまだまとまりにかかっている間は、入ってきた軸の車として数える
+            let rem = rearOf(f, c) - c.t * CarLayer.cellLen(c);
+            for (const h of c.hist) {
+              if (rem <= 0) break;
+              if (h.from < CL.length && CL[h.from] >= 0) {
+                k = CL[h.from];
+                break;
+              }
+              rem -= CarLayer.cellLen(h);
+            }
+          }
           if (k < 0) {
             c.bx = undefined;
             continue;
@@ -1503,17 +1552,21 @@ export class CarLayer {
           // まとまりの入口：最初のマスがもう車でいっぱい（3台以上）なら、入らずに手前で待つ（交差点の中で詰まらないように）
           let red = false;
           if (box && !inBox(c.from)) {
+            // 止まる位置（まとまりの縁からの長さ）。縦横の交差点は、縁の約 1m 手前か、信号の交差点の停止線。
+            // 斜めに交わる大通りの交差点は、横断歩道が斜めの縁に沿うので、停止線はマスの縁から遠い（縦横の腕で約 8m、斜めの腕で約 6m）
+            const kc = this.avCl[c.to], a = c.d & 3;
+            const m = g.conn[c.to], skew = g.road[c.to] === RoadType.Avenue && (m & 0xaa) !== 0 && (m & 0x55) !== 0;
+            const back = skew ? (c.d & 1 ? 6 : 8) : Math.max(1.1, kc >= 0 && !(c.d & 1) ? this.clStop[kc * 4 + (c.d >> 1)] : 0);
             let k = 0;
             for (let d = 0; d < 16; d++) k += lanes.get(c.to * 16 + d)?.length ?? 0;
-            if (k >= 3 && (v = (1 - c.t) * len - me + 1.5) < gap) {
+            if (k >= 3 && (v = (1 - c.t) * len - me - back + 1.5) < gap) {
               gap = v;
               lim = null;
             }
             // まとまりの中にほかの軸の車がいる、またはほかの軸の車が長く待っている（先をゆずる）ときは、手前で待つ
-            const kc = this.avCl[c.to], a = c.d & 3;
             if (kc >= 0) {
               const q = kc * 4;
-              if (now - this.clReq[q + a] > 0.5) this.clFirst[q + a] = now; // 待ち始め
+              const fresh = now - this.clReq[q + a] > 0.5; // 待ち始め
               this.clReq[q + a] = now;
               let stop = false;
               for (let b = 0; b < 4; b++) {
@@ -1522,11 +1575,10 @@ export class CarLayer {
                 // ほかの軸が、自分より先から CL_YIELD 秒以上待っている
                 else if (now - this.clReq[q + b] < 0.5 && now - this.clFirst[q + b] > CL_YIELD && this.clFirst[q + b] < this.clFirst[q + a]) stop = true;
               }
+              // 待ち始めの時刻は、止められている間だけ古くなる（車が続けて来ても、入れている軸は待っていない）
+              if (!stop || fresh) this.clFirst[q + a] = now;
               if (stop) {
-                // 停止線で止まる。縦横の交差点は、まとまりの縁の約 1m 手前。
-                // 斜めに交わる大通りの交差点は、横断歩道が斜めの縁に沿うので、停止線はマスの縁から遠い（縦横の腕で約 8m、斜めの腕で約 6m）
-                const m = g.conn[c.to], skew = g.road[c.to] === RoadType.Avenue && (m & 0xaa) !== 0 && (m & 0x55) !== 0;
-                const back = skew ? (c.d & 1 ? 6 : 8) : 1.1;
+                // 停止線で止まる
                 red = true;
                 if ((v = (1 - c.t) * len - me - back + 1.5) < gap) {
                   gap = v;
@@ -1538,11 +1590,14 @@ export class CarLayer {
           const room = Math.max(0, gap - 1.5);
           if (room < adv * len) {
             // 長く詰まったら（交差点で車がおたがいに待ち合って動かなくならないように）、その車を別の場所の車に入れかえる
-            // （前の車の中を通り抜けて進むと、重なって見えるため）。列の先頭の車だけを早めに入れかえ（交差点の手前で待つ車は長めに）、
-            // 前の車に並んでいるだけの車は、まず列が動くのを待つ（列がまとめて消えないように）
-            c.wait = (c.wait ?? 0) + dt;
+            // （前の車の中を通り抜けて進むと、重なって見えるため）。列の先頭の車だけを早めに入れかえ、
+            // 前の車に並んでいるだけの車と、まとまりの手前で横切る軸を待つ車（先をゆずる決まりで順番が来る）は長めに待つ。
+            // 待つ理由ごとに別に数える（列に並んでいた時間や赤で待った時間で、先頭になった車がすぐ入れかわらないように）
+            if (lim) c.wait = (c.wait ?? 0) + dt;
+            else if (red) c.rw = (c.rw ?? 0) + dt;
+            else c.bw = (c.bw ?? 0) + dt;
             adv = room / len;
-            if (c.wait > (lim ? 30 : red ? 12 : 6)) {
+            if ((c.wait ?? 0) > 30 || (c.rw ?? 0) > 30 || (c.bw ?? 0) > 6) {
               const nc = this.spawn(f);
               if (nc) {
                 Object.assign(c, nc);
@@ -1550,9 +1605,9 @@ export class CarLayer {
                 c.rt = nc.rt;
                 adv = 0;
               }
-              c.wait = 0;
+              c.wait = c.rw = c.bw = 0;
             }
-          } else c.wait = 0;
+          } else c.wait = c.rw = c.bw = 0;
         }
         const moved = adv * len; // このコマで進んだ道のり（m）
         c.t += adv;
@@ -1616,8 +1671,8 @@ export class CarLayer {
           c.to = nx[0];
           c.d = nx[1];
           if (walk) this.walkEnter(f, c, false);
-          else if (c.from < CL.length && CL[c.from] >= 0 && c.bx === undefined) {
-            // まとまりに入った：このコマのうちに、ほかの軸の車が続けて入らないように数えておく
+          else if (c.from < CL.length && CL[c.from] >= 0 && (c.bx === undefined || !(c.hist[0].from < CL.length && CL[c.hist[0].from] === CL[c.from]))) {
+            // まとまりに入った（荷台が前のまとまりに残っていても、入りなおし）：このコマのうちに、ほかの軸の車が続けて入らないように数えておく
             c.bx = c.din & 3;
             cnt[CL[c.from] * 4 + c.bx]++;
           }
