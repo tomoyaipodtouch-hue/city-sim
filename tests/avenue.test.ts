@@ -788,6 +788,50 @@ describe('avenue: upgrading a road by dragging along it', () => {
       for (const x of [10, 18, 26]) issues.push(...moves(w, [x, rows[1] ?? 24], [N, S, E, W], 4, 5).map((s) => `street x=${x}: ${s}`));
       clean(w, issues, [2, 17, 34, 31]);
     });
+  // 道路（列 24、y = 4..40）に、西から x = 16..24 の道が y = 14 で、東から x = 24..32 の道が y = 26 で突き当たっている。
+  // どちらの側の道も、大通りの2本の車線の両方へつながる（左折できる）
+  for (const [name, l] of [
+    ['upgrading a road with side streets on both sides: new lane on its west side', [24, 6, 24, 38]],
+    ['upgrading a road with side streets on both sides: new lane on its east side, dragged north', [25, 38, 25, 6]],
+  ] as [string, Line][])
+    spec(name, () => {
+      const w = flat();
+      draw(w, [24, 4, 24, 40], RD);
+      draw(w, [16, 14, 24, 14], RD);
+      draw(w, [32, 26, 24, 26], RD);
+      draw(w, l);
+      const g = w.g;
+      const issues = [...connected(w)];
+      const cols = new Set<number>();
+      for (let y = 8; y <= 36; y++) for (let x = 20; x <= 28; x++) if (g.road[g.idx(x, y)] === AV) cols.add(x);
+      const cs = [...cols].sort((a, b) => a - b);
+      if (cs.length !== 2 || !cs.includes(24)) issues.push(`avenue columns ${cs.join(',')} (should be the road column 24 and one next to it)`);
+      else
+        for (const [y, side] of [[14, -1], [26, 1]] as [number, number][]) {
+          const s = g.idx(side < 0 ? cs[0] - 1 : cs[1] + 1, y);
+          for (const x of cs) {
+            const c = g.idx(x, y);
+            if (!reach(w, s, (qx, qy) => Math.abs(qy - y) <= 1 && qx >= cs[0] - 1 && qx <= cs[1] + 1).has(c)) issues.push(`side street ${at(w, s)} cannot reach lane ${at(w, c)}`);
+            if (!reach(w, s, (qx, qy) => Math.abs(qy - y) <= 1 && qx >= cs[0] - 1 && qx <= cs[1] + 1, true).has(c)) issues.push(`lane ${at(w, c)} cannot reach side street ${at(w, s)}`);
+          }
+          issues.push(...moves(w, [cs[1], y], [N, S, side < 0 ? W : E], 4, 5).map((q) => `side street y=${y}: ${q}`));
+        }
+      clean(w, issues, [14, 2, 34, 42]);
+    });
+  spec('a road dead end touching the outer side of a new avenue is joined to both lanes', () => {
+    const w = flat();
+    draw(w, [10, 20, 17, 20], RD); // 東の端 (17,20) が、あとで引く大通りの西側の車線 (18,20) に向いている
+    draw(w, [19, 6, 19, 36]);
+    const g = w.g;
+    const issues = [...connected(w)];
+    const s = g.idx(17, 20);
+    for (const x of [18, 19]) {
+      const c = g.idx(x, 20);
+      if (!reach(w, s, (qx, qy) => Math.abs(qy - 20) <= 1 && qx >= 17 && qx <= 19).has(c)) issues.push(`road end cannot reach lane ${at(w, c)}`);
+      if (!reach(w, s, (qx, qy) => Math.abs(qy - 20) <= 1 && qx >= 17 && qx <= 19, true).has(c)) issues.push(`lane ${at(w, c)} cannot reach the road end`);
+    }
+    clean(w, issues, [8, 4, 22, 38]);
+  });
 });
 
 // =====================================================================

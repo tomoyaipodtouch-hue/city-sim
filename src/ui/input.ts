@@ -39,6 +39,19 @@ export interface InputHooks {
 
 type Mode = 'idle' | 'pan' | 'tool' | 'gesture' | 'ending';
 
+// 左右の安全領域（ノッチ）の幅（px）。なぞり始めるたびに測る（画面の向きで変わる）
+let sideProbe: HTMLDivElement | null = null;
+function safeSides(): [number, number] {
+  if (!sideProbe) {
+    sideProbe = document.createElement('div');
+    sideProbe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;padding-left:env(safe-area-inset-left, 0px);padding-right:env(safe-area-inset-right, 0px)';
+    document.body.append(sideProbe);
+  }
+  const cs = getComputedStyle(sideProbe);
+  const v = (x: string) => (Number.isFinite(parseFloat(x)) ? Math.max(0, Math.round(parseFloat(x))) : 0);
+  return [v(cs.paddingLeft), v(cs.paddingRight)];
+}
+
 export class Input {
   private ptrs = new Map<number, Ptr>();
   private mode: Mode = 'idle';
@@ -179,10 +192,13 @@ export class Input {
     this.hooks.onPreview(info, x, y, over);
   }
 
-  // 地図が見えている範囲（左や下のツールバー・情報バーを除く）。#app の中の座標
+  // 地図が見えている範囲（左や下のツールバー・情報バーを除く）。#app の中の座標。
+  // 横向きの iPhone では、ノッチのある側の安全領域（safe-area-inset-left/right）も除く
   private viewRect() {
     const W = this.canvas.clientWidth, H = this.canvas.clientHeight;
-    const r = { left: 0, top: 0, right: W, bottom: H };
+    const [sl, sr] = safeSides();
+    const rotated = toApp(0, 0)[0] !== 0 || toApp(0, 0)[1] !== 0;
+    const r = { left: rotated ? 0 : sl, top: 0, right: W - (rotated ? 0 : sr), bottom: H };
     for (const sel of ['.toolbar', '.bar']) {
       const el = document.querySelector(sel);
       if (!el) continue;
@@ -217,12 +233,13 @@ export class Input {
       const [ex, ey] = this.edgeVec();
       if (!ex && !ey) return;
       const now = performance.now();
-      const dt = Math.min(0.05, (now - this.edgeT) / 1000);
+      // 本当に過ぎた時間で数える（描画が遅いときも、待ち時間と動く速さが変わらないように）。1コマで動く量だけ制限する
+      const dt = Math.min(0.5, (now - this.edgeT) / 1000);
       this.edgeT = now;
       this.edgeAge += dt;
       if (this.edgeAge > EDGE_DWELL) {
         // 指の向こうが見えるように地図を動かす（地図は指と反対へ流れる）。動き始めは少しずつ速くする
-        const sp = EDGE_SPEED * dt * Math.min(1, (this.edgeAge - EDGE_DWELL) / 0.4);
+        const sp = EDGE_SPEED * Math.min(dt, 0.12) * Math.min(1, (this.edgeAge - EDGE_DWELL) / 0.4);
         this.r.rig.pan(-ex * sp, -ey * sp, this.canvas.clientHeight);
         this.r.kick();
         this.toolMove();

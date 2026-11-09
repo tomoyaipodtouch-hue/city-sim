@@ -4,7 +4,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { Grid } from '../sim/grid';
 import { CELL, DX, DY } from '../sim/constants';
 import { ROADS, RoadType } from '../sim/defs';
-import { AV_W, avenueMedianDir, junctionLamps } from './roadLayer';
+import { AV_W, ROAD_LIFT, avLampBlock, avenueMedianDir, inRegion, junctionLamps, junctionPools } from './roadLayer';
 
 // soft = 街灯の光：中心が明るく、外へ長くうすく消える（寄ったとき、ふちのはっきりした円盤に見えないように）
 function glowTexture(soft = false) {
@@ -24,6 +24,26 @@ function glowTexture(soft = false) {
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
+}
+
+// 上空の大通り（立体交差）のマスの、反対車線のある向き（まっすぐなマスだけ。斜めのマスも。なければ -1）
+function upperMedianDir(g: Grid, i: number): number {
+  const n = g.n, x = i % n, y = (i / n) | 0, m = g.conn1[i];
+  const isAv = (d: number) => {
+    const qx = x + DX[d], qy = y + DY[d];
+    return g.inb(qx, qy) && g.up[qy * n + qx] === RoadType.Avenue;
+  };
+  for (const a of [0, 1, 2, 3]) {
+    if (!(m & (1 << a)) || !(m & (1 << (a + 4)))) continue;
+    if (!(a & 1)) {
+      for (const d of [(a + 2) & 7, (a + 6) & 7]) if (isAv(d)) return d;
+      continue;
+    }
+    // 斜めの車線の反対車線は、軸の向きの隣のマス
+    if (isAv((a + 1) & 7) || isAv((a + 3) & 7)) return (a + 2) & 7;
+    if (isAv((a + 5) & 7) || isAv((a + 7) & 7)) return (a + 6) & 7;
+  }
+  return -1;
 }
 
 // 街灯の柱（腕は +x の向き、長さ 2m）
@@ -103,13 +123,15 @@ export class StreetLights {
       const x = i % n, y = (i / n) | 0;
       const m = level ? g.conn1[i] : g.conn[i];
       const h = g.nodeH(node);
-      if (level === 0 && t === RoadType.Avenue) {
+      if (t === RoadType.Avenue) {
         // 大通り：外側（分離帯と反対の側）の歩道に、32m ごとに立てて車道へ腕をのばす。
-        // 交差点・曲がり角（分離帯の向きが決まらないマス）には立てない（車道の中に立たないように）
+        // 交差点・曲がり角（分離帯の向きが決まらないマス）には立てない（車道の中に立たないように）。
+        // 地上の高速道路をまたぐ上空の大通りも、外側の歩道だけ（分離帯の上には立てない）
         let deg = 0;
         for (let d = 0; d < 8; d++) if (m & (1 << d)) deg++;
-        if (deg >= 3) continue;
-        const md = avenueMedianDir(g, i);
+        // 斜めと縦横の腕がまざるマス（45° の曲がり、斜めの行き止まりの折り返し）にも立てない
+        if (deg >= 3 || (m & 0xaa && m & 0x55)) continue;
+        const md = level ? upperMedianDir(g, i) : avenueMedianDir(g, i);
         if (md < 0) continue;
         // 斜めの車線は x と y の和の偶奇が変わらないので、x の偶奇で間引く
         if ((md & 1 ? x : x + y) & 1) continue;
@@ -120,10 +142,13 @@ export class StreetLights {
         const bx = (x + 0.5) * CELL + oz * sh, bz = (y + 0.5) * CELL - ox * sh;
         const off = AV_W / 2 + 0.8;
         const cx = bx + ox * off, cz = bz + oz * off;
+        // 斜めの大通りの交差点の、角の丸みや車道になったところには立てない
+        if (avLampBlock.some((R) => inRegion(R, cx, cz))) continue;
         lamp.push(cx - ox * 2.0, h + 7.2, cz - oz * 2.0);
         poles.push(cx, h, cz, Math.atan2(oz, -ox));
         // 路面と、歩道を照らす光
-        pool.push(bx + ox * (AV_W / 2 - 0.6), h + 0.25, bz + oz * (AV_W / 2 - 0.6), 11);
+        // 路面の光は路面より少しだけ上に置く（真上から見ても路面に隠れないように）
+        pool.push(bx + ox * (AV_W / 2 - 0.6), h + ROAD_LIFT + 0.05, bz + oz * (AV_W / 2 - 0.6), 11);
         pool.push(bx + ox * (AV_W / 2 + 2.4), h + 0.5, bz + oz * (AV_W / 2 + 2.4), 8.5);
         continue;
       }
@@ -146,12 +171,14 @@ export class StreetLights {
       poles.push(cx, h, cz, Math.atan2(-dz, dx));
     }
     // 大通りの交差点の角の街灯（道路の層が、交差点を作るときに置き場所を決める）
-    for (let k = 0; k + 4 < junctionLamps.length; k += 5) {
-      const [cx, h, cz, dx, dz] = junctionLamps.slice(k, k + 5);
+    for (let k = 0; k + 5 < junctionLamps.length; k += 6) {
+      const [cx, h, cz, dx, dz, ph] = junctionLamps.slice(k, k + 6);
       lamp.push(cx + dx * 2.0, h + 7.2, cz + dz * 2.0);
       poles.push(cx, h, cz, Math.atan2(-dz, dx));
-      pool.push(cx + dx * 4.5, h + 0.25, cz + dz * 4.5, 13);
+      // 光は交差点の中ほどまで届かせる（光の板は、届く範囲でいちばん高い路面の高さ）
+      pool.push(cx + dx * 9, ph + ROAD_LIFT + 0.05, cz + dz * 9, 18);
     }
+    for (let k = 0; k + 3 < junctionPools.length; k += 4) pool.push(junctionPools[k], junctionPools[k + 1] + ROAD_LIFT + 0.05, junctionPools[k + 2], junctionPools[k + 3]);
     {
       const m2 = new THREE.Matrix4(), q2 = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), v2 = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
       const pc = Math.min(this.poles.instanceMatrix.count, poles.length / 4);

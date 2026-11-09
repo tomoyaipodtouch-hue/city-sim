@@ -259,8 +259,10 @@ export class ToolController {
       const type = Number(t.split(':')[1]) as RoadType;
       const [lx0, ly0, lx1, ly1] = d.line;
       const plan = planRoadCmd(g, type, lx0, ly0, lx1, ly1);
-      const cells = plan.lanes.flatMap((l) => l.cells);
-      const conv = new Set(plan.converts);
+      // 大通りの横でつなぐ道路のマスも、つなぎ直すマスとして見せる
+      const sideJ = (plan.sideJoins ?? []).map((q) => q[0]);
+      const cells = [...plan.lanes.flatMap((l) => l.cells), ...sideJ];
+      const conv = new Set([...plan.converts, ...sideJ]);
       const upper = new Set(plan.lanes.flatMap((l) => l.cells.filter((_, k) => l.levels[k] === 1)));
       pv.setTiles(g, cells, (i) =>
         plan.bad.has(i) ? 0xe5534b : conv.has(i) ? 0xffb347 : upper.has(i) ? 0xb9a6ff : plan.deck.has(i) ? 0x6fc3ff : type === RoadType.Street ? 0xcfd6dc : 0xffffff,
@@ -282,7 +284,11 @@ export class ToolController {
         pv.setPath(g, plan.path.cells);
         if (plan.path.cells.length < 2) return { text: 'ドラッグして道路を引く', bad: false };
       }
-      const extra = plan.bridgeCells ? `（橋 ${plan.bridgeCells} マス）` : '';
+      let extra = plan.bridgeCells ? `（橋 ${plan.bridgeCells} マス）` : '';
+      // 端をつなぎ先へ寄せたときは、どうつなぐかを書き添える
+      const kinds = [plan.startKind, plan.endKind];
+      const join = kinds.includes('tee') ? 'T字でつなぎます' : kinds.includes('avenue') ? '続けてつなぎます' : kinds.includes('road') ? '道路につなぎます' : sideJ.length ? '横の道路もつなぎます' : '';
+      if (join) extra += `（${join}）`;
       return plan.ok ? { text: `${yen(plan.cost)}${extra}`, bad: false } : { text: plan.reason || '引けません', bad: true };
     }
     if (t.startsWith('line:') && d.line) {

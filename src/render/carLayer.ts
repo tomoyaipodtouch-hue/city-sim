@@ -84,6 +84,7 @@ interface Car extends Cell {
   // 歩く人のこのマスの道すじ：入口 S、角 K、出口 E、角の丸みの半径 r（負ならまっすぐ）、S から丸みの始まりまで、丸みの長さ、入る向き、出る向き
   wg?: number[];
   wl?: number; // 歩く人：このマスの道すじの長さ（m）
+  wq?: [number, number]; // 歩く人：次のマスの道すじの入口（大通りと道路の広がるつなぎ目を通るとき）
 }
 
 // 走る場所：道路（車・トラック・バス）、歩道、線路（鉄道・高架鉄道・モノレール・地下鉄）
@@ -370,16 +371,27 @@ export class CarLayer {
   // 大通りのマスごとの、中央分離帯のある向き（交差点のマス・分からないマスは -1）と、大通りの交差点のマスの印
   private avMed = new Int8Array(0);
   private avJct = new Uint8Array(0);
+  // 両方向の道路のマスが、大通りの車線のマスへ斜めにつながる向き（道路が大通りの幅へ広がるつなぎ目）。ほかは -1
+  private avTap = new Int8Array(0);
   private scanAvenues(g: Grid) {
     const N = g.n * g.n;
     if (this.avMed.length !== N) {
       this.avMed = new Int8Array(N);
       this.avJct = new Uint8Array(N);
+      this.avTap = new Int8Array(N);
     }
-    const med = this.avMed.fill(-1), jct = this.avJct.fill(0);
+    const med = this.avMed.fill(-1), jct = this.avJct.fill(0), tap = this.avTap.fill(-1);
     const list: number[] = [];
     for (let i = 0; i < N; i++) {
-      if (g.road[i] !== RoadType.Avenue) continue;
+      const t = g.road[i];
+      if (t && t !== RoadType.Avenue && !isHighway(t) && t !== RoadType.Ramp && !ROADS[t]?.oneWay && CarLayer.arms(g.conn[i]) === 3) {
+        // まっすぐな2本の腕と、大通りの車線への斜めの腕
+        const m = g.conn[i], x = i % g.n, y = (i / g.n) | 0;
+        const axis = (m & 0x11) === 0x11 || (m & 0x44) === 0x44;
+        for (const d of [1, 3, 5, 7])
+          if (axis && m & (1 << d) && g.inb(x + DX[d], y + DY[d]) && g.road[i + DY[d] * g.n + DX[d]] === RoadType.Avenue) tap[i] = d;
+      }
+      if (t !== RoadType.Avenue) continue;
       if (CarLayer.arms(g.conn[i]) >= 3) {
         jct[i] = 1;
         list.push(i);
@@ -468,6 +480,7 @@ export class CarLayer {
       q = nq;
     }
     // 出てきたときは、はじめから歩く側にいる
+    if (spawn) c.wq = undefined;
     if (spawn || c.wb === undefined) c.wa = (this.walkSide(c.from, c.din, c.d) || this.jctSide(c.from, c.din) || need || (c.lane ? 1 : -1)) * this.walkMag(c.from, c);
     else c.wa = c.wb;
     const cur = Math.sign(c.wa) || 1;
@@ -480,6 +493,7 @@ export class CarLayer {
   // まっすぐ進むとき（道路の反対側へ渡るときも）・角がうまく決まらないときは、S から E へまっすぐ。
   // 交差点でない曲がり角（なめらかなカーブの道路・大通りの行き止まりの転回場）の外側は、道路と同じカーブに沿う（角を歩道の外へはみ出さない）
   private walkPath(c: Car) {
+    if (this.walkTaper(c)) return;
     const g = this.grid!, n = g.n, cx = ((c.from % n) + 0.5) * CELL, cz = (((c.from / n) | 0) + 0.5) * CELL;
     const al = Math.hypot(DX[c.din], DY[c.din]), bl = Math.hypot(DX[c.d], DY[c.d]);
     const ux = DX[c.din] / al, uz = DY[c.din] / al, vx = DX[c.d] / bl, vz = DY[c.d] / bl;
@@ -523,6 +537,77 @@ export class CarLayer {
       }
     }
     c.wl = Math.max(0.5, len);
+  }
+
+  // 大通りの車線の端と両方向の道路のつなぎ目（道路のマス T が、大通りの車線のマス X へ斜めにつながり、T の中で道路が大通りの幅へ広がる）。
+  // 歩く人は、斜めのつなぎを通るときも、X の中はまっすぐ歩き、T の中は広がる道路の縁（歩道）に沿って歩く。扱ったら true
+  private walkTaper(c: Car): boolean {
+    const g = this.grid!, n = g.n, N = this.avTap.length;
+    if (c.from >= N || c.to >= N) return false;
+    // マス i を向き dir に進むときの、入口（end = -1）か出口（end = 1）の辺の上で、横の位置 w の点
+    const edge = (i: number, dir: number, w: number, end: number): [number, number] => {
+      const l = Math.hypot(DX[dir], DY[dir]);
+      return [((i % n) + 0.5) * CELL + DX[dir] * CELL * 0.5 * end - (DY[dir] / l) * w, (((i / n) | 0) + 0.5) * CELL + DY[dir] * CELL * 0.5 * end + (DX[dir] / l) * w];
+    };
+    const W = c.wg ?? (c.wg = new Array(13).fill(0));
+    const set = (S: [number, number], E: [number, number], ax: number) => {
+      W[0] = S[0]; W[1] = S[1]; W[4] = E[0]; W[5] = E[1];
+      if (ax < 0) {
+        W[6] = -1;
+        c.wl = Math.max(0.5, Math.hypot(E[0] - S[0], E[1] - S[1]));
+      } else {
+        // 道に沿ってまっすぐ進みながら、横へはなめらかに移る（広がる道路の縁と同じ形）。
+        // 同じ辺へもどる（折り返して道路を渡る）ときは、T の中へ 5m 入って渡る（大通りの車線の端の上を歩かないように）
+        W[6] = -3; W[9] = DX[ax]; W[10] = DY[ax];
+        const al = Math.hypot(DX[ax], DY[ax]), along = ((E[0] - S[0]) * DX[ax] + (E[1] - S[1]) * DY[ax]) / al;
+        const tx = ((c.from % n) + 0.5) * CELL - S[0], tz = (((c.from / n) | 0) + 0.5) * CELL - S[1];
+        W[11] = Math.abs(along) < 2 ? (tx * DX[ax] + tz * DY[ax] > 0 ? 5 : -5) : 0;
+        c.wl = Math.max(0.5, Math.hypot(Math.hypot(E[0] - S[0], E[1] - S[1]), 2 * W[11]) * 1.06);
+      }
+    };
+    const back = (i: number, d: number) => {
+      const x = (i % n) - DX[d], y = ((i / n) | 0) - DY[d];
+      return g.inb(x, y) ? y * n + x : -1;
+    };
+    const wq = c.wq;
+    c.wq = undefined;
+    // X → T：X の中はまっすぐ、先の辺まで
+    if (this.avTap[c.to] === opp(c.d) && !(c.din & 1)) {
+      const side = this.walkSide(c.from, c.din, -1) || Math.sign(c.wa ?? 1) || 1;
+      const E = edge(c.from, c.din, side * this.walkMag(c.from, c), 1);
+      set(edge(c.from, c.din, c.wa!, -1), E, -1);
+      c.wq = E;
+      return true;
+    }
+    const tp = this.avTap[c.from];
+    // T に X から入った：X の先の辺から、広がる道路の縁に沿って T の出口へ
+    if (tp >= 0 && tp === opp(c.din) && !(c.d & 1)) {
+      set(wq ?? edge(c.from, c.din, c.wa!, -1), edge(c.from, c.d, c.wb!, 1), c.d);
+      return true;
+    }
+    // T から X へ出る：広がる道路の縁に沿って、X のまっすぐな入口へ
+    if (tp >= 0 && tp === c.d && !(c.din & 1)) {
+      const X = c.to;
+      let a = -1;
+      const nq = c.wp?.[0];
+      if (nq && !(nq[1] & 1)) a = nq[1];
+      else for (const d of [0, 2, 4, 6]) if (g.conn[X] & (1 << d)) a = d;
+      if (a < 0) return false;
+      const side = this.walkSide(X, a, -1) || 1;
+      const E = edge(X, a, side * this.walkMag(X, c), -1);
+      set(edge(c.from, c.din, c.wa!, -1), E, c.din);
+      c.wq = E;
+      return true;
+    }
+    // X に T から入った：X の入口（まっすぐな向きの辺）から、まっすぐ
+    if (c.din & 1 && !(c.d & 1) && wq) {
+      const T = back(c.from, c.din);
+      if (T >= 0 && this.avTap[T] === c.din) {
+        set(wq, edge(c.from, c.d, c.wb!, 1), -1);
+        return true;
+      }
+    }
+    return false;
   }
 
   // 歩く人のカーブの道すじ（walkPath の W[6] = -2）の、u（0..1）の位置と向き
@@ -1331,11 +1416,28 @@ export class CarLayer {
           const lb = laneOf(c), me = f.halfLen;
           let gap = Infinity;
           for (const o of lanes.get((c.from * 8 + c.d) * 2 + lb) ?? []) if (o.c !== c && o.t > c.t) gap = Math.min(gap, (o.t - c.t) * len - o.r - me);
+          // 大通りの交差点のまとまりの中では、同じ向きから同じマスに入って、まだ曲がりきっていない車も前の車とみなす
+          const inBox = (i: number) => i < this.avJct.length && this.avJct[i] === 1;
+          if (inBox(c.from))
+            for (let d = 0; d < 8; d++) {
+              if (d === c.d) continue;
+              for (const o of lanes.get((c.from * 8 + d) * 2 + lb) ?? []) if (o.c !== c && o.c.din === c.din && o.t > c.t && o.t < 0.6) gap = Math.min(gap, (o.t - c.t) * len - o.r - me);
+            }
+          // 次のマスが大通りの交差点のまとまりの中なら、同じ向きへ出ていく車と、同じ向きから入ってまだ曲がりきっていない車だけを前の車とみなす
+          // （横切る車や曲がる車を待つと、まとまりの中で車がおたがいに待ち合って輪になり、動かなくなる）
+          const box = inBox(c.to), ex = c.nx?.[1] ?? c.d;
           if (gap === Infinity)
             for (let d = 0; d < 8; d++) {
               if (d === opp(c.d)) continue;
-              for (const o of lanes.get((c.to * 8 + d) * 2 + lb) ?? []) if (o.c !== c) gap = Math.min(gap, (1 - c.t) * len + o.t * o.L - o.r - me);
+              for (const o of lanes.get((c.to * 8 + d) * 2 + lb) ?? [])
+                if (o.c !== c && (!box || d === ex || (o.c.din === c.d && o.t < 0.6))) gap = Math.min(gap, (1 - c.t) * len + o.t * o.L - o.r - me);
             }
+          // まとまりの入口：最初のマスがもう車でいっぱい（3台以上）なら、入らずに手前で待つ（交差点の中で詰まらないように）
+          if (box && !inBox(c.from)) {
+            let k = 0;
+            for (let d = 0; d < 16; d++) k += lanes.get(c.to * 16 + d)?.length ?? 0;
+            if (k >= 3) gap = Math.min(gap, (1 - c.t) * len - me + 1.5);
+          }
           const room = Math.max(0, gap - 1.5);
           if (room < adv * len) {
             // 長く詰まったら（交差点で行き詰まらないように）そのまま進む
@@ -1442,6 +1544,16 @@ export class CarLayer {
             z = q[1];
             tx = q[2];
             tz = q[3];
+          } else if (W[6] === -3) {
+            // 広がる道路の縁：道に沿う分はまっすぐ、横の分はなめらかに
+            const ax = W[9], az = W[10], al = Math.hypot(ax, az) || 1, ux = ax / al, uz = az / al;
+            const qx = W[4] - W[0], qz = W[5] - W[1], along = qx * ux + qz * uz, lx = qx - ux * along, lz = qz - uz * along;
+            const u = c.t, e = u * u * (3 - 2 * u), de = 6 * u * (1 - u), b = W[11] * Math.sin(Math.PI * u), db = W[11] * Math.PI * Math.cos(Math.PI * u);
+            x = W[0] + ux * (along * u + b) + lx * e;
+            z = W[1] + uz * (along * u + b) + lz * e;
+            const dx = ux * (along + db) + lx * de, dz = uz * (along + db) + lz * de, dl = Math.hypot(dx, dz) || 1;
+            tx = dx / dl;
+            tz = dz / dl;
           } else if (W[6] < 0) {
             const ex = W[4] - W[0], ez = W[5] - W[1], el = Math.hypot(ex, ez) || 1;
             x = W[0] + ex * c.t;

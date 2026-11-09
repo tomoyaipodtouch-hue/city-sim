@@ -70,6 +70,10 @@ export interface RoadPlan {
   bridgeCells: number;
   centre?: [number, number][]; // 大通りの中心線（格子点の折れ線）。プレビュー用
   unlinks?: [number, number][]; // 取り除く既存の折り返し（from → to）。大通りの続きを引いたとき
+  // 大通りの横の両方向の道路を、近い車線と反対車線の両方につなぐ（T字と同じ）。[道路のマス, 近い車線, 反対車線, 道路 → 車線の向き]
+  sideJoins?: [number, number, number, number][];
+  startKind?: string; // 大通りの端のつなぎ方（'avenue' 続き、'tee' T字、'road' 道路）。プレビューの説明用
+  endKind?: string;
 }
 
 // 斜めの接続が、既存の逆向きの斜めの接続と交差するか
@@ -153,8 +157,66 @@ export function planRoad(g: Grid, path: LinePath, type: RoadType): RoadPlan {
   return finishRoadPlan(g, path, lanes, type, bad, reasons, uturns);
 }
 
-// 車線が決まったあとの計画（費用、階層、橋、勾配、地形）。pairDeck = 大通りの2本の車線で共通の橋の高さ
+// 車線が決まったあとの計画（費用、階層、橋、勾配、地形）。pairDeck = 大通りの2本の車線で共通の橋の高さ。
+// 橋の高さは岸の道路の高さから決めるが、坂をならしたあとの岸の道路が橋より高くなったときは（斜めの橋の急な岸など）、
+// 橋をその高さまで上げて計画し直す（橋と岸の間に段ができたり、岸の地面が床版を突きぬけたりしないように）
 function finishRoadPlan(
+  g: Grid, path: LinePath, lanes: Lane[], type: RoadType, bad: Set<number>, reasons: string[], uturns: [number, number][],
+  pairDeck?: Map<number, number>, extra?: Partial<RoadPlan>,
+): RoadPlan {
+  const bad0 = new Set(bad), reasons0 = [...reasons];
+  let plan = finishRoadPlanOnce(g, path, lanes, type, bad, reasons, uturns, pairDeck, extra);
+  if (!plan.ok || !plan.deck.size) return plan;
+  // 橋を上げると岸の坂のならし方も変わるので、高さが落ち着くまで（3回まで）
+  for (let k = 0; k < 3; k++) {
+    const raised = raiseDecks(g, plan);
+    if (!raised) break;
+    const fresh = lanes.map((l) => ({ cells: l.cells, dirs: l.dirs, oneWay: l.oneWay, levels: [] }));
+    const again = finishRoadPlanOnce(g, path, fresh, type, new Set(bad0), [...reasons0], uturns, raised, extra);
+    if (!again.ok) break;
+    plan = again;
+  }
+  return plan;
+}
+
+// 橋（つながった床版のマス）ごとに、岸の道路の頂点（橋のマスと岸のマスの両方の角）の、ならしたあとの高さを調べる。
+// 橋より 0.3m 以上高ければ、その橋を岸の高さまで上げた高さの表を返す（上げなくてよければ null）。すでにある橋は変えない
+function raiseDecks(g: Grid, plan: RoadPlan): Map<number, number> | null {
+  const n = g.n, V = n + 1;
+  const deck = plan.deck;
+  const laneCells = new Set(plan.lanes.flatMap((l) => l.cells.filter((_, k) => l.levels[k] === 0)));
+  const corners = (c: number) => {
+    const x = c % n, y = (c / n) | 0;
+    return [y * V + x, y * V + x + 1, (y + 1) * V + x, (y + 1) * V + x + 1];
+  };
+  // 岸の道路のマスの角
+  const shore = new Set<number>();
+  for (const c of laneCells) if (!deck.has(c)) for (const v of corners(c)) shore.add(v);
+  const out = new Map(deck);
+  const seen = new Set<number>();
+  let changed = false;
+  for (const [c0, h0] of deck) {
+    if (seen.has(c0)) continue;
+    const comp = [c0];
+    seen.add(c0);
+    for (let q = 0; q < comp.length; q++)
+      for (let d = 0; d < 8; d++) {
+        const j = nb(g, comp[q], d);
+        if (j >= 0 && deck.has(j) && !seen.has(j)) { seen.add(j); comp.push(j); }
+      }
+    if (comp.some((c) => g.deck[c] > 0)) continue;
+    let top = -Infinity;
+    for (const c of comp) for (const v of corners(c)) if (shore.has(v)) top = Math.max(top, plan.vertexH.get(v) ?? g.heights[v]);
+    // 上げすぎない（大きな段は、ほかの理由。反対の岸の坂がきつくなりすぎる）
+    if (top > h0 + 0.3 && top < h0 + 6) {
+      for (const c of comp) out.set(c, top);
+      changed = true;
+    }
+  }
+  return changed ? out : null;
+}
+
+function finishRoadPlanOnce(
   g: Grid, path: LinePath, lanes: Lane[], type: RoadType, bad: Set<number>, reasons: string[], uturns: [number, number][],
   pairDeck?: Map<number, number>, extra?: Partial<RoadPlan>,
 ): RoadPlan {
@@ -508,6 +570,11 @@ export function applyRoad(g: Grid, plan: RoadPlan) {
       const comes = ya >= 0 && g.road[ya] === RoadType.Avenue && (g.flow[ya] & (1 << opp(e.a))) !== 0;
       if (goes || comes) unlinkFlow(g, e.X, e.Y);
     }
+  }
+  // 横の道路（道路をなぞって大通りにしたときの交わる道、大通りに突き当たっていた行き止まり）を、2本の車線につなぐ
+  for (const [s, c, f, d] of plan.sideJoins ?? []) {
+    link(g, s, 0, c, 0, d, false);
+    link(g, c, 0, f, 0, d, false);
   }
   // 大通りの端に、両方向の道路が続く場合のつなぎ目
   linkAvenueEnds(g, plan.lanes.flatMap((l) => [l.cells[0], l.cells[l.cells.length - 1]]));
@@ -1176,29 +1243,54 @@ export function flattenRect(g: Grid, x: number, y: number, w: number, h: number,
 export function regradeApproaches(g: Grid) {
   const n = g.n;
   g.lift.fill(0);
+  // 上空のマス c から向き d へ、上空の道路が終わる（地上へ降りる）か
+  const endAt = (c: number, d: number) => {
+    const x = c % n, y = (c / n) | 0;
+    if (!(g.conn1[c] & (1 << d)) || !g.inb(x + DX[d], y + DY[d])) return false;
+    return g.arriveLevel(1, (y + DY[d]) * n + x + DX[d], d) !== 1;
+  };
+  // まっすぐ続いている地上の道路のマスを、最大3マスまで探す
+  const runOf = (c: number, d: number) => {
+    const x = c % n, y = (c / n) | 0;
+    const run: number[] = [];
+    for (let k = 1; k <= 3; k++) {
+      const ax = x + DX[d] * k, ay = y + DY[d] * k;
+      if (!g.inb(ax, ay)) break;
+      const a = ay * n + ax;
+      const straight = (1 << d) | (1 << opp(d));
+      if (!g.road[a] || g.up[a] || g.deck[a] > 0) break;
+      if (k === 1 ? (g.conn[a] & ~straight) !== 0 : g.conn[a] !== straight) break;
+      run.push(a);
+    }
+    return run;
+  };
   for (let c = 0; c < n * n; c++) {
     const u = g.up[c];
     if (!u || isHighway(u) || u === RoadType.Ramp) continue;
     const H = g.upH[c];
     const x = c % n, y = (c / n) | 0;
     for (let d = 0; d < 8; d++) {
-      if (!(g.conn1[c] & (1 << d))) continue;
-      const j = (y + DY[d]) * n + (x + DX[d]);
-      if (!g.inb(x + DX[d], y + DY[d]) || g.arriveLevel(1, j, d) === 1) continue;
-      // まっすぐ続いている地上の道路のマスを、最大3マスまで探す
-      const run: number[] = [];
-      for (let k = 1; k <= 3; k++) {
-        const ax = x + DX[d] * k, ay = y + DY[d] * k;
-        if (!g.inb(ax, ay)) break;
-        const a = ay * n + ax;
-        const straight = (1 << d) | (1 << opp(d));
-        if (!g.road[a] || g.up[a] || g.deck[a] > 0) break;
-        if (k === 1 ? (g.conn[a] & ~straight) !== 0 : g.conn[a] !== straight) break;
-        run.push(a);
+      if (!endAt(c, d)) continue;
+      const run = runOf(c, d);
+      // 坂の割合（k 番目のマス）：ふつうは上空のマスから地面まで、マスごとに同じだけ下げる
+      let frac = (k: number) => 1 - (k + 1) / (run.length + 1);
+      if (u === RoadType.Avenue && isDiag(d)) {
+        // 斜めの大通り：2本の車線は道に沿って半マス（約 11m）ずれている。反対車線の坂と、道に沿った同じ位置で同じ高さになるよう、
+        // 2本の車線の坂の始まりと終わりの平均を通る1本の坂にする（位置は半マスの長さを 1 とした、上空のマスの中心からの距離）
+        for (const e of [(d + 1) & 7, (d + 7) & 7, (d + 3) & 7, (d + 5) & 7]) {
+          const tx = x + DX[e], ty = y + DY[e];
+          if (!g.inb(tx, ty)) continue;
+          const c2 = ty * n + tx;
+          if (g.up[c2] !== RoadType.Avenue || !endAt(c2, d)) continue;
+          const s = DX[e] * DX[d] + DY[e] * DY[d]; // 反対車線の上空のマスが、向き d へ ±1 ずれている
+          const run2 = runOf(c2, d);
+          const u0 = s / 2, ug = (2 * (run.length + 1) + s + 2 * (run2.length + 1)) / 2;
+          frac = (k: number) => Math.max(0, Math.min(1, (ug - 2 * (k + 1)) / (ug - u0)));
+          break;
+        }
       }
       run.forEach((a, k) => {
-        const frac = 1 - (k + 1) / (run.length + 1);
-        const rise = (H - g.cellH(a % n, (a / n) | 0)) * frac;
+        const rise = (H - g.cellH(a % n, (a / n) | 0)) * frac(k);
         if (rise > g.lift[a]) g.lift[a] = rise;
       });
     }
@@ -1961,7 +2053,8 @@ export function planAvenue(g: Grid, x0: number, y0: number, x1: number, y1: numb
       const d = ds[Math.min(k, ds.length - 1)];
       if (d >= 0 && g.flow[c] & (1 << opp(d)) && !(g.flow[c] & (1 << d))) {
         bad.add(c);
-        why('反対向きの一方通行の車線と重なっています');
+        // 既存の大通りに平行で、半マスずれている（中心線が大通りの中央にない）
+        why(t === RoadType.Avenue ? '既存の大通りと半分重なっています。緑の中心線を大通りの中央に合わせてください' : '反対向きの一方通行の車線と重なっています');
       }
     }
   // 端の折り返し（つなぎ先がない端だけ。既存の大通りがそのまま続く場合も作らない）
@@ -1990,7 +2083,34 @@ export function planAvenue(g: Grid, x0: number, y0: number, x1: number, y1: numb
   if (ee) unlinks.push([ee.X, ee.Y]);
   const plan = finishRoadPlan(g, { cells: fwd, dirs: fd }, lanes, type, bad, reasons, uturns, pairDeck, { centre, unlinks });
   plan.bridgeCells = Math.ceil(plan.bridgeCells / 2); // 橋の長さ（2本の車線で1枚）
+  plan.startKind = sn.start?.kind;
+  plan.endKind = sn.end?.kind;
+  plan.sideJoins = avenueSideJoins(g, plan);
   return plan;
+}
+
+// 大通りのまっすぐな区間の横で、両方向の道路がすでに車線のマスにつながっているか（道路をなぞって大通りにしたとき）、
+// 行き止まりの先が車線のマスに向いているときは、近い車線と反対車線の両方へつなぐ（あとから道路を突き当てたT字と同じ形）
+function avenueSideJoins(g: Grid, plan: RoadPlan): [number, number, number, number][] {
+  const out: [number, number, number, number][] = [];
+  if (plan.lanes.length !== 2) return out;
+  const laneOf = new Map<number, number>();
+  plan.lanes.forEach((l, li) => l.cells.forEach((c) => laneOf.set(c, li)));
+  plan.lanes.forEach((l, li) =>
+    l.cells.forEach((c, k) => {
+      if (l.levels[k] !== 0 || plan.deck.has(c) || plan.bad.has(c)) return;
+      const ds = [k > 0 ? l.dirs[k - 1] : -1, k < l.dirs.length ? l.dirs[k] : -1].filter((d) => d >= 0);
+      if (!ds.length || ds.some((d) => isDiag(d) || d !== ds[0])) return;
+      for (const d of [(ds[0] + 2) & 7, (ds[0] + 6) & 7]) {
+        const s = nb(g, c, d), f = nb(g, c, opp(d));
+        if (s < 0 || f < 0 || laneOf.get(f) !== 1 - li || laneOf.has(s)) continue;
+        if (!twoWayLocal(g.road[s]) || g.up[s] || g.deck[s] > 0) continue;
+        if (!(g.conn[s] & (1 << opp(d))) && roadEndDir(g, s) !== opp(d)) continue;
+        out.push([s, c, f, opp(d)]);
+      }
+    }),
+  );
+  return out;
 }
 
 // 道路のコマンドの計画（プレビューと実行で同じものを使う）。大通りは格子点、それ以外はマスの座標
