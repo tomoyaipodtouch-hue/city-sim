@@ -3,8 +3,9 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Grid } from '../sim/grid';
 import { CELL, DX, DY } from '../sim/constants';
-import { ROADS, RoadType } from '../sim/defs';
+import { ROADS, RoadType, isUrbanElevated } from '../sim/defs';
 import { AV_W, ROAD_LIFT, avLampBlock, avenueMedianDir, inRegion, junctionLamps, junctionPools } from './roadLayer';
+import { findURamps, urampAt, UR_END, UR_HALF } from './uramp';
 
 // soft = 街灯の光：中心が明るく、外へ長くうすく消える（寄ったとき、ふちのはっきりした円盤に見えないように）
 function glowTexture(soft = false) {
@@ -115,6 +116,27 @@ export class StreetLights {
   rebuild(g: Grid) {
     const n = g.n, N = n * n;
     const lamp: number[] = [], pool: number[] = [], poles: number[] = [];
+    // 都市高速のランプ（1×5マス）は、描いた曲線の外側の欄干の上に立てる（マスごとには立てない）
+    const uramps = findURamps(g, ROAD_LIFT);
+    const urCells = new Set<number>();
+    const urSide = new Map<number, number[]>(); // ランプが分かれる本線のマス：ランプのある側（横向き）
+    for (const U of uramps) {
+      U.cells.forEach((c, k) => urCells.add((U.level && k !== 2 ? N : 0) + c));
+      for (const k of [0, 1, 5, 6]) {
+        const nd = U.level * N + U.hw[k];
+        (urSide.get(nd) ?? urSide.set(nd, []).get(nd)!).push(U.sx, U.sz);
+      }
+      for (const s of [-(UR_END - 26), UR_END - 26]) {
+        const P = urampAt(U, s);
+        let nx = -P.tz, nz = P.tx;
+        if (nx * U.sx + nz * U.sz < 0) { nx = -nx; nz = -nz; }
+        const off = UR_HALF + 0.12, cx = P.x + nx * off, cz = P.z + nz * off;
+        const base = P.h + (U.level ? 0.9 : 0.6);
+        lamp.push(cx - nx * 2.0, base + 7.2, cz - nz * 2.0);
+        pool.push(cx - nx * 2.6, P.h + 0.05, cz - nz * 2.6, 11);
+        poles.push(cx, base, cz, Math.atan2(nz, -nx));
+      }
+    }
     for (let node = 0; node < 2 * N; node++) {
       const level = node >= N ? 1 : 0;
       const i = node - level * N;
@@ -153,22 +175,31 @@ export class StreetLights {
         continue;
       }
       // 1マスおきに、左右交互に立てる
-      if ((x + y) & 1) continue;
+      if ((x + y) & 1 || urCells.has(node)) continue;
       let d = 0;
       while (d < 8 && !(m & (1 << d))) d++;
       if (d === 8) d = 0;
       let px = -DY[d], pz = DX[d];
       const l = Math.hypot(px, pz) || 1;
-      const side = x & 1 ? -1 : 1;
-      const off = (ROADS[t].width / 2 + 0.6) * side;
+      let side = x & 1 ? -1 : 1;
+      // 都市高速の高架は、細い欄干の上に立てる。ランプが分かれる側（欄干のない所）は避ける
+      const via = level === 1 && isUrbanElevated(t);
+      const rs = urSide.get(node);
+      if (rs) {
+        const toward = (sg: number) => rs.some((_, q) => q % 2 === 0 && (px * rs[q] + pz * rs[q + 1]) * sg > 0);
+        if (toward(side)) side = -side;
+        if (toward(side)) continue;
+      }
+      const off = (via ? ROADS[t].width / 2 + 0.12 : ROADS[t].width / 2 + 0.6) * side;
+      const hb = via ? h + ROAD_LIFT + 0.9 : h;
       px = (px / l) * off;
       pz = (pz / l) * off;
       const cx = (x + 0.5) * CELL + px, cz = (y + 0.5) * CELL + pz;
       // 腕は道路の中心の向き
       const dl = Math.hypot(px, pz) || 1, dx = -px / dl, dz = -pz / dl;
-      lamp.push(cx + dx * 2.0, h + 7.2, cz + dz * 2.0);
+      lamp.push(cx + dx * 2.0, hb + 7.2, cz + dz * 2.0);
       pool.push(cx - px * 0.6, h + 0.25, cz - pz * 0.6, 11);
-      poles.push(cx, h, cz, Math.atan2(-dz, dx));
+      poles.push(cx, hb, cz, Math.atan2(-dz, dx));
     }
     // 大通りの交差点の角の街灯（道路の層が、交差点を作るときに置き場所を決める）
     for (let k = 0; k + 5 < junctionLamps.length; k += 6) {

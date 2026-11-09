@@ -9,6 +9,7 @@ import { RailLayer, TRACK_GAP } from './railLayer';
 import { isUrbanHighway, urbanTurnOk } from '../sim/traffic';
 import { ROAD_LIFT, SIG_STOP, avenueMedianDir, drawWidth } from './roadLayer';
 import { findTurnbacks, Turnback, Island, islandSpread, ISLAND_GAP } from './turnback';
+import { findURamps, urampAt, urampH, urampS, urampSegs, urKey, URSeg, UPt } from './uramp';
 import { BOGIE, boxTruck, cityBus, garbageTruck, TRAIN_SPEC, TrainKind, hatchback, kei, minivan, person, pickup, sedan, suv, taxi, tractor, trailerBox, trailerTank, trainCar, vc } from './vehicles';
 import { createVehicleMaterial, vehicleUniforms } from './vehicleMaterial';
 
@@ -219,6 +220,8 @@ export class CarLayer {
   private pt = { x: 0, z: 0, h: 0, tx: 0, tz: 1 };
   private ptNode = 0; // pt があるマスのノード
   private ptCell: Cell | null = null; // pt があるマス
+  private urSegs = new Map<number, URSeg>(); // 都市高速のランプの、描いた曲線の上を走るマス
+  private urPt: UPt = { x: 0, z: 0, h: 0, tx: 0, tz: 1, o: 0 };
   enabled = true;
   showSubway = false;
   viewDist = 500;
@@ -733,6 +736,7 @@ export class CarLayer {
   setData(g: Grid, traffic: Float32Array, cong: Float32Array, freight: Float32Array, riders?: Float32Array, garbage?: Uint8Array, garbageLeft?: Uint8Array) {
     this.grid = g;
     this.scanAvenues(g);
+    this.urSegs = urampSegs(g, findURamps(g, ROAD_LIFT));
     this.traffic = traffic;
     this.cong = cong;
     // 道路が変わったかもしれないので、先に決めた行き先は決め直す
@@ -1282,6 +1286,18 @@ export class CarLayer {
     const tl = Math.hypot(tx, tz) || 1;
     P.tx = tx / tl;
     P.tz = tz / tl;
+    // 都市高速のランプ：道路の層が描いた曲線の上を走る（真ん中のマスで一般道へ曲がるときは、高さだけ）
+    if (f.track === 'road' && this.urSegs.size) {
+      const u = this.urSegs.get(urKey(c.from, c.din, c.d));
+      if (u && u.s0 === u.s0) {
+        const q = urampAt(u.U, u.s0 + (u.s1 - u.s0) * t, this.urPt);
+        P.x = q.x;
+        P.z = q.z;
+        P.h = q.h;
+        P.tx = q.tx;
+        P.tz = q.tz;
+      } else if (u) P.h = urampH(u.U, urampS(u.U, P.x, P.z));
+    }
   }
 
   // 道に沿って back m だけ後ろの点（トレーラーの連結部や車輪）
@@ -1694,6 +1710,8 @@ export class CarLayer {
         // 右側通行。一方通行・大通り・高速道路は2車線を使い分ける（大通りは 3.25m の車線の中心）。電車は複線の、進む向きの右側の線路を走る
         const rd = line || walk ? def : ROADS[rt] || ROADS[1];
         let lane = walk ? (def.width / 2 + 0.9) * (c.lane ? 1 : -1) : line ? TRACK_GAP : rd.oneWay ? (c.lane ? 1 : -1) * (rt === RoadType.Avenue ? AV_LANE : rd.width * 0.2) : (rd.width / 2) * 0.48;
+        // 都市高速のランプでは、描いた曲線（車道の中心）を走る
+        if (f.track === 'road' && this.urSegs.get(urKey(c.from, c.din, c.d))?.lane0) lane = 0;
         // バス停で止まるバスは、車道の端の停車スペース（縁石から 0.4〜2.8m）に寄せる
         if (stopHere()) lane = drawWidth(g.road[c.from]) / 2 - 1.6;
         if (!walk && !line) {
