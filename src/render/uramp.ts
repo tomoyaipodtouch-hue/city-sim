@@ -147,6 +147,15 @@ export function urampSegs(g: Grid, list: URamp[]) {
     put(nd(cells[3], 3), a, a, 8, 24);
     put(nd(cells[4], 4), a, dIn, 24, 40);
     put(level * N + hw[6], dIn, a, 40, UR_END, false);
+    // 途中のマスに出てきた車（入る向きと出る向きが同じ）も、そのマスの範囲の曲線の上
+    [-40, -24, -8, 8, 24].forEach((s0, k) => {
+      if (k === 2) return;
+      for (let din = 0; din < 8; din++)
+        for (let d = 0; d < 8; d++) {
+          const key = urKey(nd(cells[k], k), din, d);
+          if (!m.has(key)) m.set(key, { U, s0, s1: s0 + 16, lane0: true });
+        }
+    });
     // 真ん中のマスで一般道へ出入りする（位置はふつうのまま、高さだけ）
     for (let din = 0; din < 8; din++)
       for (let d = 0; d < 8; d++) {

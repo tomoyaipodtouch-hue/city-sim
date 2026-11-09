@@ -45,12 +45,12 @@ const COL = {
   asphaltStreet: new THREE.Color(0x5a5c5f),
   slab: new THREE.Color(0x6b6a66), // コンクリートの路面（高速道路）
   // 都市高速の高架：明るい欄干と床版の縁、陰になる暗い下面と桁、擁壁
-  parapet: new THREE.Color(0xd3d0c8),
-  groove: new THREE.Color(0x77756f),
-  soffit: new THREE.Color(0x85837d),
-  girder: new THREE.Color(0x96948d),
-  pier: new THREE.Color(0xbcb8af),
-  wall: new THREE.Color(0xbfbbb2),
+  parapet: new THREE.Color(0xd9d6ce),
+  groove: new THREE.Color(0x66645f),
+  soffit: new THREE.Color(0x6a6863),
+  girder: new THREE.Color(0x77756f),
+  pier: new THREE.Color(0xb8b4ab),
+  wall: new THREE.Color(0xaaa69d),
   footing: new THREE.Color(0x8e8a80),
   grass: new THREE.Color(0x66843f), // 分離帯の芝と土
   hedge: new THREE.Color(0x3d6a2c), // 分離帯の低い植え込み（サツキなど）
@@ -1462,11 +1462,11 @@ export class RoadLayer {
       }
     };
     // ---- 都市高速の高架の断面 ----
-    // 路面の縁に細い欄干（高さ 0.9m、厚さ 0.25m）と、そのまま下に続く床版の縁（路面から 0.42m）。境に小さな水切りの溝。
+    // 路面の縁に細い欄干（高さ 0.9m、厚さ 0.25m）と、そのまま下に続く床版の縁（路面から 0.38m）。境に小さな水切りの溝。
     // 床版は 1.3〜1.5m 張り出し、その奥に下すぼまりの桁（側面は 18° の傾き）。下面と桁は暗くして、陰で薄く見せる。
     // 路面が地面から 2.5m より低いところは、桁の代わりに地面まで擁壁を立てる（桁との境は橋台の面でふさぐ）
     // 頂点は点ごとに共有して、カーブでも面がすき間なくつながるようにする
-    const PAR_H = 0.9, PAR_T = 0.25, FAS = 0.42, WALL_H = 2.5;
+    const PAR_H = 0.9, PAR_T = 0.25, FAS = 0.38, WALL_H = 2.5;
     const VIA_MAIN = { over: 1.5, depth: 1.25 }, VIA_RAMP = { over: 1.3, depth: 1.0 };
     const SL_C = Math.cos((18 * Math.PI) / 180), SL_S = Math.sin((18 * Math.PI) / 180), SL_T = Math.tan((18 * Math.PI) / 180);
     let viaCur = false; // いまのノードは都市高速の高架（欄干と桁を、この断面で描く）
