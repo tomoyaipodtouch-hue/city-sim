@@ -198,7 +198,7 @@ export type CivicId = 'coal' | 'gas' | 'oil' | 'nuclear' | 'nuclear_in' | 'nucle
   | 'ferry_p' | 'ferry_c' | 'seaport' | 'airport_s' | 'airport_l' | 'freight_st'
   | 'police_s' | 'police_l' | 'fire_s' | 'fire_l' | 'clinic' | 'hospital' | 'school_e' | 'school_h' | 'college' | 'library'
   | 'landfill' | 'incinerator' | 'recycling'
-  | 'mayor_house' | 'city_hall' | 'statue' | 'museum' | 'stadium' | 'future_stadium';
+  | 'mayor_house' | 'city_hall' | 'statue' | 'museum' | 'stadium' | 'future_stadium' | 'ciq';
 
 export interface CivicDef {
   id: CivicId;
@@ -219,6 +219,7 @@ export interface CivicDef {
   portScale?: number; // 港の効果の倍率（大型コンテナターミナルは 3）
   airport?: number; // 空港の規模（1 = 小, 2 = 大）
   freightRail?: boolean; // 貨物駅
+  ciq?: boolean; // CIQ庁舎（半径 radius の工業ゾーンが倉庫業になる）
   service?: ServiceKind; // 公共サービス
   radius?: number; // 効果が届く範囲（マス）
   capacity?: number; // 受け入れ人数（学校の席、病院のベッドなど）／ゴミの処理量（月）
@@ -227,6 +228,9 @@ export interface CivicDef {
   rotate?: boolean; // 細長い施設：道路に面する向きに自動で回す
   desc: string;
 }
+
+// CIQ庁舎の効果の範囲（マス）。施設の四角から、マスの中心まで
+export const CIQ_RADIUS = 20;
 
 export const CIVIC: Record<CivicId, CivicDef> = {
   coal: { id: 'coal', name: '石炭火力発電所', w: 4, h: 4, cost: 12000, upkeep: 220, power: 900, pollution: 30, desc: '安くて発電量が多いが、大気汚染がひどい' },
@@ -281,6 +285,7 @@ export const CIVIC: Record<CivicId, CivicDef> = {
   future_stadium: { id: 'future_stadium', name: '近未来スタジアム', w: 8, h: 8, cost: 60000, upkeep: 500, park: 0.12, reward: true, desc: '記念施設。白い曲面の大きなスタジアム。商業の需要が上がり、市長評価が上がる' },
   stadium: { id: 'stadium', name: 'スタジアム', w: 6, h: 6, cost: 40000, upkeep: 400, park: 0.1, reward: true, desc: '記念施設。商業の需要が上がり、市長評価が上がる' },
   recycling: { id: 'recycling', name: 'リサイクルセンター', w: 3, h: 2, cost: 6000, upkeep: 200, service: 'recycling', capacity: 4000, desc: 'ゴミを月 4,000 減らす' },
+  ciq: { id: 'ciq', name: 'CIQ庁舎', w: 4, h: 3, rotate: true, cost: 20000, upkeep: 200, ciq: true, radius: CIQ_RADIUS, desc: '税関・出入国管理・検疫の庁舎と、コンテナのX線検査場。半径20マスの工業ゾーンが倉庫業になり、大きな倉庫も建つ。古い工場も少しずつ倉庫に建て替わる' },
   freight_st: { id: 'freight_st', name: '貨物駅', w: 3, h: 2, cost: 8000, upkeep: 120, freightRail: true, desc: '線路と道路に接するように置く。線路がマップの端まで続いていれば、トラックの荷物を鉄道で運び、倉庫業の需要が上がる' },
 };
 
@@ -292,6 +297,8 @@ export const LOGI_REACH: Partial<Record<CivicId, { grow: Reach; look: Reach }>> 
   seaport_l: { grow: [1, 20, 48], look: [1, 3, 40] }, // 大型コンテナターミナル
   seaport: { grow: [0.6, 10, 28], look: [0.6, 2, 24] }, // 港
   freight_st: { grow: [0.7, 8, 24], look: [0.7, 2, 20] }, // 貨物駅
+  // CIQ庁舎：半径 CIQ_RADIUS の中はいちばん強く（倉庫業だけが建つ。大きな敷地も）、そのすぐ外で 0 になる。形は港のまわりと同じ並び
+  ciq: { grow: [1, CIQ_RADIUS, CIQ_RADIUS + 2], look: [1, 5, CIQ_RADIUS + 2] },
 };
 type Rect = { type: string; x: number; y: number; w: number; h: number };
 // 点 (cx, cy) から施設の四角までの距離（マス）
