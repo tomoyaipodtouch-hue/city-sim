@@ -4147,8 +4147,8 @@ export function tugBoat(mb: MeshBuilder) {
 // クレーンの位置と高さは propsLayer（トロリーの動き）でも使う
 export const TERMINAL = { boomY: 46, apron: 40, seaRail: 6, landRail: 36, boomOut: 52 };
 export function terminalCranes(W: number): number[] {
-  // 実際のターミナルのように、クレーンどうしは 50m 以上あける（この大きさで 3 基）
-  const n = Math.max(2, Math.min(3, Math.floor(W / 64)));
+  // 実際のターミナルのように、クレーンどうしは 50m 以上あける（岸壁 192m で 3 基、256m で 4 基）
+  const n = Math.max(2, Math.min(4, Math.floor(W / 64)));
   const out: number[] = [];
   for (let k = 0; k < n; k++) out.push(-W / 2 + 22 + ((W - 44) * (k + 0.5)) / n);
   return out;
@@ -4168,12 +4168,345 @@ function strut(mb: MeshBuilder, a: [number, number, number], b: [number, number,
     mb.quad(P(a, s1, s2), P(b, s1, s2), P(b, t1, t2), P(a, t1, t2), col);
   }
 }
+// ---- コンテナターミナルの細部（地面の塗装・汚れ、いろいろなコンテナ、荷役機械）----
+// 地面に貼る凸多角形（[x, z] の並び。回る向きはどちらでもよい）
+function ctFlat(mb: MeshBuilder, pts: [number, number][], y: number, col: THREE.Color) {
+  let a = 0;
+  for (let i = 0; i < pts.length; i++) { const p = pts[i], q = pts[(i + 1) % pts.length]; a += p[0] * q[1] - q[0] * p[1]; }
+  const keep = mb.matOverride;
+  mb.matOverride = MAT.ground;
+  const P = (k: number): [number, number, number] => [pts[k][0], y, pts[k][1]];
+  for (let i = 1; i + 1 < pts.length; i++) {
+    if (a > 0) mb.tri(P(0), P(i + 1), P(i), col);
+    else mb.tri(P(0), P(i), P(i + 1), col);
+  }
+  mb.matOverride = keep;
+}
+// 地面の細い帯（2 点のあいだ、幅 w）
+function ctStrip(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, w: number, y: number, col: THREE.Color) {
+  const dx = x1 - x0, dz = z1 - z0, l = Math.hypot(dx, dz) || 1, nx = (-dz / l) * (w / 2), nz = (dx / l) * (w / 2);
+  ctFlat(mb, [[x0 + nx, z0 + nz], [x1 + nx, z1 + nz], [x1 - nx, z1 - nz], [x0 - nx, z0 - nz]], y, col);
+}
+// 油じみ（ふちがでこぼこした、ひらたいしみ）
+function ctBlob(mb: MeshBuilder, rng: Rng, x: number, z: number, r: number, y: number, col: THREE.Color) {
+  const n = 9, pts: [number, number, number][] = [];
+  const sx = 0.8 + rng.next() * 0.6;
+  for (let k = 0; k < n; k++) {
+    const a = (k / n) * Math.PI * 2, rr = r * (0.55 + rng.next() * 0.55);
+    pts.push([x + Math.cos(a) * rr * sx, y, z + Math.sin(a) * rr]);
+  }
+  const keep = mb.matOverride;
+  mb.matOverride = MAT.ground;
+  for (let k = 0; k < n; k++) mb.tri([x, y, z], pts[(k + 1) % n], pts[k], col);
+  mb.matOverride = keep;
+}
+// タイヤのあと（中心 cx, cz の円弧を 2 本。a0..a1 はラジアン）
+function ctTyreArc(mb: MeshBuilder, cx: number, cz: number, r: number, a0: number, a1: number, y: number, col: THREE.Color) {
+  const n = 7;
+  for (const rr of [r - 1, r + 1]) for (let k = 0; k < n; k++) {
+    const t0 = a0 + ((a1 - a0) * k) / n, t1 = a0 + ((a1 - a0) * (k + 1)) / n;
+    ctStrip(mb, cx + Math.cos(t0) * rr, cz + Math.sin(t0) * rr, cx + Math.cos(t1) * rr, cz + Math.sin(t1) * rr, 0.32, y, col);
+  }
+}
+// 斜線のゼブラ（立入禁止などの区画）。枠線つき
+function ctHatch(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, col: THREE.Color, pitch = 1.6, w = 0.5) {
+  const t = 0.2;
+  mb.ground(x0, z0, x1, z0 + t, y, col);
+  mb.ground(x0, z1 - t, x1, z1, y, col);
+  mb.ground(x0, z0 + t, x0 + t, z1 - t, y, col);
+  mb.ground(x1 - t, z0 + t, x1, z1 - t, y, col);
+  const seg = (c: number): [number, number][] | null => {
+    const xa = Math.max(x0, c - z1), xb = Math.min(x1, c - z0);
+    return xa < xb - 0.05 ? [[xa, c - xa], [xb, c - xb]] : null;
+  };
+  for (let c = x0 + z0 + pitch * 0.5; c + w < x1 + z1; c += pitch) {
+    const A = seg(c), B = seg(c + w);
+    if (A && B) ctFlat(mb, [A[0], A[1], B[1], B[0]], y, col);
+  }
+}
+// 地面に描く文字（7 本の線の字）。左下が (x, z)、字の上は -z の向き
+const CT_SEG: Record<string, string> = {
+  '0': 'abcdef', '1': 'bc', '2': 'abdeg', '3': 'abcdg', '4': 'bcfg', '5': 'acdfg', '6': 'acdefg', '7': 'abc', '8': 'abcdefg', '9': 'abcdfg',
+  A: 'abcefg', B: 'cdefg', C: 'adef', D: 'bcdeg', E: 'adefg', F: 'aefg', G: 'acdef', H: 'bcefg',
+};
+function ctText(mb: MeshBuilder, s: string, x: number, z: number, h: number, y: number, col: THREE.Color) {
+  const w = h * 0.56, t = h * 0.14;
+  let cx = x;
+  for (const ch of s) {
+    const sg = CT_SEG[ch] ?? '';
+    const R = (u0: number, v0: number, u1: number, v1: number) => mb.ground(cx + u0, z - v1, cx + u1, z - v0, y, col);
+    if (sg.includes('a')) R(0, h - t, w, h);
+    if (sg.includes('b')) R(w - t, h / 2, w, h - t);
+    if (sg.includes('c')) R(w - t, t, w, h / 2);
+    if (sg.includes('d')) R(0, 0, w, t);
+    if (sg.includes('e')) R(0, t, t, h / 2);
+    if (sg.includes('f')) R(0, h / 2, t, h - t);
+    if (sg.includes('g')) R(t, h / 2 - t / 2, w - t, h / 2 + t / 2);
+    cx += w + h * 0.3;
+  }
+}
+// コンテナの色：船会社の色に、日焼けと汚れのむら
+const CT_LINES = [0xb5332a, 0x2a5f93, 0x1e7c8c, 0xd08a1e, 0x3f6e3a, 0x7c8288, 0x6b2f2a, 0xe0ddd5, 0x1d3f6e, 0x8a4a9a, 0xc96a24, 0x2f8f6a];
+function ctCol(rng: Rng, hex: number) {
+  const c = new THREE.Color(hex), k = rng.next();
+  c.lerp(new THREE.Color(0x8a8378), k * k * 0.35);
+  return c.multiplyScalar(0.86 + rng.next() * 0.16);
+}
+// コンテナ 1 個（波板の金属の模様）
+function ctBox(mb: MeshBuilder, x0: number, y0: number, z0: number, x1: number, z1: number, col: THREE.Color, h = 2.5) {
+  const keep = mb.matOverride;
+  mb.matOverride = MAT.metal;
+  mb.box(x0, y0, z0, x1, y0 + h, z1, col);
+  mb.matOverride = keep;
+}
+// 向きのある箱：alongZ = false なら長さの向き u が x、true なら u が z（v はその横）
+function oBox(mb: MeshBuilder, cx: number, cz: number, alongZ: boolean, u0: number, y0: number, v0: number, u1: number, y1: number, v1: number, col: THREE.Color, pat: number = PAT.none, roof?: THREE.Color) {
+  const ua = Math.min(u0, u1), ub = Math.max(u0, u1), va = Math.min(v0, v1), vb = Math.max(v0, v1);
+  if (alongZ) mb.box(cx + va, y0, cz + ua, cx + vb, y1, cz + ub, col, pat, roof);
+  else mb.box(cx + ua, y0, cz + va, cx + ub, y1, cz + vb, col, pat, roof);
+}
+// x の向きの横倒しの円筒（タンクコンテナの胴）。両端にふた
+function ctCylX(mb: MeshBuilder, xa: number, xb: number, cy: number, cz: number, r: number, seg: number, col: THREE.Color, cap: THREE.Color) {
+  const P = (a: number, x: number): [number, number, number] => [x, cy + Math.cos(a) * r, cz + Math.sin(a) * r];
+  const N = (a: number): [number, number, number] => [0, Math.cos(a), Math.sin(a)];
+  for (let s = 0; s < seg; s++) {
+    const a0 = (s / seg) * Math.PI * 2, a1 = ((s + 1) / seg) * Math.PI * 2;
+    mb.quadN(P(a0, xa), P(a1, xa), P(a1, xb), P(a0, xb), N(a0), N(a1), N(a1), N(a0), col);
+    mb.tri([xb, cy, cz], P(a0, xb), P(a1, xb), cap);
+    mb.tri([xa, cy, cz], P(a1, xa), P(a0, xa), cap);
+  }
+}
+// タンクコンテナ（20 フィートの枠の中に、横倒しのタンク）
+function ctTank(mb: MeshBuilder, x0: number, y0: number, z0: number, frame: THREE.Color, tank: THREE.Color) {
+  const x1 = x0 + 6.06, z1 = z0 + 2.44, h = 2.5, t = 0.16;
+  const keep = mb.matOverride;
+  mb.matOverride = MAT.metal;
+  for (const x of [x0, x1 - t]) for (const z of [z0, z1 - t]) mb.box(x, y0, z, x + t, y0 + h, z + t, frame);
+  for (const y of [y0, y0 + h - t]) {
+    for (const z of [z0, z1 - t]) mb.box(x0 + t, y, z, x1 - t, y + t, z + t, frame);
+    for (const x of [x0, x1 - t]) mb.box(x, y, z0 + t, x + t, y + t, z1 - t, frame);
+  }
+  mb.matOverride = keep;
+  ctCylX(mb, x0 + 0.3, x1 - 0.3, y0 + h / 2, (z0 + z1) / 2, 1.08, 10, tank, tank.clone().multiplyScalar(0.85));
+  mb.box(x0 + 2.6, y0 + h - 0.06, z0 + 0.9, x0 + 3.4, y0 + h + 0.05, z1 - 0.9, frame); // 上の歩み板（マンホール）
+}
+// フラットラック（床と両端の壁だけのコンテナ）。積み荷 kind：0 なし、1 木箱、2 鋼管、3 シートをかけた機械
+function ctFlatRack(mb: MeshBuilder, x0: number, y0: number, z0: number, len: number, col: THREE.Color, kind: number) {
+  const x1 = x0 + len, z1 = z0 + 2.44;
+  ctBox(mb, x0, y0, z0, x1, z1, col, 0.55);
+  ctBox(mb, x0, y0 + 0.55, z0, x0 + 0.3, z1, col, 1.95);
+  ctBox(mb, x1 - 0.3, y0 + 0.55, z0, x1, z1, col, 1.95);
+  const y = y0 + 0.55;
+  if (kind === 1) {
+    mb.box(x0 + 0.8, y, z0 + 0.2, x0 + len * 0.48, y + 1.7, z1 - 0.2, C(0xa8865a));
+    mb.box(x0 + len * 0.52, y, z0 + 0.3, x1 - 0.8, y + 1.3, z1 - 0.3, C(0x9a7a52));
+  } else if (kind === 2) {
+    for (let k = 0; k < 4; k++) mb.box(x0 + 0.5, y + (k >> 1) * 0.55, z0 + 0.25 + (k & 1) * 1.0, x1 - 0.5, y + 0.5 + (k >> 1) * 0.55, z0 + 1.2 + (k & 1) * 1.0, C(0x5b5f63));
+  } else if (kind === 3) {
+    mb.box(x0 + 0.8, y, z0 + 0.15, x1 - 0.8, y + 2.1, z1 - 0.15, C(0x34503f));
+    mb.box(x0 + 1.4, y + 2.1, z0 + 0.5, x1 - 1.4, y + 2.5, z1 - 0.5, C(0x34503f));
+  }
+}
+// 冷凍コンテナ（白）。alongZ = false なら長さが x の向きで、end = +1 なら +x の端に冷凍機（-1 なら -x）。alongZ = true なら z の向き
+function ctReefer(mb: MeshBuilder, rng: Rng, x0: number, y0: number, z0: number, x1: number, z1: number, end: number, alongZ = false) {
+  ctBox(mb, x0, y0, z0, x1, z1, ctCol(rng, rng.next() < 0.8 ? 0xeeeee8 : 0xd8dcd8));
+  const panel = C(0x6a7077), fan = C(0x2c3035);
+  if (!alongZ) {
+    const xe = end > 0 ? x1 : x0;
+    mb.box(Math.min(xe, xe + end * 0.1), y0 + 0.15, z0 + 0.15, Math.max(xe, xe + end * 0.1), y0 + 2.35, z1 - 0.15, panel);
+    mb.box(Math.min(xe, xe + end * 0.14), y0 + 1.2, z0 + 0.5, Math.max(xe, xe + end * 0.14), y0 + 2.0, z0 + 1.3, fan); // ファン
+  } else {
+    const ze = end > 0 ? z1 : z0;
+    mb.box(x0 + 0.15, y0 + 0.15, Math.min(ze, ze + end * 0.1), x1 - 0.15, y0 + 2.35, Math.max(ze, ze + end * 0.1), panel);
+    mb.box(x0 + 0.5, y0 + 1.2, Math.min(ze, ze + end * 0.14), x0 + 1.3, y0 + 2.0, Math.max(ze, ze + end * 0.14), fan);
+  }
+}
+// 冷凍コンテナの電源ラック（長い鉄骨。段ごとに歩廊、上にケーブルの棚、始まりの端に階段）。
+// alongZ = true なら x = c の線にそって z = a..b、false なら z = c の線にそって x = a..b
+function ctReeferRack(mb: MeshBuilder, c: number, a: number, b: number, tiers: number, alongZ = true) {
+  const st = C(0x8d959c), grate = C(0x5d6369), yel = C(0xf2c200);
+  // u = 長さの向き、v = 横の向き
+  const B = (u0: number, y0: number, v0: number, u1: number, y1: number, v1: number, col: THREE.Color, pat: number = PAT.none, roof?: THREE.Color) => {
+    if (alongZ) mb.box(c + v0, y0, u0, c + v1, y1, u1, col, pat, roof);
+    else mb.box(u0, y0, c + v0, u1, y1, c + v1, col, pat, roof);
+  };
+  const P = (u: number, y: number, v: number): [number, number, number] => (alongZ ? [c + v, y, u] : [u, y, c + v]);
+  const keep = mb.matOverride;
+  mb.matOverride = MAT.metal;
+  const n = Math.max(2, Math.round((b - a) / 5));
+  for (let i = 0; i <= n; i++) {
+    const u = a + ((b - a) * i) / n;
+    for (const dv of [-0.85, 0.85]) B(u - 0.12, 0, dv - 0.12, u + 0.12, 9.2, dv + 0.12, st);
+    B(u - 0.1, 8.6, -0.95, u + 0.1, 8.8, 0.95, st);
+    if (i < n) B(u + 1.2, 0, -0.45, u + 2.0, 1.8, 0.45, C(0xb7bec4), PAT.none, C(0x9aa1a7)); // 電源盤
+  }
+  for (let lv = 1; lv < tiers; lv++) {
+    const y = lv * 2.6 + 0.2;
+    B(a, y - 0.15, -0.85, b, y, 0.85, grate);
+    for (const dv of [-0.82, 0.82]) B(a, y + 1.0, dv - 0.03, b, y + 1.08, dv + 0.03, yel);
+  }
+  B(a - 0.3, 8.8, -1.05, b + 0.3, 9.25, 1.05, st); // ケーブルの棚
+  mb.matOverride = keep;
+  // 階段（a の端、地面から 1 段目の歩廊へ）
+  const steps = 8, run = 3.2;
+  for (let i = 0; i < steps; i++) {
+    const u0 = a - run + (run * i) / steps;
+    B(u0, 0, -0.5, u0 + run / steps + 0.02, ((i + 1) * 2.8) / steps, 0.5, grate);
+  }
+  for (const dv of [-0.52, 0.52]) strut(mb, P(a - run, 1.0, dv), P(a, 3.8, dv), 0.04, yel);
+}
+// AGV（無人搬送車。電池で走る低い台車）。中心 (cx, cz)、長さの向き alongZ。load があればコンテナを載せる
+function ctAgv(mb: MeshBuilder, cx: number, cz: number, alongZ: boolean, load: THREE.Color | null) {
+  const body = C(0xe4e7ea), dk = C(0x2a2d31), acc = C(0x2e6da4);
+  const B = (u0: number, y0: number, v0: number, u1: number, y1: number, v1: number, c: THREE.Color, pat: number = PAT.none) => oBox(mb, cx, cz, alongZ, u0, y0, v0, u1, y1, v1, c, pat);
+  const keep = mb.matOverride;
+  mb.matOverride = MAT.metal;
+  B(-7.4, 0.35, -1.5, 7.4, 1.55, 1.5, body);
+  B(-7.4, 0.35, -1.52, 7.4, 0.75, 1.52, acc); // 側面の青い帯（電池の箱）
+  for (const u of [-7.5, 7.5]) B(u - 0.12, 0.3, -1.4, u + 0.12, 1.1, 1.4, dk); // バンパー
+  for (const u of [-5.6, 5.6]) for (const v of [-1.1, 1.1]) B(u - 0.5, 0, v - 0.3, u + 0.5, 0.75, v + 0.3, dk);
+  mb.matOverride = keep;
+  for (const u of [-7.3, 7.3]) for (const v of [-1.35, 1.35]) B(u - 0.12, 1.55, v - 0.12, u + 0.12, 1.75, v + 0.12, C(0xffb020), PAT.glow); // 回転灯
+  if (load) {
+    if (alongZ) ctBox(mb, cx - 1.22, 1.55, cz - 6.1, cx + 1.22, cz + 6.1, load);
+    else ctBox(mb, cx - 6.1, 1.55, cz - 1.22, cx + 6.1, cz + 1.22, load);
+  }
+}
+// 自動のレール式門型クレーン（ARMG / ASC）。x0..x1 のレールの上（z の向きに走る）、中心 z = cz。
+// 白とグレーの門型、上に横行するトロリーと吊り具、脚の下に車輪の台車、横にケーブルリール
+function ctArmg(mb: MeshBuilder, x0: number, x1: number, cz: number, h: number, tx: number, hookY: number, load: THREE.Color | null) {
+  const wh = C(0xeef0f1), gr = C(0x8f979e), dk = C(0x3c434b);
+  const keep = mb.matOverride;
+  mb.matOverride = MAT.metal;
+  for (const x of [x0, x1]) {
+    for (const dz of [-3.4, 3.4]) mb.box(x - 0.45, 1.2, cz + dz - 0.45, x + 0.45, h, cz + dz + 0.45, wh);
+    mb.box(x - 0.6, 0, cz - 4.4, x + 0.6, 1.2, cz + 4.4, dk); // 台車
+    mb.box(x - 0.35, 5, cz - 3.4, x + 0.35, 5.6, cz + 3.4, wh); // 脚のつなぎ
+    strut(mb, [x, 1.4, cz - 3.4], [x, h - 1, cz + 3.4], 0.18, gr);
+  }
+  for (const dz of [-3.4, 3.4]) mb.box(x0 - 0.8, h, cz + dz - 0.7, x1 + 0.8, h + 1.8, cz + dz + 0.7, wh); // 2 本の桁
+  for (const x of [x0, x1]) mb.box(x - 0.8, h, cz - 3.4, x + 0.8, h + 1.8, cz + 3.4, gr);
+  mb.box(x0 - 0.9, h + 1.8, cz - 4.1, x1 + 0.9, h + 2.0, cz - 3.9, gr); // 歩廊
+  // トロリー（機械室）
+  mb.box(tx - 2.6, h + 1.8, cz - 3.0, tx + 2.6, h + 3.6, cz + 3.0, wh, PAT.industrial, C(0xc9ccd1));
+  mb.box(tx - 2.4, hookY, cz - 6.0, tx + 2.4, hookY + 0.4, cz + 6.0, C(0xe0a21a)); // 吊り具
+  for (const dz of [-2.5, 2.5]) mb.box(tx - 0.05, hookY + 0.4, cz + dz - 0.05, tx + 0.05, h + 1.8, cz + dz + 0.05, C(0x30343a));
+  // ケーブルリール（電気で動く）
+  mb.cylinder(x1 + 1.3, cz, 1.0, 3.4, 1.1, 10, gr, gr);
+  mb.box(x1 + 0.4, 1.0, cz - 0.4, x1 + 1.8, 4.6, cz + 0.4, wh);
+  mb.matOverride = keep;
+  if (load) ctBox(mb, tx - 1.22, hookY - 2.5, cz - 6.1, tx + 1.22, cz + 6.1, load);
+  mb.box(x0 - 0.3, h + 2.0, cz - 0.3, x0 + 0.3, h + 2.5, cz + 0.3, C(0xff4040), PAT.glow);
+}
+// 屋上の太陽光パネル（x の向きの列）
+function ctSolar(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number) {
+  const pv = C(0x1d2c44), fr = C(0xb7bec4);
+  const keep = mb.matOverride;
+  mb.matOverride = MAT.none;
+  for (let z = z0; z + 1.8 <= z1; z += 2.6) {
+    mb.quad([x0, y + 0.25, z + 1.8], [x1, y + 0.25, z + 1.8], [x1, y + 0.75, z], [x0, y + 0.75, z], pv);
+    mb.box(x0, y, z + 1.75, x1, y + 0.25, z + 1.85, fr);
+    for (let x = x0; x < x1 - 0.5; x += 5) mb.quad([x, y + 0.26, z + 1.8], [x + 0.06, y + 0.26, z + 1.8], [x + 0.06, y + 0.76, z], [x, y + 0.76, z], fr);
+  }
+  mb.matOverride = keep;
+}
+// 90 度まわした向きで描く（x の向きの部品を z の向きに置く）。中で描いた点 (px, pz) は敷地の (-pz, px) になる
+function ctTurned(mb: MeshBuilder, draw: () => void) {
+  const o = mb.world(0, 0, 0), ex = mb.world(1, 0, 0);
+  const ang = Math.atan2(ex[2] - o[2], ex[0] - o[0]);
+  mb.setTransform(ang + Math.PI / 2, o[0], o[1], o[2]);
+  draw();
+  mb.setTransform(ang, o[0], o[1], o[2]);
+}
+// リーチスタッカー（前に長い腕をのばしてコンテナをつかむ車）。dir = +1 なら +x を向く
+function reachStacker(mb: MeshBuilder, cx: number, cz: number, dir: number, col: THREE.Color, load: THREE.Color | null) {
+  const dk = C(0x26292d);
+  const B = (u0: number, y0: number, v0: number, u1: number, y1: number, v1: number, c: THREE.Color, pat: number = PAT.none) => oBox(mb, cx, cz, false, u0 * dir, y0, v0, u1 * dir, y1, v1, c, pat);
+  const keep = mb.matOverride;
+  mb.matOverride = MAT.metal;
+  B(-3.6, 0.7, -1.8, 3.4, 2.3, 1.8, col);
+  B(-4.3, 0.7, -1.7, -3.2, 3.3, 1.7, C(0x4a4f55)); // 後ろのおもり
+  for (const [u, r] of [[2.4, 0.95], [-2.4, 0.8]] as [number, number][]) for (const v of [-1.85, 1.85]) B(u - r, 0, v - 0.45, u + r, r * 2, v + 0.45, dk);
+  mb.matOverride = keep;
+  B(-0.6, 2.3, -1.75, 1.3, 5.0, -0.25, C(0x3d5468), PAT.fullglass); // 運転室
+  B(-0.7, 5.0, -1.85, 1.4, 5.2, -0.15, col);
+  const P = (u: number, y: number, v: number): [number, number, number] => [cx + u * dir, y, cz + v];
+  strut(mb, P(-3.0, 3.2, 0.55), P(6.6, 11.4, 0.55), 0.5, col);
+  strut(mb, P(-0.5, 2.3, 0.55), P(2.2, 6.0, 0.55), 0.22, C(0x8a9097)); // 油圧シリンダ
+  const tu = 6.6, ty = 11.4;
+  mb.matOverride = MAT.metal;
+  B(tu - 0.5, ty - 1.0, -6.0, tu + 0.5, ty - 0.55, 6.0, C(0xe0a21a)); // 吊り具（横向き）
+  mb.matOverride = keep;
+  if (load) ctBox(mb, cx + (tu * dir) - 1.22, ty - 3.6, cz - 6.1, cx + (tu * dir) + 1.22, cz + 6.1, load);
+}
+// コンテナ用のシャーシ（x の向き、x0 が後ろ）と、つないだヤードトラクター（tractor = true）
+function ctChassis(mb: MeshBuilder, x0: number, cz: number, load: THREE.Color | null, tractor: THREE.Color | null) {
+  const x1 = x0 + 12.4, fr = C(0x3a3e43), dk = C(0x222528);
+  const keep = mb.matOverride;
+  mb.matOverride = MAT.metal;
+  for (const v of [-0.55, 0.55]) mb.box(x0, 1.05, cz + v - 0.15, x1, 1.4, cz + v + 0.15, fr);
+  for (const x of [x0, x0 + 6.0, x1 - 0.3]) mb.box(x, 1.1, cz - 1.2, x + 0.3, 1.38, cz + 1.2, fr);
+  for (const x of [x0 + 0.8, x0 + 2.2]) for (const v of [-1.0, 1.0]) mb.box(x - 0.52, 0, cz + v - 0.25, x + 0.52, 1.04, cz + v + 0.25, dk);
+  for (const v of [-0.6, 0.6]) mb.box(x1 - 3.4, 0, cz + v - 0.08, x1 - 3.25, 1.05, cz + v + 0.08, C(0x8a9097));
+  mb.matOverride = keep;
+  if (load) ctBox(mb, x0 + 0.1, 1.4, cz - 1.22, x0 + 12.3, cz + 1.22, load);
+  if (tractor) {
+    const t0 = x1 - 1.0;
+    mb.box(t0, 0.5, cz - 1.2, t0 + 5.4, 1.3, cz + 1.2, fr);
+    mb.box(t0 + 3.6, 1.3, cz - 1.25, t0 + 5.4, 3.3, cz + 0.2, tractor, PAT.fullglass, tractor);
+    for (const x of [t0 + 1.1, t0 + 4.4]) for (const v of [-1.05, 1.05]) mb.box(x - 0.55, 0, cz + v - 0.3, x + 0.55, 1.1, cz + v + 0.3, dk);
+  }
+}
+// ラッシングケージ（固定金具を入れておく、黄色い枠の網のかご）
+function lashCage(mb: MeshBuilder, x: number, z: number) {
+  const yel = C(0xe8b923);
+  mb.box(x - 1.25, 0, z - 1.0, x + 1.25, 0.22, z + 1.0, yel);
+  mb.box(x - 1.1, 0.22, z - 0.85, x + 1.1, 1.9, z + 0.85, C(0x4d5258));
+  for (const dx of [-1.15, 1.15]) for (const dz of [-0.9, 0.9]) mb.box(x + dx - 0.08, 0.22, z + dz - 0.08, x + dx + 0.08, 2.0, z + dz + 0.08, yel);
+  mb.box(x - 1.2, 1.95, z - 0.95, x + 1.2, 2.05, z + 0.95, yel);
+}
+// 小屋（現場の詰所・休憩所）
+function ctHut(mb: MeshBuilder, x: number, z: number, w: number, d: number, col: THREE.Color) {
+  mb.box(x - w / 2, 0, z - d / 2, x + w / 2, 2.6, z + d / 2, col, PAT.house, C(0x9aa1a7));
+  mb.box(x - w / 2 - 0.15, 2.6, z - d / 2 - 0.15, x + w / 2 + 0.15, 2.8, z + d / 2 + 0.15, C(0x8a9097));
+  mb.box(x + w / 2, 1.6, z - 0.4, x + w / 2 + 0.35, 2.2, z + 0.4, C(0xd5d9dd)); // エアコンの室外機
+}
+// 金網のフェンス（軸にそった直線。柱と 3 本の横棒）
+function ctFence(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, h = 2.4) {
+  const col = C(0x7b8289), L = Math.hypot(x1 - x0, z1 - z0);
+  const keep = mb.matOverride;
+  mb.matOverride = MAT.metal;
+  const n = Math.max(1, Math.round(L / 3.5));
+  for (let i = 0; i <= n; i++) {
+    const x = x0 + ((x1 - x0) * i) / n, z = z0 + ((z1 - z0) * i) / n;
+    mb.box(x - 0.06, 0, z - 0.06, x + 0.06, h + 0.3, z + 0.06, col);
+  }
+  const xa = Math.min(x0, x1) - 0.03, xb = Math.max(x0, x1) + 0.03, za = Math.min(z0, z1) - 0.03, zb = Math.max(z0, z1) + 0.03;
+  for (const y of [0.15, h * 0.5, h - 0.06]) mb.box(xa, y, za, xb, y + 0.06, zb, col);
+  mb.box(xa, h + 0.22, za, xb, h + 0.26, zb, C(0x55595e)); // 有刺鉄線
+  mb.matOverride = keep;
+}
+// 照明塔（高いマストと、上の灯具の輪）
+function ctMast(mb: MeshBuilder, x: number, z: number, h = 32) {
+  const g = C(0x9aa1a7);
+  mb.box(x - 0.9, 0, z - 0.9, x + 0.9, 0.6, z + 0.9, C(0xa8a49b));
+  const keep = mb.matOverride;
+  mb.matOverride = MAT.metal;
+  mb.cylinder(x, z, 0.6, h, 0.6, 8, g, undefined, 0.32);
+  mb.box(x - 2.4, h, z - 2.4, x + 2.4, h + 0.3, z + 2.4, g);
+  mb.box(x - 0.3, h + 0.3, z - 0.3, x + 0.3, h + 2.4, z + 0.3, g);
+  mb.matOverride = keep;
+  for (const [dx, dz] of [[-1.7, -2.3], [0, -2.3], [1.7, -2.3], [-1.7, 2.3], [0, 2.3], [1.7, 2.3]]) mb.box(x + dx - 0.65, h + 0.3, z + dz - 0.35, x + dx + 0.65, h + 1.3, z + dz + 0.35, C(0xfff3d0), PAT.glow);
+  mb.box(x - 0.15, h + 2.4, z - 0.15, x + 0.15, h + 2.8, z + 0.15, C(0xff4040), PAT.glow); // 航空障害灯
+}
 function containerTerminal(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
   mb.flatRoofMat = MAT.none;
   const W = f.W, D = f.D, hw = W / 2, hd = D / 2;
   const T = TERMINAL;
   const conc = C(0xbdb8ad), asph = C(0x4a4d51), yel = C(0xf2c200), white = PALETTE.white;
-  const cols = [0xc0392b, 0x2e6da4, 0xd9a400, 0x4c7a3b, 0x8a9097, 0xd35400, 0xe8e8e8, 0x1f6f8b, 0x7a3e9d].map((h) => new THREE.Color(h));
+  const paint = C(0xeeeeea), yPaint = C(0xe6b800);
+  const mo = mb.matOverride;
+  const lineCol = () => ctCol(rng, rng.pick(CT_LINES));
   mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.07, conc);
   // 岸壁（水側に張り出す厚い壁）とフェンダー
   mb.box(-hw, -5, -hd - 3, hw, 0.4, -hd + 1, C(0xa8a49b));
@@ -4183,11 +4516,27 @@ function containerTerminal(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
   for (const z of [-hd + T.seaRail, -hd + T.landRail]) for (const o of [-0.5, 0.5]) mb.ground(-hw + 1, z + o - 0.08, hw - 1, z + o + 0.08, 0.11, C(0xc9ccd1));
   mb.ground(-hw + 1, -hd + 18.6, hw - 1, -hd + 18.9, 0.11, yel);
   mb.ground(-hw + 1, -hd + 26.6, hw - 1, -hd + 26.9, 0.11, yel);
+  // ---- エプロンの細部：補修したアスファルト、油じみ、岸壁のふちの線と係船柱、ゼブラ ----
+  for (let k = 0; k < 14; k++) {
+    const x = -hw + 4 + rng.next() * (W - 16), z = -hd + 2 + rng.next() * (T.apron - 6), w = 3 + rng.next() * 9, d = 2 + rng.next() * 4;
+    mb.ground(x, z, x + w, Math.min(-hd + T.apron - 0.5, z + d), 0.095, rng.next() < 0.5 ? C(0x404347) : C(0x56595d));
+  }
+  for (let k = 0; k < 26; k++) ctBlob(mb, rng, -hw + 4 + rng.next() * (W - 8), -hd + 19.5 + rng.next() * 6.5, 0.5 + rng.next() * 1.1, 0.1, C(0x2c2e31));
+  for (let k = 0; k < 10; k++) ctBlob(mb, rng, -hw + 4 + rng.next() * (W - 8), -hd + 8 + rng.next() * 9, 0.4 + rng.next() * 0.8, 0.1, C(0x333538));
+  mb.ground(-hw + 1, -hd + 1.6, hw - 1, -hd + 1.9, 0.11, yel);
+  for (let x = -hw + 4; x < hw - 2; x += 14) {
+    mb.box(x - 0.35, 0.09, -hd + 0.6, x + 0.35, 0.75, -hd + 1.3, C(0x2a2d31));
+    mb.box(x - 0.5, 0.75, -hd + 0.45, x + 0.5, 0.95, -hd + 1.45, C(0x2a2d31));
+  }
+  ctHatch(mb, -hw + 2, -hd + 8, -hw + 15, -hd + 17, 0.11, yel);
+  ctHatch(mb, hw - 15, -hd + 8, hw - 2, -hd + 17, 0.11, yel);
   // ---- ガントリークレーン（STS）----
   const craneCol = rng.next() < 0.5 ? C(0x2f6fb0) : C(0xd9472b);
-  for (const cx of terminalCranes(W)) {
+  const cxs = terminalCranes(W);
+  for (const cx of cxs) {
     const y0 = 0, yp = T.boomY - 4, yb = T.boomY;
     const zs = -hd + T.seaRail, zl = -hd + T.landRail;
+    mb.matOverride = MAT.metal;
     // 4 本の脚と、下の横つなぎ
     for (const z of [zs, zl]) for (const sx of [-9, 9]) mb.box(cx + sx - 0.8, y0, z - 0.8, cx + sx + 0.8, yp, z + 0.8, craneCol);
     for (const z of [zs, zl]) mb.box(cx - 9.8, 12, z - 0.7, cx + 9.8, 14, z + 0.7, craneCol);
@@ -4202,55 +4551,254 @@ function containerTerminal(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
     for (const sx of [-8, 8]) for (const z of [zs + 2, zl - 6]) strut(mb, [cx + sx, yp, z], apex, 0.7, craneCol);
     for (const zt of [zTip + 2, zTip + 22]) strut(mb, apex, [cx, yb, zt], 0.25, C(0x30343a));
     strut(mb, apex, [cx, yb, zBack - 2], 0.25, C(0x30343a));
-    // 機械室（陸側の後ろ）と運転室
+    // 機械室（陸側の後ろ）
     mb.box(cx - 5, yb, zBack - 12, cx + 5, yb + 6, zBack, white, PAT.industrial, C(0xc9ccd1));
-    mb.box(cx + 2.4, yb - 5, zs - 2, cx + 5.4, yb - 2, zs + 1, C(0xdfe6ee), PAT.fullglass);
+    mb.matOverride = mo;
+    // 電気で動く（運転室はない）：陸側の脚にケーブルリール
+    mb.matOverride = MAT.metal;
+    mb.cylinder(cx + 9, zl + 2.6, 1.2, 4.6, 1.4, 10, C(0x8f979e), C(0x8f979e));
+    mb.matOverride = mo;
     // 夜の灯り（ブームの先）
     mb.box(cx - 0.5, yb + 0.5, zTip - 0.5, cx + 0.5, yb + 1.3, zTip + 0.5, C(0xff4040), PAT.glow);
+    // 脚のまわりの立入禁止の印
+    for (const sx of [-9, 9]) ctHatch(mb, cx + sx - 2.6, zl + 1.6, cx + sx + 2.6, zl + 3.4, 0.11, yel, 1.2, 0.4);
   }
-  // ---- コンテナヤード：コンテナの山の区画と、門型の小さなクレーン（RTG）----
-  const yz0 = -hd + T.apron + 8, yz1 = hd - 46;
-  const bw = 28, bd = 15; // 区画の大きさ（x 方向 = 長さ、z 方向 = 幅）
-  for (let z = yz0; z + bd <= yz1; z += bd + 9) {
-    for (let x = -hw + 6; x + bw <= hw - 6; x += bw + 7) {
-      for (let row = 0; row < 6; row++) {
-        const rz = z + row * 2.5;
-        for (let k = 0; k < 2; k++) {
-          const x0 = x + k * 14.2, x1 = x0 + 12.2;
-          const hgt = 1 + rng.int(4);
-          for (let lv = 0; lv < hgt; lv++) mb.box(x0, lv * 2.6, rz, x1, lv * 2.6 + 2.5, rz + 2.4, rng.pick(cols));
+  // クレーンの間：船のハッチカバー、ラッシングケージ、詰所（トラックの通り道とレールの間）
+  const gapsX: number[] = [];
+  for (let k = 0; k + 1 < cxs.length; k++) gapsX.push((cxs[k] + cxs[k + 1]) / 2);
+  for (const gx of gapsX) {
+    const hc = C(0x5c6670);
+    const keep = mb.matOverride;
+    mb.matOverride = MAT.metal;
+    mb.box(gx - 6.2, 0.09, -hd + 8.2, gx + 3.8, 1.1, -hd + 16.4, hc);
+    mb.box(gx - 5.9, 1.1, -hd + 8.6, gx + 3.5, 1.35, -hd + 16.0, hc.clone().multiplyScalar(1.12));
+    mb.box(gx - 5.6, 1.35, -hd + 9.0, gx + 2.6, 2.3, -hd + 15.4, hc);
+    mb.matOverride = keep;
+    for (let k = 0; k < 3; k++) lashCage(mb, gx + 6.2 + (k % 2) * 2.8, -hd + 9.8 + k * 2.4);
+  }
+  for (const s of [-1, 1]) {
+    ctHut(mb, s * (hw - 8.5), -hd + 12.5, 3.2, 2.4, C(0xe9eae6));
+    lashCage(mb, s * (hw - 12.5), -hd + 10.4);
+    lashCage(mb, s * (hw - 12.5), -hd + 14.6);
+  }
+
+  // ---- 自動化ヤード（シンガポールのトゥアス・パシルパンジャン風）----
+  // 岸壁 → AGV の走る帯（黒いアスファルトに格子の線）→ 岸壁に直角な長い区画（両端に受け渡しの場所、ARMG がまたぐ）→ ゲート。
+  // 大きさは W, D から決める（敷地の大きさが変わっても並ぶように）
+  const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+  const apronEnd = -hd + T.apron;
+  const gateD = clamp(D * 0.16, 16, 34), gateZ = hd - gateD;
+  const agvD = clamp(D * 0.1, 10, 24);
+  const yard0 = apronEnd + agvD; // 区画の海側の端
+  let tzD = 15, ltzD = 13;
+  const room = gateZ - 1 - yard0;
+  if (room - tzD - ltzD < 12.4) { const k = Math.max(0.3, (room - 12.4) / (tzD + ltzD)); tzD *= k; ltzD *= k; }
+  const stack0 = yard0 + tzD, yard1 = gateZ - 1 - ltzD; // コンテナを積むところ（z = stack0..yard1）
+  const depotX1 = -hw + Math.min(36, W * 0.19); // 西の端：空コンテナの置き場と管理棟
+  const pitchW = 2.5, nr = 8, bw = nr * pitchW, pitch = bw + 6;
+  const bx0 = depotX1 + 2, bx1 = hw - 6;
+  const nb = Math.max(1, Math.floor((bx1 - bx0 + 6) / pitch));
+  const off = (bx1 - bx0 - (nb * pitch - 6)) / 2;
+  const blocks: number[] = [];
+  for (let i = 0; i < nb; i++) blocks.push(bx0 + off + i * pitch);
+  const railA = (x: number) => x - 1.5, railB = (x: number) => x + bw + 1.4;
+  const darkAs = C(0x3f4246), gridLine = C(0x7d8186);
+  // AGV の帯：黒いアスファルト、6m ごとの格子の線、走る向きの破線、タイヤのあと
+  mb.ground(-hw + 1, apronEnd + 0.35, hw - 1, yard0, 0.09, darkAs);
+  for (let x = -hw + 6; x < hw - 1; x += 6) mb.ground(x - 0.05, apronEnd + 0.6, x + 0.05, yard0 - 0.3, 0.1, gridLine);
+  for (let z = apronEnd + 3; z < yard0 - 0.5; z += 3.2) mb.ground(-hw + 2, z - 0.05, hw - 2, z + 0.05, 0.1, gridLine);
+  mb.ground(-hw + 2, apronEnd + 0.6, hw - 2, apronEnd + 0.78, 0.1, yPaint);
+  mb.ground(-hw + 2, yard0 - 0.6, hw - 2, yard0 - 0.42, 0.1, yPaint);
+  for (let k = 0; k < 30; k++) ctBlob(mb, rng, -hw + 4 + rng.next() * (W - 8), apronEnd + 1 + rng.next() * (agvD - 2), 0.4 + rng.next() * 0.9, 0.097, C(0x2c2e31));
+  const tyreD = C(0x34363a);
+  for (const x of blocks) {
+    if (rng.next() < 0.7) ctTyreArc(mb, x + 4, yard0 - 6.5, 6, Math.PI * 0.5, Math.PI, 0.095, tyreD);
+    if (rng.next() < 0.7) ctTyreArc(mb, x + bw - 4, yard0 - 6.5, 6, 0, Math.PI * 0.5, 0.095, tyreD);
+  }
+  for (const o of [-2.1, -0.9, 1.0, 2.2]) mb.ground(-hw + 3, (apronEnd + yard0) / 2 + o - 0.3, hw - 3, (apronEnd + yard0) / 2 + o + 0.3, 0.095, C(0x393b3f));
+  // AGV：帯の中を走るもの（止めて描く）
+  const nAgv = 3 + rng.int(3);
+  for (let k = 0; k < nAgv; k++) {
+    const x = -hw + 14 + ((W - 28) * (k + rng.next() * 0.5)) / nAgv, z = apronEnd + 2.5 + rng.next() * Math.max(0, agvD - 5);
+    ctAgv(mb, x, z, false, rng.next() < 0.65 ? lineCol() : null);
+  }
+  // コンクリートの板：色むらと目地（区画と、陸側の受け渡しの場所）
+  const slab = 6;
+  for (let z = yard0; z < gateZ - 0.1; z += slab) for (let x = -hw + 0.2; x < hw - 0.3; x += slab) {
+    const p = rng.next();
+    if (p > 0.24) continue;
+    const c = p < 0.08 ? C(0xc9c4b9) : p < 0.16 ? C(0xb1aca2) : p < 0.2 ? C(0xc4baa5) : C(0xa9a49a);
+    mb.ground(x + 0.05, z + 0.05, Math.min(hw - 0.2, x + slab) - 0.05, Math.min(gateZ, z + slab) - 0.05, 0.08, c);
+  }
+  const joint = C(0x9d988f);
+  for (let z = yard0 + slab; z < gateZ; z += slab) mb.ground(-hw + 0.2, z - 0.05, hw - 0.2, z + 0.05, 0.09, joint);
+  for (let x = -hw + slab; x < hw - 0.5; x += slab) mb.ground(x - 0.05, yard0, x + 0.05, gateZ, 0.09, joint);
+  mb.ground(-hw + 1, apronEnd - 0.05, hw - 1, apronEnd + 0.35, 0.09, C(0x8f8b84)); // エプロンとの境目
+
+  // ---- 区画ごと ----
+  const reeferIdx = 0;
+  const specialIdx = nb > 2 ? 1 + rng.int(nb - 2) : -1;
+  const lineBase = [rng.pick(CT_LINES), rng.pick(CT_LINES), rng.pick(CT_LINES)];
+  const stackL = yard1 - stack0;
+  blocks.forEach((x, bi) => {
+    const xa = railA(x), xb = railB(x);
+    // レール（コンクリートの梁と、鋼のレール）
+    for (const rx of [xa, xb]) {
+      mb.ground(rx - 0.6, yard0, rx + 0.6, gateZ - 0.5, 0.085, C(0xa8a39a));
+      mb.ground(rx - 0.12, yard0, rx + 0.12, gateZ - 0.5, 0.11, C(0x5d6369));
+    }
+    // 海側の受け渡し：アスファルトに AGV の枠、区画の名前、ゼブラ
+    mb.ground(x - 0.4, yard0, x + bw + 0.4, stack0 - 0.6, 0.092, darkAs);
+    for (let k = 0; k <= 5; k++) mb.ground(x + k * 4 - 0.08, yard0 + 0.4, x + k * 4 + 0.08, stack0 - 1.2, 0.1, paint);
+    ctHatch(mb, x - 0.3, stack0 - 1.4, x + bw + 0.3, stack0 - 0.1, 0.1, yPaint, 1.2, 0.4);
+    const name = (bi + 1 < 10 ? '0' : '') + (bi + 1);
+    ctText(mb, name, x + bw / 2 - 2.6, stack0 - 2.2, Math.min(4, tzD * 0.3), 0.1, paint);
+    for (let k = 0; k < 5; k++) {
+      if (rng.next() < 0.3) ctAgv(mb, x + k * 4 + 2, yard0 + tzD / 2 - 0.4, true, rng.next() < 0.6 ? lineCol() : null);
+      else if (rng.next() < 0.4) ctBlob(mb, rng, x + k * 4 + 2, yard0 + 2 + rng.next() * (tzD - 4), 0.5 + rng.next() * 0.6, 0.097, C(0x2c2e31));
+    }
+    // 陸側の受け渡し：トラックの枠（コンテナの車が後ろから入る）
+    for (let k = 0; k <= 5; k++) mb.ground(x + k * 4 - 0.08, yard1 + 1.2, x + k * 4 + 0.08, gateZ - 0.6, 0.1, paint);
+    ctHatch(mb, x - 0.3, yard1 + 0.1, x + bw + 0.3, yard1 + 1.2, 0.1, yPaint, 1.2, 0.4);
+    if (ltzD >= 12.6) for (let k = 0; k < 5; k++) {
+      const p = rng.next();
+      if (p < 0.45) continue;
+      // シャーシは z の向き（後ろが区画の側）。トラクターの頭はゲートの側
+      ctTurned(mb, () => ctChassis(mb, yard1 + 0.4, -(x + k * 4 + 2), p < 0.8 ? lineCol() : null, p > 0.6 ? rng.pick([C(0xe9eae6), C(0x2e6da4), C(0xc0392b)]) : null));
+      ctBlob(mb, rng, x + k * 4 + 2, yard1 + 3, 0.5, 0.097, C(0x7d786f));
+    }
+    // コンテナの置き場：白い枠
+    for (let r = 0; r <= nr; r++) mb.ground(x + r * pitchW - 0.11, stack0 - 0.1, x + r * pitchW - 0.01, yard1 + 0.1, 0.1, paint);
+    // 積むところの長さを 40 フィート（12.2m）と 20 フィート（6.06m）に分ける
+    const bays: [number, number][] = [];
+    for (let z = stack0; ; ) {
+      if (z + 12.2 <= yard1) { bays.push([z, 12.2]); z += 12.3; } else if (z + 6.06 <= yard1) { bays.push([z, 6.06]); z += 6.16; } else break;
+    }
+    for (const [z] of bays) mb.ground(x - 0.4, z - 0.11, x + bw + 0.4, z - 0.01, 0.1, paint);
+    // ARMG の通るところの汚れ
+    for (const rx of [xa, xb]) for (let k = 0; k < 3; k++) ctBlob(mb, rng, rx + (rng.next() - 0.5) * 1.2, stack0 + rng.next() * stackL, 0.35 + rng.next() * 0.4, 0.097, C(0x8a857b));
+    const base = 3 + rng.int(2);
+    if (bi === reeferIdx && stackL >= 26.4) {
+      // 冷凍コンテナの区画：まん中に横切る電源ラック、両側から冷凍機の端を向けて並べる
+      const zr = stack0 + 13.2, tiers = 3;
+      ctReeferRack(mb, zr, x - 0.4, x + bw + 0.4, tiers, false);
+      for (let r = 0; r < nr; r++) {
+        const rx = x + r * pitchW;
+        for (const [z0, end] of [[stack0, 1], [stack0 + 14.2, -1]] as [number, number][]) {
+          if (rng.next() < 0.1) continue;
+          const n = 1 + rng.int(tiers);
+          for (let lv = 0; lv < n; lv++) {
+            ctReefer(mb, rng, rx, lv * 2.6, z0, rx + 2.44, z0 + 12.2, end, true);
+            const ze = end > 0 ? z0 + 12.3 : z0 - 0.1, zc = zr - end * 0.85;
+            strut(mb, [rx + 1.9, lv * 2.6 + 1.9, ze], [rx + 1.6, lv * 2.6 + 2.45, zc], 0.035, C(0x1d1f22));
+          }
         }
       }
-      // RTG（区画をまたぐ白い門型）
-      if (rng.next() < 0.6) {
-        const gx = x + 6 + rng.next() * (bw - 12);
-        for (const zz of [z - 2, z + bd + 1]) for (const dx of [-3, 3]) mb.box(gx + dx - 0.4, 0, zz - 0.4, gx + dx + 0.4, 15, zz + 0.4, white);
-        for (const dx of [-3, 3]) mb.box(gx + dx - 0.5, 14, z - 2.4, gx + dx + 0.5, 15.6, z + bd + 1.4, yel);
-        mb.box(gx - 3.4, 15, z + bd / 2 - 2, gx + 3.4, 17, z + bd / 2 + 2, white);
+      for (let z = stack0 + 26.5; z + 12.2 <= yard1; z += 12.3) for (let r = 0; r < nr; r++) {
+        const n = 1 + rng.int(base);
+        for (let lv = 0; lv < n; lv++) ctBox(mb, x + r * pitchW, lv * 2.6, z, x + r * pitchW + 2.44, z + 12.2, lineCol());
+      }
+    } else {
+      const special = bi === specialIdx;
+      for (let r = 0; r < nr; r++) {
+        const rx = x + r * pitchW;
+        for (const [z0, l] of bays) {
+          const p = rng.next();
+          if (p < 0.08) continue; // 空いた置き場
+          const t = Math.max(1, Math.min(5, base + rng.int(3) - 1 - (r === 0 || r === nr - 1 ? 1 : 0)));
+          if (special && p < 0.6) {
+            if (p < 0.35) {
+              // タンクコンテナ（20 フィート）
+              const fr = rng.pick([C(0x2b4f7a), C(0xd2691e), C(0x3a3d42), C(0x4c7a3b)]);
+              const tank = rng.next() < 0.6 ? C(0xc9ccce) : C(0xeeeeea);
+              for (let hz = 0; hz + 6.06 <= l + 0.01; hz += 6.14) {
+                const n = 1 + rng.int(2);
+                for (let lv = 0; lv < n; lv++) ctTurned(mb, () => ctTank(mb, z0 + hz, lv * 2.6, -(rx + 2.44), fr, tank));
+              }
+            } else {
+              const c = lineCol(), kind = rng.int(4);
+              if (kind === 0) for (let lv = 0; lv < 4; lv++) ctBox(mb, rx, lv * 0.62, z0, rx + 2.44, z0 + l, c, 0.58); // たたんだラックの山
+              else ctTurned(mb, () => ctFlatRack(mb, z0, 0, -(rx + 2.44), l, c, kind));
+            }
+            continue;
+          }
+          if (l > 7 && p < 0.3) {
+            // 20 フィートを 2 つ
+            for (const hz of [0, 6.14]) {
+              const n = Math.max(0, t - rng.int(3));
+              for (let lv = 0; lv < n; lv++) ctBox(mb, rx, lv * 2.6, z0 + hz, rx + 2.44, z0 + hz + 6.06, lineCol());
+            }
+          } else {
+            for (let lv = 0; lv < t; lv++) {
+              const hc = rng.next() < 0.3 && lv === t - 1; // 背の高いハイキューブ
+              ctBox(mb, rx, lv * 2.6, z0, rx + 2.44, z0 + l, rng.next() < 0.35 ? ctCol(rng, lineBase[(r + bi) % 3]) : lineCol(), hc ? 2.8 : 2.5);
+            }
+          }
+        }
       }
     }
+    // ARMG：海側と陸側に 1 基ずつ（受け渡しの場所の上か、積むところの上）
+    const armgH = 19;
+    const zs = [stack0 + 2 + rng.next() * Math.max(0, Math.min(6, stackL - 6)), yard1 - 2 - rng.next() * Math.max(0, Math.min(6, stackL - 6))];
+    if (stackL < 20) zs.length = 1;
+    for (const [k, cz] of zs.entries()) {
+      const tx = x + 1.2 + (rng.int(nr)) * pitchW + 0.0;
+      const busy = rng.next() < 0.6;
+      ctArmg(mb, xa, xb, k === 0 ? Math.min(cz, stack0 + 6) - (busy ? 4 : 0) : cz, armgH, tx, busy ? 9 + rng.next() * 6 : armgH - 3, busy ? lineCol() : null);
+    }
+  });
+  // 区画の間の照明塔（海側と陸側）
+  for (let i = 0; i + 1 < blocks.length; i++) {
+    const lx = (railB(blocks[i]) + railA(blocks[i + 1])) / 2;
+    for (const z of [yard0 + 2.5, Math.min(gateZ - 2.5, yard1 + ltzD * 0.5)]) {
+      ctMast(mb, lx, z, 32);
+      ctHatch(mb, lx - 1.3, z - 1.8, lx + 1.3, z + 1.8, 0.1, yPaint, 1.0, 0.35);
+    }
   }
-  // ---- 冷凍コンテナの棚と、管理棟、ゲート（道路側）----
-  const gz0 = hd - 40;
-  mb.box(-hw + 6, 0, gz0, -hw + 40, 9, gz0 + 4, C(0x9aa1a7));
-  for (let x = -hw + 7; x < -hw + 39; x += 6.2) for (let lv = 0; lv < 3; lv++) mb.box(x, lv * 3 + 0.2, gz0 + 4.2, x + 6, lv * 3 + 2.7, gz0 + 6.6, C(0xf2f2ee));
-  mBlock(mb, -hw + 6, hd - 30, -hw + 34, hd - 8, 14, { pat: PAT.ribbon });
+
+  // ---- 西の端：空コンテナの高い山（5〜6 段）とリーチスタッカー ----
+  const dRows = Math.max(2, Math.floor((depotX1 - 13 - (-hw + 3)) / pitchW));
+  const dz0 = yard0 + 2, dz1 = hd - 32;
+  const dLine = [rng.pick(CT_LINES), rng.pick(CT_LINES)];
+  for (let z = dz0; z + 12.2 <= dz1; z += 12.6) {
+    const lc = dLine[Math.floor((z - dz0) / 12.6) & 1];
+    for (let r = 0; r < dRows; r++) {
+      if (rng.next() < 0.08) continue;
+      const rx = -hw + 3 + r * pitchW, t = 6 - rng.int(2) - (r === dRows - 1 ? rng.int(3) : 0);
+      for (let lv = 0; lv < t; lv++) ctBox(mb, rx, lv * 2.6, z, rx + 2.44, z + 12.2, ctCol(rng, rng.next() < 0.82 ? lc : rng.pick(CT_LINES)));
+    }
+    mb.ground(-hw + 2.6, z - 0.11, -hw + 3 + dRows * pitchW, z - 0.01, 0.1, paint);
+  }
+  const xe = -hw + 3 + dRows * pitchW;
+  reachStacker(mb, xe + 8.2, dz0 + 9, -1, C(0xd9472b), rng.next() < 0.6 ? ctCol(rng, dLine[0]) : null);
+  ctHatch(mb, xe + 0.8, dz0 - 1, depotX1, dz0 + 1, 0.1, yPaint, 1.4, 0.45);
+  for (let k = 0; k < 8; k++) ctBlob(mb, rng, xe + 2 + rng.next() * (depotX1 - xe - 3), dz0 + rng.next() * (dz1 - dz0), 0.5 + rng.next() * 0.8, 0.097, C(0x7d786f));
+  ctMast(mb, depotX1 - 1, dz1 - 2, 32);
+  ctHut(mb, -hw + 2.8, (apronEnd + yard0) / 2, 2.4, 4.6, C(0x2e6da4));
+  // まわりのフェンス（両側）
+  for (const s of [-1, 1]) ctFence(mb, s * (hw - 0.6), apronEnd + 2, s * (hw - 0.6), hd - 1.5);
+
+  // ---- 管理棟（屋上に太陽光パネル）、ゲート（道路側）----
+  const adX1 = Math.min(-hw + 34, depotX1 - 2);
+  mBlock(mb, -hw + 6, hd - 30, adX1, hd - 8, 14, { pat: PAT.ribbon });
   mb.box(-hw + 18, 14.7, hd - 22, -hw + 22, 30, hd - 18, white, PAT.none, white); // 管制塔の軸
   mb.box(-hw + 15, 30, hd - 25, -hw + 25, 35, hd - 15, C(0x5f8fb8), PAT.fullglass, white);
-  // ゲート：トラックのレーンと、屋根、詰所
-  const gx0 = -hw + 44, gx1 = hw - 8;
-  mb.ground(gx0, hd - 34, gx1, hd - 1, 0.1, asph);
+  ctSolar(mb, -hw + 7.5, hd - 28.5, -hw + 14, hd - 9.5, 14.1);
+  if (adX1 - 1.5 > -hw + 27) ctSolar(mb, -hw + 27, hd - 28.5, adX1 - 1.5, hd - 9.5, 14.1);
+  // ゲート：トラックのレーンと、太陽光パネルの屋根、詰所
+  const gx0 = Math.max(depotX1 + 6, -hw + 44), gx1 = hw - 8;
+  mb.ground(gx0, gateZ, gx1, hd - 1, 0.1, asph);
+  const gm = (gateZ + hd) / 2; // ゲートのまん中
   for (let x = gx0 + 6; x < gx1 - 2; x += 8) {
-    mb.ground(x - 0.1, hd - 30, x + 0.1, hd - 4, 0.12, white);
-    mb.box(x - 1.2, 0, hd - 18, x + 1.2, 3, hd - 15, C(0xf2f3f4), PAT.office, C(0x9aa1a7));
+    mb.ground(x - 0.1, gateZ + 2, x + 0.1, hd - 3, 0.12, white);
+    mb.box(x - 1.2, 0, gm - 1.5, x + 1.2, 3, gm + 1.5, C(0xf2f3f4), PAT.office, C(0x9aa1a7));
+    ctBlob(mb, rng, x + 4 + (rng.next() - 0.5), gm + (rng.next() - 0.5) * (gateD - 6), 0.6 + rng.next() * 0.6, 0.11, C(0x303235));
+    mb.ground(x + 1.2, gateZ + 2.2, x + 6.8, gateZ + 2.6, 0.12, white); // 停止線
   }
-  mb.box(gx0, 7, hd - 22, gx1, 7.8, hd - 11, white, PAT.none, C(0xd5d9dd));
-  for (let x = gx0 + 2; x < gx1; x += 16) mb.box(x - 0.3, 0, hd - 16.8, x + 0.3, 7, hd - 16.2, C(0x9aa1a7));
-  // 照明塔
-  for (let x = -hw + 20; x < hw - 10; x += 60) for (const z of [yz0 - 4, (yz0 + yz1) / 2]) {
-    mb.box(x - 0.5, 0, z - 0.5, x + 0.5, 32, z + 0.5, C(0x9aa1a7));
-    mb.box(x - 2.4, 32, z - 0.8, x + 2.4, 33.4, z + 0.8, C(0xfff3d0), PAT.glow);
-  }
+  const cz0 = gm - Math.min(5.5, gateD * 0.3), cz1 = gm + Math.min(5.5, gateD * 0.3);
+  mb.box(gx0, 7, cz0, gx1, 7.8, cz1, white, PAT.none, C(0xd5d9dd));
+  ctSolar(mb, gx0 + 0.5, cz0 + 0.3, gx1 - 0.5, cz1 - 0.3, 7.8);
+  for (let x = gx0 + 2; x < gx1; x += 16) mb.box(x - 0.3, 0, gm - 0.3, x + 0.3, 7, gm + 0.3, C(0x9aa1a7));
   tf(-hw + 3, hd - 3, 0.9);
   tf(hw - 3, hd - 3, 0.9);
 }
