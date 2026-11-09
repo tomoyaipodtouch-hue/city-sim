@@ -195,7 +195,7 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     case 'incinerator_l': incinerator(mb, f, tf, true); break;
     case 'water_plant': waterPlant(mb, f, tf); break;
     case 'desal': desalPlant(mb, f, tf); break;
-    case 'recycling': recycling(mb, f, rng); break;
+    case 'recycling': recycling(mb, f, rng, tf); break;
     case 'mayor_house': mansion(mb, f, rng, tf); break;
     case 'city_hall': cityHall(mb, f, tf); break;
     case 'statue': statue(mb, f, tf); break;
@@ -3027,10 +3027,84 @@ function desalPlant(mb: MeshBuilder, f: LotFrame, tf: TF) {
   tf(hw - 3, hd - 2, 0.8);
 }
 
-function recycling(mb: MeshBuilder, f: LotFrame, rng: Rng) {
-  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.concrete);
-  mb.box(-f.W / 2 + 3, 0, -f.D / 2 + 3, f.W / 2 - 12, 9, f.D / 2 - 5, GREEN, PAT.dock, PALETTE.steel);
-  for (let k = 0; k < 4; k++) mb.box(f.W / 2 - 10, 0, -f.D / 2 + 3 + k * 6, f.W / 2 - 4, 2.4, -f.D / 2 + 7.5 + k * 6, rng.pick([BLUE, GREEN, PALETTE.accent[3]]));
+// リサイクルセンター（日本のリサイクルプラザ型）：道路側に白い外壁の見学棟（2 階にガラスの見学通路、入口は壁面緑化）、
+// 奥に背の高い金属の選別・圧縮棟と収集車の搬入口。横は収集車の通る構内道路と計量台、奥にベール（つぶして固めた
+// ペットボトル・缶・古紙）を積んだ屋根付きのストックヤード
+function recycling(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
+  const hw = f.W / 2, hd = f.D / 2;
+  const white = C(0xf1f1ee), offW = C(0xe4e5e2), grey = C(0xb9bec4), asph = C(0x4d5054);
+  const leaf = C(0x4f7a3a), accent = C(0x2f9a5a), glass = C(0xcfe0ea);
+  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.07, PALETTE.concrete);
+  // 構内道路（右側、手前から奥へ）と計量台
+  const rx0 = hw - 13, rx1 = hw - 1;
+  mb.ground(rx0, -hd + 1, rx1, hd - 0.4, 0.09, asph);
+  mb.ground(rx0 + 5.8, -hd + 3, rx0 + 6.2, hd - 2, 0.1, C(0xe8e8e2));
+  mb.ground(rx0 + 1.2, hd - 12, rx0 + 5.2, hd - 4, 0.12, C(0x6d7378)); // 計量台
+  for (const z of [hd - 12, hd - 4]) mb.ground(rx0 + 1.2, z - 0.15, rx0 + 5.2, z + 0.15, 0.13, C(0xf2c200));
+  mb.box(rx0 - 2.2, 0, hd - 10, rx0 - 0.4, 2.8, hd - 6.5, white, PAT.office, grey); // 計量の詰所
+  // ---- 奥：選別・圧縮棟（金属の外壁、背が高い）----
+  const px0 = -hw + 2, px1 = rx0 - 1, pz0 = -hd + 2, pz1 = -hd + 15;
+  mb.matOverride = MAT.metal;
+  mb.box(px0, 0, pz0, px1, 15, pz1, offW, PAT.industrial, C(0xc9ccd0));
+  // 屋根の換気モニター
+  mb.box(px0 + 4, 15, (pz0 + pz1) / 2 - 1.6, px1 - 4, 16.6, (pz0 + pz1) / 2 + 1.6, grey, PAT.ribbon, grey);
+  // 構内道路側の搬入口（大きなシャッター 2 つ）
+  for (const z of [pz0 + 2.2, pz0 + 7.6]) mb.box(px1 - 0.05, 0, z, px1 + 0.15, 5.6, z + 4.6, C(0x5c6168));
+  mb.box(px1, 6, pz0 + 1, px1 + 3.2, 6.4, pz1 - 1, grey); // ひさし
+  mb.matOverride = null;
+  // 集じん機のダクトと小さな排気筒
+  mb.box(px0 + 2, 15, pz0 + 1.5, px0 + 4, 17.5, pz0 + 3.5, grey);
+  mb.cylinder(px0 + 3, pz0 + 2.5, 17.5, 21, 0.45, 10, C(0xd8dadd));
+  // ---- 手前：見学棟（白い外壁、2 階にガラスの見学通路）----
+  const vx0 = -hw + 2, vx1 = rx0 - 1, vz0 = pz1, vz1 = hd - 4;
+  mb.box(vx0, 0, vz0, vx1, 10, vz1, white, PAT.none, C(0xd9dcd8));
+  // 1 階：ガラスの入口とロビー（左側）、2 階：通りに面した横長のガラスの見学通路
+  mb.box(vx0 + 1.5, 0.2, vz1 - 0.05, vx0 + 12, 3.6, vz1 + 0.25, glass, PAT.fullglass, white);
+  mb.box(vx0 + 1, 4.6, vz1 - 0.05, vx1 - 1, 8.4, vz1 + 0.35, glass, PAT.curtain, white);
+  // 見学通路の床と庇の白い帯、緑のライン（夜は光る）
+  mb.box(vx0 + 0.6, 4.2, vz1, vx1 - 0.6, 4.6, vz1 + 0.9, white);
+  mb.box(vx0 + 0.6, 8.4, vz1, vx1 - 0.6, 9.0, vz1 + 1.2, white);
+  mb.box(vx0 + 0.6, 9.0, vz1 + 1.1, vx1 - 0.6, 9.3, vz1 + 1.25, accent, PAT.glow, accent);
+  // 入口の壁面緑化（縦長の緑の壁）と、入口の庇
+  mb.box(vx0 + 12.5, 0.2, vz1, vx0 + 18.5, 8.2, vz1 + 0.5, leaf, PAT.gardenLeaf, leaf);
+  mb.box(vx0 + 1, 3.6, vz1, vx0 + 12.5, 3.9, vz1 + 3.2, white);
+  // 横の壁にも見学通路の窓（構内道路側）
+  mb.box(vx1 - 0.05, 4.6, vz0 + 2, vx1 + 0.25, 8.4, vz1 - 1.5, glass, PAT.curtain, white);
+  // 屋根：太陽光パネルと屋上の手すり
+  for (let x = vx0 + 2; x + 2.2 < vx1 - 2; x += 2.6) mb.box(x, 10.4, vz0 + 2, x + 2.2, 10.8, vz1 - 2, C(0x22385a), PAT.none, C(0x2a4166));
+  mb.box(vx0, 10, vz1 - 0.15, vx1, 11, vz1, C(0xd0d4d8));
+  // 前庭：植え込みと、見学者のバス・車の止まるところ
+  mb.ground(vx0, vz1 + 0.4, vx1, hd - 0.4, 0.08, C(0xcfc9bd));
+  mb.box(vx0 + 18.8, 0, vz1 + 0.6, vx1 - 1, 0.6, vz1 + 2.6, C(0xbfc3c0), PAT.none, leaf);
+  tf(vx0 + 21, vz1 + 1.6, 0.8);
+  tf(vx1 - 3, vz1 + 1.6, 0.7);
+  // ---- ストックヤード：構内道路の奥、屋根だけの鉄骨の棚にベールを積む ----
+  const sx0 = rx0 + 1, sx1 = rx1 - 0.5, sz0 = -hd + 1.5, sz1 = -hd + 13;
+  mb.matOverride = MAT.metal;
+  for (const x of [sx0, sx1 - 0.4]) for (let z = sz0; z <= sz1; z += (sz1 - sz0) / 2) mb.box(x, 0, z - 0.2, x + 0.4, 7, z + 0.2, grey);
+  mb.box(sx0 - 0.3, 7, sz0 - 0.6, sx1 + 0.3, 7.5, sz1 + 0.6, C(0xd2d5d8), PAT.none, C(0xc3c7cb));
+  mb.matOverride = null;
+  // 区切りのコンクリート壁と、ベール（ペットボトル：青みの白、缶：銀、古紙：茶、ガラスくず：緑）
+  const kinds = [C(0xcfe3ee), C(0xb7bcc2), C(0xb59a72), C(0x8faa7c)];
+  const bay = (sz1 - sz0) / 4;
+  for (let k = 0; k < 4; k++) {
+    const z0 = sz0 + k * bay;
+    mb.box(sx0 + 0.4, 0, z0, sx1 - 0.4, 2.2, z0 + 0.3, C(0xa8a49b));
+    const col = kinds[k];
+    const rows = 2 + rng.int(2);
+    for (let r = 0; r < rows; r++) for (let c = 0; c < 3; c++) {
+      if (rng.next() < 0.15) continue;
+      const bx = sx1 - 1.2 - c * 1.35;
+      const y = r * 1.05;
+      const tint = col.clone().multiplyScalar(0.9 + rng.next() * 0.15);
+      mb.box(bx - 1.2, y, z0 + 0.6, bx, y + 1.0, z0 + bay - 0.4, tint, PAT.none, tint);
+    }
+  }
+  // 構内に止まっている収集車の荷台とコンテナ（色分け）
+  for (let k = 0; k < 3; k++) mb.box(rx0 + 7, 0, -hd + 16 + k * 3.2, rx1 - 1, 2.0, -hd + 18.6 + k * 3.2, [BLUE, GREEN, C(0xd9a400)][k]);
+  // 敷地のまわりの低い塀（構内道路の入口は開ける）
+  mb.box(-hw + 0.4, 0, -hd + 0.4, -hw + 0.7, 1.6, hd - 0.4, C(0xc8c4bb));
+  mb.box(-hw + 0.4, 0, -hd + 0.4, hw - 0.4, 1.6, -hd + 0.7, C(0xc8c4bb));
 }
 
 // ---------------- 工業（汚染型・製造業・倉庫業） ----------------
