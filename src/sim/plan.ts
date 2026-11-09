@@ -388,10 +388,17 @@ function planLane(
   // 上空の高さ
   const lift = def.elevated ? def.lift! : OVERPASS_LIFT;
   const grade1 = def.elevated ? 0.07 : 0.5;
+  // 高さの基準の地面。高架が水の上を渡るときは、両岸の高さを結んだ高さにする（川の上だけ低くならないように。高架鉄道と同じ）
+  const base = cells.map((i, k) => {
+    const ground = Math.max(g.cellH(i % n, (i / n) | 0), WATER_LEVEL);
+    if (!def.elevated || !g.isWater(i % n, (i / n) | 0)) return ground;
+    const banks = pathBanks(g, cells, k);
+    return banks === null ? ground : Math.max(ground, banks);
+  });
   const u: number[] = cells.map((i, k) => {
     if (levels[k] !== 1) return 0;
     if (g.up[i] && g.upH[i] > 0) return g.upH[i];
-    return Math.max(g.cellH(i % n, (i / n) | 0), WATER_LEVEL) + lift;
+    return base[k] + lift;
   });
   const ufix = cells.map((i, k) => levels[k] === 1 && g.up[i] !== 0);
   for (let pass = 0; pass < 2; pass++) {
@@ -401,7 +408,7 @@ function planLane(
       if (levels[k] !== 1 || levels[p] !== 1 || ufix[k]) continue;
       const m = grade1 * CELL * 1.42;
       // 高架は地面より低くならないようにする
-      const floor = Math.max(g.cellH(cells[k] % n, (cells[k] / n) | 0), WATER_LEVEL) + lift * 0.7;
+      const floor = base[k] + lift * 0.7;
       u[k] = Math.max(floor, Math.max(u[p] - m, Math.min(u[p] + m, u[k])));
     }
   }
@@ -415,6 +422,16 @@ function planLane(
         const gh = Math.max(g.cellH(cells[k] % n, (cells[k] / n) | 0), WATER_LEVEL);
         u[k] = Math.min(u[k], gh + 0.3 + dmin * 1.5);
       }
+    // 水の上は、両岸の路面を結んだ線より低くしない
+    for (let k = 0; k < cells.length; k++) {
+      if (levels[k] !== 1 || !g.isWater(cells[k] % n, (cells[k] / n) | 0)) continue;
+      let e = k;
+      while (e + 1 < cells.length && levels[e + 1] === 1 && g.isWater(cells[e + 1] % n, (cells[e + 1] / n) | 0)) e++;
+      const a = k - 1, b = e + 1;
+      if (a >= 0 && b < cells.length && levels[a] === 1 && levels[b] === 1)
+        for (let j = k; j <= e; j++) if (!ufix[j]) u[j] = Math.max(u[j], u[a] + ((u[b] - u[a]) * (j - a)) / (b - a));
+      k = e;
+    }
   }
   for (let k = 0; k < cells.length; k++) if (levels[k] === 1) upHs.set(cells[k], u[k]);
   for (const c of converts) if (!upHs.has(c)) upHs.set(c, g.cellH(c % n, (c / n) | 0) + OVERPASS_LIFT);
@@ -485,6 +502,20 @@ function planLane(
     }
   }
   return { cost, bridge };
+}
+
+// 道に沿って水の上のマス k から両側の岸（最初の陸のマス）まで進み、岸の高さを距離で内分した値（岸がなければ null）
+function pathBanks(g: Grid, cells: number[], k: number): number | null {
+  const n = g.n;
+  const ends: { h: number; d: number }[] = [];
+  for (const s of [-1, 1]) {
+    for (let j = k + s; j >= 0 && j < cells.length; j += s) {
+      const x = cells[j] % n, y = (cells[j] / n) | 0;
+      if (!g.isWater(x, y)) { ends.push({ h: g.cellH(x, y), d: Math.abs(j - k) }); break; }
+    }
+  }
+  if (ends.length >= 2) return ends[0].h + (ends[1].h - ends[0].h) * (ends[0].d / (ends[0].d + ends[1].d));
+  return ends.length === 1 ? ends[0].h : null;
 }
 
 // 2つのマスを、それぞれの階層でつなぐ
@@ -2260,6 +2291,42 @@ export function levelAvenueDecks(g: Grid) {
     const h = Math.max(WATER_LEVEL + 3.5, sum / comp.length);
     for (const c of comp) g.deck[c] = h;
   }
+}
+
+// 高架の高速道路が水の上で低くなっている所を、両岸の路面を結んだ高さまで上げる（以前の版は川の上で沈んでいた）
+export function levelViaductsOverWater(g: Grid) {
+  const n = g.n, N = n * n;
+  const wet = (c: number) => g.isWater(c % n, (c / n) | 0);
+  const viaduct = (c: number) => !!ROADS[g.up[c]]?.elevated && g.upH[c] > 0;
+  const raise = new Map<number, number>();
+  for (let i = 0; i < N; i++) {
+    if (!viaduct(i) || !wet(i)) continue;
+    const ends: { h: number; d: number }[] = [];
+    for (let d0 = 0; d0 < 8 && ends.length < 2; d0++) {
+      if (!(g.conn1[i] & (1 << d0))) continue;
+      let cur = i, dir = d0, dist = 0;
+      for (let step = 0; step < 64; step++) {
+        const x = (cur % n) + DX[dir], y = ((cur / n) | 0) + DY[dir];
+        if (!g.inb(x, y)) break;
+        const j = y * n + x;
+        if (!viaduct(j) || !(g.conn1[j] & (1 << opp(dir)))) break;
+        dist += isDiag(dir) ? 1.41 : 1;
+        cur = j;
+        if (!wet(j)) { ends.push({ h: g.upH[j], d: dist }); break; }
+        // まっすぐ進めなければ、来た向き以外のつながりへ
+        if (!(g.conn1[j] & (1 << dir))) {
+          let nd = -1;
+          for (let k = 0; k < 8; k++) if (g.conn1[j] & (1 << k) && k !== opp(dir)) { nd = k; break; }
+          if (nd < 0) break;
+          dir = nd;
+        }
+      }
+    }
+    if (ends.length < 2) continue;
+    const h = ends[0].h + (ends[1].h - ends[0].h) * (ends[0].d / (ends[0].d + ends[1].d));
+    if (h > g.upH[i] + 0.01) raise.set(i, h);
+  }
+  for (const [c, h] of raise) g.upH[c] = h;
 }
 
 // ---- 都市高速（片側1車線）のランプ：高速道路の横に1×5マス ----

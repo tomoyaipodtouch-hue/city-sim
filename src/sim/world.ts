@@ -8,7 +8,7 @@ import {
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
 import {
-  applyCloverleaf, applyDiamond, applyTerrain, applyURamp, linkURampMiddles, linkUrbanEnds, planTrees, planEStop, estopGroup, estopRoads, platformCells, planURamp, planTerrain, TerrainOp, applyRamp, planRoadCmd, levelAvenueDecks, applyTransitLine, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planZone,
+  applyCloverleaf, applyDiamond, applyTerrain, applyURamp, linkURampMiddles, linkUrbanEnds, planTrees, planEStop, estopGroup, estopRoads, platformCells, planURamp, planTerrain, TerrainOp, applyRamp, planRoadCmd, levelAvenueDecks, applyTransitLine, levelViaductsOverWater, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planZone,
 } from './plan';
 import { CELL } from './constants';
 import { ADVISORS, Advice, computeRating, Loan, LOAN_AMOUNTS, loanRate, makeAdvice, MAX_LOANS, newLoan, ordinanceCost, ordinanceEffects, OrdinanceEffects, OrdinanceId, ORDINANCES, payLoan, rewardUnlocked, REWARD_REQ } from './governance';
@@ -358,6 +358,7 @@ export class World {
     w.rating = d.rating ?? 55;
     linkUrbanEnds(g);
     linkURampMiddles(g); // 以前の版で、ランプの横に後から引いた一般道がつながっていなかった
+    levelViaductsOverWater(g); // 高架の高速道路は、川の上でも両岸の高さを保つ（以前の版は水の上で沈んでいた）
     levelAvenueDecks(g); // 大通りの橋は、2本の車線で1枚の床版（以前の版は車線ごとに高さが違った）
     normalizeAvenueJunctions(g); // 大通りの交差点は1つの制御。ロータリーは信号にする
     w.recomputeAll();
