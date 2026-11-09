@@ -12,6 +12,7 @@ import { kyotoGarden } from './gardenGen';
 import { forcedLogi, LOGI } from './logiRegistry';
 import './logisticsA';
 import './logisticsB';
+import { ciqOffice } from './ciqGen';
 
 // 動くもの（煙、フレアの炎、トラックの道すじ）の位置。世界の座標
 export type FxSpot =
@@ -201,6 +202,7 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     case 'museum': modernMuseum(mb, f, tf); break;
     case 'stadium': stadium(mb, f, rng); break;
     case 'future_stadium': futureStadium(mb, f); break;
+    case 'ciq': ciqOffice(mb, f, rng, tf); break;
   }
   mb.abandoned = false;
 }

@@ -2517,3 +2517,7 @@ function withPools(fn: LogiFn): LogiFn {
 }
 LOGI.coldStorage = withPools(coldStorage);
 LOGI.containerYard = withPools(containerYard);
+
+// ほかの施設（CIQ庁舎の検査場）でも使う部品
+export type { PoolAt };
+export const LB = { bx, gq, wq, ring4, disc, vehicle, car, carRow, fence, mastT, pole, booth, boxCol, withPools, K, LINES, CABS, CARS };

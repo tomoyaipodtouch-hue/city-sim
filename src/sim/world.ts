@@ -184,10 +184,11 @@ const IL_PORT_SHARE = 0.5;
 // 港・貨物駅への近さが 0.3 以上なら、港の分の需要も使える（それより遠いと少しずつ減る）
 const ilPortMix = (near: number) => Math.min(1, near / 0.3);
 // CIQ庁舎のまわり：需要が足りないときでも、毎日これだけの回数は倉庫業が建つのをためす。種類を選ぶときの需要の下限
-const CIQ_TRIES = 1;
+const CIQ_TRIES = 2;
 const CIQ_DEMAND = 0.6;
-// 範囲の中の工場（汚染型・製造業・ハイテク）を倉庫業に建て替える：1日あたりの確率、建ってからの日数の下限、古い順に何軒から選ぶか
-const CIQ_REDEV_P = 0.05;
+// 範囲の中の工場（汚染型・製造業・ハイテク）を倉庫業に建て替える：1軒・1日あたりの確率（平均でおよそ 1 年半〜2 年）、
+// 建ってからの日数の下限、古い順に何軒から選ぶか
+const CIQ_REDEV_P = 1 / 600;
 const CIQ_REDEV_AGE = 180;
 const CIQ_REDEV_PICK = 3;
 
@@ -1033,7 +1034,7 @@ export class World {
       this.trySpawn('IL', i, pop);
     }
     const old = this.ciqOld;
-    if (!old.length || this.rng.next() > CIQ_REDEV_P) return;
+    if (!old.length || this.rng.next() > old.length * CIQ_REDEV_P) return;
     const b = this.buildings.get(old[this.rng.int(Math.min(CIQ_REDEV_PICK, old.length))]);
     if (!b || b.state !== BState.Normal || b.stateDays < CIQ_REDEV_AGE) return;
     const i = g.idx(b.x, b.y);
