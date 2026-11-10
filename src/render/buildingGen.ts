@@ -1705,6 +1705,8 @@ function highrise(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number
   // モダンなオフィスの塔（新しい形を多めに）
   if (office && floors >= 18 && rng.next() < (floors >= 28 ? 0.66 : 0.45)) {
     const ds: ((mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number) => void)[] = [trapTwistTower, exoTower, foldedTower, crownTower, cantileverTower];
+    // 近代建築（モダニズム）の塔
+    ds.push(miesTower, leverTower, brutalTower);
     if (floors >= 25) ds.push(skyGardenTower);
     if (floors >= 30) ds.push(spiralTaperTower, shardTower);
     return ds[Math.floor(rng.next() * ds.length)](mb, f, rng, tf, floors);
@@ -2286,6 +2288,140 @@ function crownTower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: numb
   mb.prism(scaleP(topPlan, p.cx, p.cz, 1.01), p.y + H, p.y + H + Hc, C(0xd9dde1), PAT.led, null, scaleP(crownTop, p.cx, p.cz, 1.01));
   mb.prism(scaleP(topPlan, p.cx, p.cz, 0.97), p.y + H, p.y + H + Hc * 0.6, C(0x3a4048), PAT.none, C(0x2f3438), scaleP(crownTop, p.cx, p.cz, 0.97));
   mb.prism(scaleP(crownTop, p.cx, p.cz, 1.012), p.y + H + Hc - 0.5, p.y + H + Hc, C(0xe8eef2), PAT.glow, null);
+}
+
+// ---- 近代建築（モダニズム）のオフィス ----
+// ミース風の黒いガラスの塔（シーグラム・ビルのような）：前は池のある石の広場、塔は奥に下がって立つ。
+// 足元は奥まったガラスのロビーと柱、塔はブロンズ色の細い縦のI形鋼が上まで並ぶ黒っぽいガラスの直方体
+function miesTower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number) {
+  const hw = f.W / 2, hd = f.D / 2;
+  const plaza = C(0xc9c2b4), bronze = C(0x4a3a2a), glass = rng.pick([C(0x3c3a33), C(0x3a3f3e), C(0x45433a)]);
+  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.08, plaza);
+  for (let x = -hw + 2; x < hw - 1; x += 3) mb.ground(x, -hd + 0.5, x + 0.06, hd - 0.5, 0.09, C(0xb5ae9f)); // 石の目地
+  const W = Math.min(42, f.W * 0.62), D = Math.min(28, f.D * 0.48), H = floors * OFH;
+  const cz = -hd + 2 + D / 2 + Math.max(0, (f.D - D) * 0.12);
+  const x0 = -W / 2, x1 = W / 2, z0 = cz - D / 2, z1 = cz + D / 2;
+  // 広場の前の 2 つの池と、低い石の縁
+  const pz0 = z1 + 3, pz1 = hd - 3;
+  if (pz1 - pz0 > 5) {
+    for (const sx of [-1, 1]) {
+      const a = sx < 0 ? -hw + 3 : 4, b = sx < 0 ? -4 : hw - 3;
+      if (b - a < 6) continue;
+      mb.box(a, 0, pz0, b, 0.55, pz1, C(0xd3ccbe), PAT.none, C(0x4f6d7a));
+      for (let x = a + 3; x < b - 2; x += 6) tf(x, pz0 - 1.2, 0.55, 0);
+    }
+  }
+  // 1 階：奥まったガラスのロビー（4m 内側）と、外まわりのブロンズの柱
+  const lh = 7.6;
+  mb.box(x0 + 3.5, 0, z0 + 3.5, x1 - 3.5, lh, z1 - 3.5, C(0x9fb3b8), PAT.fullglass, bronze);
+  for (const [a, b, z] of [[x0, x1, z0], [x0, x1, z1]] as const) for (let x = a; x <= b + 0.01; x += (b - a) / Math.max(2, Math.round((b - a) / 8))) mb.box(x - 0.45, 0, z - 0.45, x + 0.45, lh, z + 0.45, bronze);
+  for (const x of [x0, x1]) for (let z = z0; z <= z1 + 0.01; z += (z1 - z0) / Math.max(2, Math.round((z1 - z0) / 8))) mb.box(x - 0.45, 0, z - 0.45, x + 0.45, lh, z + 0.45, bronze);
+  // 塔：黒っぽいガラスの箱
+  mb.box(x0, lh, z0, x1, H, z1, glass, PAT.curtain, C(0x2e2c28));
+  // 縦の I 形鋼（1.6m ごと、外へ少し出る）
+  const st = 1.6, out = 0.32;
+  for (let x = x0; x <= x1 + 0.01; x += (x1 - x0) / Math.round((x1 - x0) / st)) {
+    mb.box(x - 0.09, lh, z1, x + 0.09, H - 0.3, z1 + out, bronze);
+    mb.box(x - 0.09, lh, z0 - out, x + 0.09, H - 0.3, z0, bronze);
+  }
+  for (let z = z0; z <= z1 + 0.01; z += (z1 - z0) / Math.round((z1 - z0) / st)) {
+    mb.box(x1, lh, z - 0.09, x1 + out, H - 0.3, z + 0.09, bronze);
+    mb.box(x0 - out, lh, z - 0.09, x0, H - 0.3, z + 0.09, bronze);
+  }
+  // 頂部の機械室：2 階ぶんのブロンズのルーバーの帯
+  mb.box(x0 - 0.05, H - 2 * OFH, z0 - 0.05, x1 + 0.05, H, z1 + 0.05, C(0x3a2e22), PAT.industrial, C(0x2e2c28));
+  mb.box(x0 + 0.2, H - 0.1, z0 + 0.2, x1 - 0.2, H - 0.05, z1 - 0.2, C(0xe8d9b5), PAT.glow, C(0x2e2c28));
+}
+
+// レバーハウス型：1 階は細い柱だけで開いた広場（ピロティ）、その上に 1 層の横長のガラスの基壇（中庭つき）。
+// 基壇の上に、薄い板のようなガラスの塔が通りと直角に立つ。青緑のガラスとステンレスの細い帯
+function leverTower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number) {
+  const hw = f.W / 2, hd = f.D / 2;
+  const steel = C(0xc9cfd3), glass = rng.pick([C(0x5f9a8f), C(0x5a8f94), C(0x6aa29a)]), dark = C(0x3a4a4c);
+  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.08, C(0xd8d4cc));
+  const PW = f.W - 2, PD = f.D - 2, px0 = -PW / 2, px1 = PW / 2, pz0 = -hd + 1, pz1 = hd - 1;
+  const y0 = 5.2, y1 = 9.6; // 基壇の下の面と上の面
+  // 中庭（基壇の真ん中の穴）
+  const cw = Math.max(0, PW * 0.36), cd = Math.max(0, PD * 0.34), ccz = (pz0 + pz1) / 2 + PD * 0.08;
+  const hole: [number, number, number, number] = [-cw / 2, ccz - cd / 2, cw / 2, ccz + cd / 2];
+  const ring = (ya: number, yb: number, col: THREE.Color, pat: number, top: THREE.Color) => {
+    mb.box(px0, ya, pz0, px1, yb, hole[1], col, pat, top);
+    mb.box(px0, ya, hole[3], px1, yb, pz1, col, pat, top);
+    mb.box(px0, ya, hole[1], hole[0], yb, hole[3], col, pat, top);
+    mb.box(hole[2], ya, hole[1], px1, yb, hole[3], col, pat, top);
+  };
+  ring(y0, y1, glass, PAT.ribbon, flatRoof());
+  ring(y0 - 0.5, y0, steel, PAT.none, steel); // 基壇の底のステンレスの帯
+  ring(y1 - 0.25, y1, steel, PAT.none, flatRoof());
+  // ピロティの柱と、奥まった小さなガラスのロビー
+  for (let x = px0 + 1; x <= px1 - 0.9; x += Math.max(5, PW / 8)) for (const z of [pz0 + 1, pz1 - 1]) mb.box(x - 0.3, 0, z - 0.3, x + 0.3, y0 - 0.5, z + 0.3, steel);
+  mb.box(px0 + 4, 0, pz0 + 3, px0 + PW * 0.32, 4.6, pz0 + PD * 0.45, C(0xa9c3c0), PAT.fullglass, steel);
+  // 中庭の植え込みと木
+  mb.ground(hole[0] + 1, hole[1] + 1, hole[2] - 1, hole[3] - 1, 0.1, PALETTE.lawn);
+  tf((hole[0] + hole[2]) / 2, (hole[1] + hole[3]) / 2, 0.65, 0);
+  // 板の塔：通りと直角（奥へ長い）。基壇の左寄り
+  const TW = Math.min(14, PW * 0.3), TD = Math.min(PD - 4, Math.max(24, PD * 0.78)), H = floors * OFH;
+  const tx0 = px0 + 2, tx1 = tx0 + TW, tz0 = pz0 + 2, tz1 = tz0 + TD;
+  mb.box(tx0, y1, tz0, tx1, H, tz1, glass, PAT.curtain, flatRoof());
+  // 各階のステンレスの細い帯（腰壁）と、角の縦の枠
+  for (let y = y1 + OFH; y < H - 0.5; y += OFH) {
+    mb.box(tx0 - 0.08, y - 0.35, tz0 - 0.08, tx1 + 0.08, y, tz1 + 0.08, steel);
+  }
+  for (const [x, z] of [[tx0, tz0], [tx1, tz0], [tx0, tz1], [tx1, tz1]]) mb.box(x - 0.18, y1, z - 0.18, x + 0.18, H, z + 0.18, steel);
+  // 屋上の機械室（少し下がった、ステンレスの箱）
+  mb.box(tx0 + 1.5, H, tz0 + 2, tx1 - 1.5, H + 2 * OFH, tz1 - 2, dark, PAT.industrial, steel);
+  mb.box(tx0 + 1.6, H + 2 * OFH - 0.4, tz0 + 2.1, tx1 - 1.6, H + 2 * OFH - 0.1, tz1 - 2.1, C(0xdfe8ea), PAT.glow, steel);
+}
+
+// ブルータリズムの塔：打放しコンクリート。下の段は細く、上の 2 段は外へ張り出す（逆さの段々）。
+// 外壁は彫りの深い格子（縦のひれと、各階の厚い床の帯）で、窓は奥まった黒いガラス
+function brutalTower(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number) {
+  const hw = f.W / 2, hd = f.D / 2;
+  const conc = rng.pick([C(0xb3afa7), C(0xa9a59d), C(0xbbb6ac)]), concD = conc.clone().multiplyScalar(0.88), win = C(0x2f3436);
+  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.08, C(0xbdb7ab));
+  const cbox = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, col = conc, top?: THREE.Color) => {
+    mb.matOverride = MAT.concrete;
+    mb.box(x0, y0, z0, x1, y1, z1, col, PAT.none, top ?? col);
+    mb.matOverride = null;
+  };
+  const S = Math.min(38, Math.min(f.W, f.D) * 0.66), H = floors * OFH, cz = 0;
+  // 段：[下の高さ, 上の高さ, 大きさの倍率]
+  const tiers: [number, number, number][] = [[0, H * 0.34, 0.74], [H * 0.34, H * 0.68, 0.9], [H * 0.68, H, 1]];
+  // 1 階：太いコンクリートの柱（ピロティ）と、奥まったガラスのロビー
+  const s0 = S * tiers[0][2];
+  mb.box(-s0 / 2 + 2.5, 0, cz - s0 / 2 + 2.5, s0 / 2 - 2.5, 6, cz + s0 / 2 - 2.5, C(0x8a9a9c), PAT.fullglass, concD);
+  tiers.forEach(([ya, yb, k], ti) => {
+    const s = S * k, x0 = -s / 2, x1 = s / 2, z0 = cz - s / 2, z1 = cz + s / 2;
+    const yStart = ti === 0 ? 6 : ya;
+    // 奥の黒い窓の箱
+    mb.box(x0 + 0.9, yStart, z0 + 0.9, x1 - 0.9, yb, z1 - 0.9, win, PAT.curtain, win);
+    // 段の下の面（張り出しの裏）
+    if (ti > 0) cbox(x0, ya - 0.9, z0, x1, ya, z1, concD);
+    // 各階の厚い床の帯（外へ出る）
+    for (let y = yStart; y <= yb + 0.01; y += OFH) {
+      const t = 0.55;
+      cbox(x0, y - t, z0, x1, y, z0 + 1.0);
+      cbox(x0, y - t, z1 - 1.0, x1, y, z1);
+      cbox(x0, y - t, z0 + 1.0, x0 + 1.0, y, z1 - 1.0);
+      cbox(x1 - 1.0, y - t, z0 + 1.0, x1, y, z1 - 1.0);
+    }
+    // 縦のひれ（3m ごと、奥行き 1m）
+    const n = Math.max(3, Math.round(s / 3));
+    for (let i = 0; i <= n; i++) {
+      const u = x0 + (s * i) / n, w = i === 0 || i === n ? 0.8 : 0.35;
+      cbox(u - w, yStart, z1 - 1.0, u + w, yb, z1);
+      cbox(u - w, yStart, z0, u + w, yb, z0 + 1.0);
+      const v = z0 + (s * i) / n;
+      cbox(x1 - 1.0, yStart, v - w, x1, yb, v + w);
+      cbox(x0, yStart, v - w, x0 + 1.0, yb, v + w);
+    }
+    if (ti === 0) for (const [x, z] of [[x0, z0], [x1, z0], [x0, z1], [x1, z1]]) cbox(x - 1.2, 0, z - 1.2, x + 1.2, 6, z + 1.2);
+  });
+  // 屋上：コンクリートの機械室と階段室
+  cbox(-S * 0.25, H, cz - S * 0.2, S * 0.25, H + 2.2 * OFH, cz + S * 0.2, concD);
+  cbox(S * 0.28, H, cz - S * 0.1, S * 0.4, H + 3 * OFH, cz + S * 0.05, concD);
+  // 前庭の植え込み
+  planter(mb, tf, -hw + 1, hd - 3, -S * 0.2, hd - 1.5);
 }
 
 // 空中の張り出しの塔（台中銀行本社のような）：ガラスの塔の途中から、芝生と木の載ったガラスの箱が横に大きく飛び出す（高さ違いで2つのことも）
