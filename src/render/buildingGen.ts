@@ -3116,8 +3116,7 @@ function recycling(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
 export function cemeteryStage(b: Building) {
   const cap = CIVIC.cemetery?.capacity || 1;
   const fill = Math.max(0, Math.min(1, (b.occ || 0) / cap));
-  const dbg = (globalThis as { __cemStage?: number }).__cemStage; // TEMP-DEBUG
-  return dbg !== undefined ? dbg : Math.round(fill * 4);
+  return Math.round(fill * 4);
 }
 // 段階ごとの、お墓の埋まっている割合
 const CEM_FILL = [0.05, 0.3, 0.55, 0.8, 1];
@@ -3225,10 +3224,15 @@ function cemetery(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, stage: number,
   for (let k = 0; k <= 24; k++) drive.push(bez(k / 24));
   const dw = 2.2;
   mb.matOverride = MAT.ground;
+  // 点ごとの横向き（前後の点の向きの平均）で、となりの板とすきまなくつなぐ
+  const side = drive.map((_, k) => {
+    const [ax, az] = drive[Math.max(0, k - 1)], [bx, bz] = drive[Math.min(24, k + 1)];
+    const tx = bx - ax, tz = bz - az, l = Math.hypot(tx, tz) || 1;
+    return [(-tz / l) * dw, (tx / l) * dw];
+  });
   for (let k = 0; k < 24; k++) {
-    const [ax, az] = drive[k], [bx, bz] = drive[k + 1];
-    const tx = bx - ax, tz = bz - az, l = Math.hypot(tx, tz) || 1, nx = -tz / l * dw, nz = tx / l * dw;
-    qUp([ax - nx, 0.095, az - nz], [ax + nx, 0.095, az + nz], [bx + nx, 0.095, bz + nz], [bx - nx, 0.095, bz - nz], asph);
+    const [ax, az] = drive[k], [bx, bz] = drive[k + 1], [anx, anz] = side[k], [bnx, bnz] = side[k + 1];
+    qUp([ax - anx, 0.095, az - anz], [ax + anx, 0.095, az + anz], [bx + bnx, 0.095, bz + bnz], [bx - bnx, 0.095, bz - bnz], asph);
   }
   mb.matOverride = null;
   const nearDrive = (x: number, z: number, m: number) => drive.some(([px, pz]) => Math.hypot(px - x, pz - z) < dw + m);
@@ -3301,8 +3305,10 @@ function cemetery(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, stage: number,
 
   // ---- 奥：松の森と、木々の間の低い墓石 ----
   const pathZ = -hd * 0.72;
+  // 合葬墓の広場（奥の左の角）
+  const qx0 = -hw + 1.5, qx1 = -hw + 15.5, qz0 = -hd + 1.5, qz1 = pathZ + 4.5;
   const inClear = (x: number, z: number, m: number) =>
-    Math.abs(z - pathZ) < 0.8 + m * 0.5 || Math.hypot(x - cx, z - cz) < moundR + m || (Math.abs(x) < gw + 1 && z > cz) || (x > cwx0 - 3 && x < cwx1 + 3 && z > chz0 - 3);
+    (x > qx0 - m && x < qx1 + m && z > qz0 - m && z < qz1 + m) || Math.abs(z - pathZ) < 0.8 + m * 0.5 || Math.hypot(x - cx, z - cz) < moundR + m || (Math.abs(x) < gw + 1 && z > cz) || (x > cwx0 - 3 && x < cwx1 + 3 && z > chz0 - 3);
   const pines: [number, number][] = [];
   for (let z = -hd + 2.5; z < wz + 3; z += 5.4)
     for (let x = -hw + 2.5; x < hw - 2; x += 5.2) {
@@ -3334,7 +3340,30 @@ function cemetery(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, stage: number,
     mb.box(s.x - s.w / 2, 0, s.z - 0.11, s.x + s.w / 2, s.h, s.z + 0.11, s.col);
   }
   // 森の中の細い砂利道（十字架の丘のうしろを横切る）
-  mb.ground(-hw + 1.5, pathZ - 0.8, hw - 1.5, pathZ + 0.8, 0.075, C(0xb8b09c));
+  mb.ground(qx1, pathZ - 0.8, hw - 1.5, pathZ + 0.8, 0.075, C(0xb8b09c));
+
+  // ---- 合葬墓（奥の左の角）：芝生の小さな塚、その前に名前を刻んだ黒御影の低い壁、花、ベンチ ----
+  const qmx = (qx0 + qx1) / 2, wallZ = pathZ - 1.0;
+  mb.ground(qx0, qz0, qx1, qz1, 0.07, lawn); // 塚のまわりは芝生
+  mb.ground(qx0 + 1, wallZ - 1.0, qx1, qz1, 0.08, gravel); // 壁の前の砂利の広場
+  const mz = (qz0 + wallZ) / 2 - 0.6;
+  hill(qmx, mz, 4.4, 1.7, lawn.clone().multiplyScalar(1.04));
+  tf(qmx, mz, 0.9, 0, 1.6, 0x5f8434, 3); // 塚の上の一本の木
+  const wx0 = qmx - 5, wx1 = qmx + 5;
+  mb.box(wx0 - 0.2, 0, wallZ - 0.7, wx1 + 0.2, 0.25, wallZ + 0.2, stoneL); // 基壇
+  mb.box(wx0, 0.25, wallZ - 0.5, wx1, 1.7, wallZ, C(0x3a3c3f), PAT.none, C(0x4a4c4f)); // 名前の壁
+  for (let y = 0.55; y < 1.55; y += 0.22) for (let x = wx0 + 0.4; x < wx1 - 0.6; x += 1.25) mb.box(x, y, wallZ, x + 0.9, y + 0.05, wallZ + 0.015, C(0x8d8f91)); // 刻まれた名前の列
+  mb.box(qmx - 1.1, 1.75, wallZ - 0.45, qmx + 1.1, 2.25, wallZ - 0.05, C(0x3a3c3f)); // 中央の銘板
+  mb.box(qmx - 0.8, 1.85, wallZ - 0.04, qmx + 0.8, 2.15, wallZ - 0.02, C(0xb9a46a));
+  // 献花台と花（壁の前）
+  mb.box(qmx - 1.0, 0, wallZ + 0.6, qmx + 1.0, 0.7, wallZ + 1.2, stoneL);
+  const flw = [0xd8443c, 0xf0c63a, 0xf3f1ea, 0xc85a9c, 0xe9853a].map(C);
+  for (let i = 0; i < 9; i++) { const x = qmx - 0.85 + i * 0.21; mb.box(x, 0.7, wallZ + 0.75, x + 0.15, 0.85, wallZ + 1.05, C(0x4f7a3a), PAT.none, flw[i % flw.length]); }
+  for (const sx of [-1, 1]) for (let i = 0; i < 8; i++) { const x = qmx + sx * 3.5 - 1.6 + i * 0.4; mb.box(x, 0, wallZ + 0.4, x + 0.36, 0.3, wallZ + 1.0, C(0x55793c), PAT.none, flw[(i + (sx > 0 ? 2 : 0)) % flw.length]); }
+  // ベンチと灯り
+  mb.box(qmx - 1.6, 0, qz1 - 2.2, qmx + 1.6, 0.45, qz1 - 1.7, C(0x8a8780));
+  lamp(qx1 - 1.2, qz1 - 1.2);
+  lamp(qx0 + 1.2, qz1 - 1.2);
 }
 
 // ---------------- 斎場（火葬場）----------------
