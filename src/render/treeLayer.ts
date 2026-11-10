@@ -3,7 +3,7 @@
 // 近く（カメラのまわりだけ）はくわしい形、ふつうは中くらい、遠くは簡単な形にして軽くする
 import * as THREE from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { Grid } from '../sim/grid';
+import { Grid, GRID_F32, GRID_I32, GRID_U8 } from '../sim/grid';
 import { CELL, DX, DY } from '../sim/constants';
 import { ROADS, RoadType } from '../sim/defs';
 import { AV_W, ROAD_LIFT, avenueMedianDir } from './roadLayer';
@@ -995,6 +995,33 @@ export class TreeLayer {
   }
 
   // median：大通りの中央分離帯の並木の位置（道路の層が分離帯の形から決めたもの）。渡されなければ、マスの並びから決める
+  // 区画ごとの「木の位置を決める材料」の値（まわり 2 マスの地図と地形、建物の木、大通りの木）
+  private chunkSig = new Map<number, number>();
+  private sigN = 0;
+  private chunkSigs(g: Grid, cn: number, extra: TreeSpot[], median?: TreeSpot[]) {
+    const n = g.n, M = 2, out = new Int32Array(cn * cn);
+    const arrs: ArrayLike<number>[] = [...GRID_U8.map((k) => g[k]), ...GRID_F32.map((k) => g[k]), ...GRID_I32.map((k) => g[k])];
+    for (let cz = 0; cz < cn; cz++)
+      for (let cx = 0; cx < cn; cx++) {
+        let h = 0x811c9dc5 | 0;
+        const x0 = Math.max(0, cx * CHUNK - M), x1 = Math.min(n - 1, (cx + 1) * CHUNK - 1 + M);
+        const y0 = Math.max(0, cz * CHUNK - M), y1 = Math.min(n - 1, (cz + 1) * CHUNK - 1 + M);
+        for (const a of arrs)
+          for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) h = Math.imul(h ^ ((a[y * n + x] * 64) | 0), 16777619);
+        for (let y = y0; y <= y1 + 1; y++) for (let x = x0; x <= x1 + 1; x++) h = Math.imul(h ^ ((g.vh(x, y) * 64) | 0), 16777619);
+        out[cz * cn + cx] = h;
+      }
+    const add = (t: TreeSpot, salt: number) => {
+      const cx = Math.min(cn - 1, Math.max(0, Math.floor(t.x / CELL / CHUNK))), cz = Math.min(cn - 1, Math.max(0, Math.floor(t.z / CELL / CHUNK)));
+      let h = out[cz * cn + cx];
+      for (const v of [t.x, t.y, t.z, t.s, t.kind, t.col ?? -1, t.shape ?? -1, salt]) h = Math.imul(h ^ ((v * 64) | 0), 16777619);
+      out[cz * cn + cx] = h;
+    };
+    for (const t of extra) add(t, 1);
+    for (const t of median ?? []) add(t, 2);
+    return out;
+  }
+
   rebuild(g: Grid, extra: TreeSpot[], median?: TreeSpot[]) {
     const n = g.n;
     // 前の区画（中身が同じなら、そのまま使う）
@@ -1002,8 +1029,21 @@ export class TreeLayer {
     for (const c of this.chunks) old.set(c.ci, c);
     const drop = (c: Chunk) => { for (const m of c.meshes) { this.group.remove(m); m.dispose(); } };
     this.chunks = [];
-    this.heroDirty = true;
     const cn = Math.ceil(n / CHUNK);
+    // 材料が変わった区画だけ、木を並べ直す（建物が 1 つ建つたびに街じゅうの木を並べ直さない）
+    const sigs = this.chunkSigs(g, cn, extra, median);
+    if (this.sigN !== n) { this.chunkSig.clear(); this.sigN = n; }
+    const dirty = new Uint8Array(cn * cn);
+    let anyDirty = false;
+    for (let ci = 0; ci < cn * cn; ci++) {
+      if (this.chunkSig.get(ci) !== sigs[ci] || (!old.has(ci) && !this.chunkSig.has(ci))) { dirty[ci] = 1; anyDirty = true; }
+      this.chunkSig.set(ci, sigs[ci]);
+    }
+    if (!anyDirty) { this.chunks = [...old.values()]; return; }
+    this.heroDirty = true;
+    const chunkOf = (x: number, y: number) => Math.min(cn - 1, Math.floor(y / CHUNK)) * cn + Math.min(cn - 1, Math.floor(x / CHUNK));
+    // そのマスのまわり（1 マス）に、並べ直す区画があるか
+    const nearDirty = (x: number, y: number) => dirty[chunkOf(x, y)] || dirty[chunkOf(Math.max(0, x - 1), Math.max(0, y - 1))] || dirty[chunkOf(Math.min(n - 1, x + 1), Math.min(n - 1, y + 1))] || dirty[chunkOf(Math.max(0, x - 1), Math.min(n - 1, y + 1))] || dirty[chunkOf(Math.min(n - 1, x + 1), Math.max(0, y - 1))];
     // 区画ごとに [種類][行列とシードと色]
     const lists: { m: number[]; seed: number[]; col: number[] }[][] = Array.from({ length: cn * cn }, () => [{ m: [], seed: [], col: [] }, { m: [], seed: [], col: [] }]);
     const mtx = new THREE.Matrix4();
@@ -1014,6 +1054,7 @@ export class TreeLayer {
     // src: 0=自然の林, 1=公園や庭, 2=街路樹。sp を決めると樹種をそろえる（同じ通りの街路樹）
     const put = (kind: number, x: number, y: number, z: number, s: number, seed: number, src: number, sp = -1, colHex?: number, shape?: number) => {
       const cx = Math.min(cn - 1, Math.max(0, Math.floor(x / CELL / CHUNK))), cz = Math.min(cn - 1, Math.max(0, Math.floor(z / CELL / CHUNK)));
+      if (!dirty[cz * cn + cx]) return;
       const L = lists[cz * cn + cx][kind];
       if (L.seed.length >= MAX_TREES) return;
       const ix = Math.floor(x * 7.3), iz = Math.floor(z * 7.3);
@@ -1041,7 +1082,7 @@ export class TreeLayer {
       for (let x = 0; x < n; x++) {
         const i = y * n + x;
         const t = g.tree[i];
-        if (!t || g.road[i] || g.bldg[i] || g.pline[i]) continue;
+        if (!t || g.road[i] || g.bldg[i] || g.pline[i] || !dirty[chunkOf(x, y)]) continue;
         const per = t * 2;
         for (let k = 0; k < per; k++) {
           const hx = hash2(x * 7 + k, y * 13, 1), hz = hash2(x * 11, y * 5 + k, 2), hs = hash2(x + k * 31, y, 3);
@@ -1059,6 +1100,7 @@ export class TreeLayer {
         if (!((x + y) & 1)) continue;
         const i = y * n + x;
         const t = g.road[i];
+        if (t && !nearDirty(x, y)) continue;
         if (!(t === RoadType.Street || t === RoadType.Road || t === RoadType.OneWay)) continue;
         if (g.up[i] || g.deck[i] > 0 || g.lift[i] > 0.3 || g.bstop[i] || g.rail[i]) continue;
         const m = g.conn[i];
@@ -1083,6 +1125,11 @@ export class TreeLayer {
       const L = lists[ci];
       const prev = old.get(ci);
       old.delete(ci);
+      // 並べ直さなかった区画は、前のまま
+      if (!dirty[ci]) {
+        if (prev) this.chunks.push(prev);
+        continue;
+      }
       if (!L[0].seed.length && !L[1].seed.length) {
         if (prev) drop(prev);
         continue;

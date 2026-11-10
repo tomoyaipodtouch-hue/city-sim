@@ -359,8 +359,10 @@ export class CityRenderer {
     if (animating) this.kick();
     // 車があるときは描画を続ける。何も動かないときは描画を間引く（発熱対策）
     const carsMoving = this.quality.cars && this.rig.dist < 1400;
+    // 一時停止中は車も船も止まっているので、画面を動かしていなければ描き直さない
+    const moving = carsMoving && this.timeScale() > 0;
     this.idleFrames++;
-    if (!carsMoving && this.idleFrames > 30 && this.idleFrames % 10 !== 0) return;
+    if (!moving && this.idleFrames > 30 && this.idleFrames % (carsMoving ? 30 : 10) !== 0) return;
     this.rig.update(dt, this.grid);
     this.cars.viewDist = this.rig.dist;
     // 一時停止中は、車・列車・船・飛行機・雲・波も止める
