@@ -3,6 +3,8 @@
 
 export const CELL = 16; // 1マスの大きさ（m）
 export const WATER_LEVEL = 0; // 水面の高さ（m）
+export const QUAY_LAND = 2.5; // 埋め立て地・岸壁の地面の高さ（m）
+export const QUAY_BED = -6; // 岸壁のすぐ前の水の深さ（m）
 
 // 8方向: 0=東, 1=南東, 2=南, 3=南西, 4=西, 5=北西, 6=北, 7=北東
 export const DX = [1, 1, 0, -1, -1, -1, 0, 1] as const;

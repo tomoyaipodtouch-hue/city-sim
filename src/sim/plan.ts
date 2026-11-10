@@ -1,6 +1,6 @@
 // ツールの計画（プレビューと実行の両方で使う）
 import { Grid } from './grid';
-import { DX, DY, MAX_ROAD_GRADE, CELL, WATER_LEVEL, dirOf, isDiag, opp } from './constants';
+import { DX, DY, MAX_ROAD_GRADE, CELL, WATER_LEVEL, QUAY_LAND, dirOf, isDiag, opp } from './constants';
 import { ROADS, RoadType, ZoneType, ZONE_COST, POWER_LINE_COST, CIVIC, CivicId, BRIDGE_COST_MUL, MAX_BRIDGE, OVERPASS_LIFT, RAMP_COST, isHighway, isGroundHighway, isUrbanElevated, isUrbanGround, LINES, LineKind, BUS_STOP_COST, ESTOP_COST } from './defs';
 
 export interface LinePath {
@@ -1122,7 +1122,7 @@ export function planZone(g: Grid, r: Rect, zone: ZoneType, den: number): ZonePla
         continue;
       }
       const steep = g.cellMaxH(x, y) - g.cellMinH(x, y) > 7;
-      if (g.road[i] || g.bldg[i] || g.isWater(x, y) || steep || hasSurfaceLine(g, i)) {
+      if (g.road[i] || g.bldg[i] || g.isWater(x, y) || steep || hasSurfaceLine(g, i) || g.quay[i] === 2) {
         skipped.push(i);
         continue;
       }
@@ -1243,6 +1243,7 @@ function planPlopSized(g: Grid, id: CivicId, cx: number, cy: number, W: number, 
       if (g.bldg[i]) reason = reason || '建物があります';
       if (hasSurfaceLine(g, i)) reason = reason || '線路があります';
       if (g.isWater(xx, yy)) reason = reason || '水の上には置けません';
+      if (g.quay[i] === 2) reason = reason || '遊歩道があります';
       lo = Math.min(lo, g.cellMinH(xx, yy));
       hi = Math.max(hi, g.cellMaxH(xx, yy));
       sum += g.cellH(xx, yy);
@@ -1580,6 +1581,84 @@ export function applyTerrain(g: Grid, plan: TerrainPlan) {
       g.tree[i] = 0;
     }
   }
+  refreshQuay(g);
+}
+
+// ---------------- 埋め立てと岸壁 ----------------
+// 四角く囲んだ範囲の水を埋め立てて平らな陸（QUAY_LAND）にし、水に面した陸のマスを岸壁にする。
+// style 1 = コンクリートの岸壁、2 = 親水護岸・遊歩道。範囲の中の今の水際も岸壁になる
+export const RECLAIM_COST = 400; // 埋め立て 1 マス
+export const QUAY_COST = [0, 150, 300]; // 岸壁 1 マス（種類ごと）
+export interface ReclaimPlan {
+  fill: number[]; // 埋め立てるマス
+  quay: number[]; // 岸壁になるマス
+  changes: Map<number, number>; // 頂点 → 新しい高さ
+  cost: number;
+}
+const occupied = (g: Grid, i: number) => !!(g.road[i] || g.up[i] || g.bldg[i] || g.rail[i] || g.erail[i] || g.mono[i] || g.pline[i]);
+export function planReclaim(g: Grid, style: number, sx: number, sy: number, ex: number, ey: number): ReclaimPlan {
+  const r = normRect(sx, sy, ex, ey, g.n);
+  const n = g.n, V = n + 1;
+  const changes = new Map<number, number>();
+  const hAt = (vx: number, vy: number) => changes.get(vy * V + vx) ?? g.vh(vx, vy);
+  const raise = (x: number, y: number) => {
+    for (const [vx, vy] of [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]]) {
+      if (vertexLocked(g, vx, vy)) continue;
+      if (g.vh(vx, vy) < QUAY_LAND) changes.set(vy * V + vx, QUAY_LAND);
+    }
+  };
+  const fill: number[] = [];
+  for (let y = r.y0; y <= r.y1; y++)
+    for (let x = r.x0; x <= r.x1; x++) {
+      const i = y * n + x;
+      if (!g.isWater(x, y) || occupied(g, i)) continue;
+      fill.push(i);
+      raise(x, y);
+    }
+  // 埋め立てたあとに陸になっているか
+  const landAfter = (x: number, y: number) => {
+    if (!g.inb(x, y)) return false;
+    return Math.min(hAt(x, y), hAt(x + 1, y), hAt(x, y + 1), hAt(x + 1, y + 1)) >= WATER_LEVEL + 0.3;
+  };
+  // 範囲の中で、埋め立てたあとも水に面している陸のマスが岸壁（平らにそろえる）
+  const quay: number[] = [];
+  for (let y = r.y0; y <= r.y1; y++)
+    for (let x = r.x0; x <= r.x1; x++) {
+      const i = y * n + x;
+      if (!landAfter(x, y)) continue;
+      let wet = false;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (g.inb(x + dx, y + dy) && !landAfter(x + dx, y + dy)) wet = true;
+      if (!wet || g.quay[i] === style) continue;
+      if (g.bldg[i]) continue;
+      quay.push(i);
+      raise(x, y);
+    }
+  const realFill = fill.filter((i) => landAfter(i % n, (i / n) | 0));
+  const cost = realFill.length * RECLAIM_COST + quay.length * (QUAY_COST[style] ?? 0);
+  return { fill: realFill, quay, changes, cost };
+}
+export function applyReclaim(g: Grid, plan: ReclaimPlan, style: number) {
+  for (const [v, h] of plan.changes) g.heights[v] = h;
+  for (const i of plan.fill) { g.tree[i] = 0; g.zone[i] = 0; g.zden[i] = 0; }
+  for (const i of plan.quay) {
+    g.quay[i] = style;
+    // 遊歩道にはゾーンを置かない
+    if (style === 2) { g.zone[i] = 0; g.zden[i] = 0; g.tree[i] = 0; }
+  }
+  refreshQuay(g);
+}
+// 水に面していない岸壁（埋め立てを広げた、地形を変えた）の印を消す
+export function refreshQuay(g: Grid) {
+  const n = g.n;
+  for (let y = 0; y < n; y++)
+    for (let x = 0; x < n; x++) {
+      const i = y * n + x;
+      if (!g.quay[i]) continue;
+      if (g.isWater(x, y)) { g.quay[i] = 0; continue; }
+      let wet = false;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (g.inb(x + dx, y + dy) && g.isWater(x + dx, y + dy)) wet = true;
+      if (!wet) g.quay[i] = 0;
+    }
 }
 
 // ---------------- 道路の始点・終点の自動補正 ----------------

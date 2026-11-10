@@ -8,7 +8,7 @@ import {
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
 import {
-  applyCloverleaf, applyDiamond, applyTerrain, applyURamp, linkURampMiddles, linkUrbanEnds, planTrees, planEStop, estopGroup, estopRoads, platformCells, planURamp, planTerrain, TerrainOp, applyRamp, planRoadCmd, levelAvenueDecks, applyTransitLine, levelViaductsOverWater, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planZone,
+  applyCloverleaf, applyDiamond, applyTerrain, applyReclaim, planReclaim, applyURamp, linkURampMiddles, linkUrbanEnds, planTrees, planEStop, estopGroup, estopRoads, platformCells, planURamp, planTerrain, TerrainOp, applyRamp, planRoadCmd, levelAvenueDecks, applyTransitLine, levelViaductsOverWater, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planZone,
 } from './plan';
 import { CELL } from './constants';
 import { ADVISORS, Advice, computeRating, Loan, LOAN_AMOUNTS, loanRate, makeAdvice, MAX_LOANS, newLoan, ordinanceCost, ordinanceEffects, OrdinanceEffects, OrdinanceId, ORDINANCES, payLoan, rewardUnlocked, REWARD_REQ } from './governance';
@@ -174,6 +174,7 @@ export type Command =
   | { t: 'repay'; id: number }
   | { t: 'uramp'; x: number; y: number }
   | { t: 'terrain'; op: TerrainOp; x0: number; y0: number; x1: number; y1: number }
+  | { t: 'reclaim'; style: number; x0: number; y0: number; x1: number; y1: number }
   | { t: 'trees'; x0: number; y0: number; x1: number; y1: number };
 
 // 倉庫業の魅力：港・貨物駅のすぐ近く（近さ 1）と、幹線道路・高速道路の近くで足す値
@@ -421,6 +422,16 @@ export class World {
         if (!plan.changes.size) return { ok: false, msg: plan.locked.length ? '道路や建物があるところは変えられません' : 'これ以上は変えられません' };
         if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
         applyTerrain(g, plan);
+        this.heightVersion++;
+        this.afterGridChange();
+        return { ok: true, cost: plan.cost };
+      }
+      case 'reclaim': {
+        const style = c.style === 2 ? 2 : 1;
+        const plan = planReclaim(g, style, c.x0, c.y0, c.x1, c.y1);
+        if (!plan.fill.length && !plan.quay.length) return { ok: false, msg: '埋め立てや岸壁にできる水辺がありません' };
+        if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
+        applyReclaim(g, plan, style);
         this.heightVersion++;
         this.afterGridChange();
         return { ok: true, cost: plan.cost };
@@ -1470,6 +1481,8 @@ export class World {
         if (pk) park[g.idx(x, y)] = Math.max(park[g.idx(x, y)], pk);
       }
     }
+    // 親水護岸・遊歩道は公園と同じように周りの地価を上げる
+    for (let i = 0; i < N; i++) if (g.quay[i] === 2) park[i] = Math.max(park[i], 0.2);
     for (let i = 0; i < N; i++) if (g.anyRoad(i)) src[i] += Math.min(0.6, (this.maps.traffic[i] + this.maps.traffic[i + N]) / 3000) * this.fx.roadPollution;
     const pol = blur(src, n, 3, 3);
     for (let i = 0; i < N; i++) this.maps.pollution[i] = Math.min(255, Math.round(pol[i] * 140));

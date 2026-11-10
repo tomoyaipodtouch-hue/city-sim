@@ -1,6 +1,6 @@
 // ツールの定義と、ドラッグ中のプレビュー・確定
 import { BUS_STOP_COST, CIVIC, CivicId, DENSITY_NAMES, LINES, LineKind, ROADS, RoadType, ZoneType, ZONE_COST, ZONE_NAMES, POWER_LINE_COST, RAMP_COST , ESTOP_COST } from '../sim/defs';
-import { normRect, planBulldoze, planBusStop, planCloverleaf, planTransitLine, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoadCmd, planZone, planURamp, planTerrain, TERRAIN_STEP, TerrainOp, planTrees, TREE_COST, planEStop } from '../sim/plan';
+import { normRect, planBulldoze, planBusStop, planCloverleaf, planTransitLine, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoadCmd, planZone, planURamp, planTerrain, TERRAIN_STEP, TerrainOp, planTrees, TREE_COST, planEStop, planReclaim, RECLAIM_COST } from '../sim/plan';
 import type { PreviewArrow } from '../render/previewLayer';
 import type { Command } from '../sim/world';
 import type { GameClient } from '../game';
@@ -141,6 +141,8 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { tool: 'terrain:raise', name: '地面を上げる', note: `${TERRAIN_STEP}m ずつ` },
       { tool: 'terrain:lower', name: '地面を下げる', note: `${TERRAIN_STEP}m ずつ` },
       { tool: 'terrain:level', name: '平らにする', note: '始点の高さにそろえる' },
+      { tool: 'reclaim:1', name: '埋め立て・岸壁（コンクリート）', note: `${yen(RECLAIM_COST)}/マス` },
+      { tool: 'reclaim:2', name: '埋め立て・親水護岸（遊歩道）', note: `${yen(RECLAIM_COST)}/マス` },
       { tool: 'trees', name: '木を植える', note: `${yen(TREE_COST)}/マス` },
     ],
   },
@@ -333,6 +335,15 @@ export class ToolController {
       pv.setPath(g, []);
       return plan.cells.length ? { text: `木を植える ${yen(plan.cost)}`, bad: false } : { text: '木を植えられる場所がありません', bad: true };
     }
+    if (t.startsWith('reclaim:')) {
+      const style = Number(t.split(':')[1]);
+      const plan = planReclaim(g, style, d.x0, d.y0, x, y);
+      const q = new Set(plan.quay);
+      pv.setTiles(g, [...plan.fill, ...plan.quay], (i) => (q.has(i) ? (style === 2 ? 0x6fbf7a : 0xf2c200) : 0xc9a26b));
+      pv.setPath(g, []);
+      if (!plan.fill.length && !plan.quay.length) return { text: '埋め立てや岸壁にできる水辺がありません', bad: true };
+      return { text: `埋め立て ${plan.fill.length} マス・${style === 2 ? '遊歩道' : '岸壁'} ${plan.quay.length} マス　${yen(plan.cost)}`, bad: false };
+    }
     if (t.startsWith('terrain:')) {
       const op = t.split(':')[1] as TerrainOp;
       const plan = planTerrain(g, op, d.x0, d.y0, x, y);
@@ -423,6 +434,7 @@ export class ToolController {
       const [, z, den] = t.split(':');
       cmd = { t: 'zone', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1, zone: Number(z) as ZoneType, den: Number(den) };
     } else if (t === 'dezone') cmd = { t: 'zone', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1, zone: ZoneType.None, den: 0 };
+    else if (t.startsWith('reclaim:')) cmd = { t: 'reclaim', style: Number(t.split(':')[1]), x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1 };
     else if (t.startsWith('terrain:')) cmd = { t: 'terrain', op: t.split(':')[1] as TerrainOp, x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1 };
     else if (t === 'trees') cmd = { t: 'trees', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1 };
     else if (t === 'bulldoze') cmd = { t: 'bulldoze', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1 };
