@@ -685,7 +685,7 @@ export class Hud {
             <tr><td>人口</td><td>${num(s.population)} 人</td></tr>
             <tr><td>雇用</td><td>${num(s.jobs)} 人分</td></tr>
             <tr><td>失業率</td><td>${Math.round(unemp * 100)}%</td></tr>
-            <tr><td>通勤の交通手段</td><td>車 ${Math.round((s.modeShare?.car ?? 0) * 100)}%・公共交通 ${Math.round((s.modeShare?.transit ?? 0) * 100)}%・徒歩 ${Math.round((s.modeShare?.walk ?? 0) * 100)}%</td></tr>
+            <tr><td>通勤の交通手段</td><td>車 ${Math.round((s.modeShare?.car ?? 0) * 100)}%・公共交通 ${Math.round((s.modeShare?.transit ?? 0) * 100)}%${(s.modeShare?.parkRide ?? 0) >= 0.005 ? `（うちパーク&ライド ${Math.round((s.modeShare?.parkRide ?? 0) * 100)}%）` : ''}・徒歩 ${Math.round((s.modeShare?.walk ?? 0) * 100)}%</td></tr>
             <tr><td>公共交通の乗客</td><td>${num(s.transitRiders ?? 0)} 人/日</td></tr>
             <tr><td>平均通勤時間</td><td>${s.avgCommute ? s.avgCommute.toFixed(1) + ' 分' : '-'}</td></tr>
             <tr><td>電力（使用 / 発電）</td><td class="${s.powerDemand > s.powerSupply ? 'neg' : ''}">${num(s.powerDemand)} / ${num(s.powerSupply)} MW</td></tr>

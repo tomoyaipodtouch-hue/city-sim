@@ -14,7 +14,7 @@ import { CELL } from './constants';
 import { ADVISORS, Advice, computeRating, Loan, LOAN_AMOUNTS, loanRate, makeAdvice, MAX_LOANS, newLoan, ordinanceCost, ordinanceEffects, OrdinanceEffects, OrdinanceId, ORDINANCES, payLoan, rewardUnlocked, REWARD_REQ } from './governance';
 import { defaultServiceState, facilityEffect, makeServiceMaps, ServiceMaps, ServiceState, updateServices } from './services';
 import { Ages, agesOf, FuneralState, taxFactor, updatePopulation, WORK_RATE, workersOf } from './population';
-import { assignTrips, buildJunctions, buildRoadGraph, buildTransitModel, congestionFactor, Destination, junctionGroup, LAYER, normalizeAvenueJunctions, Origin } from './traffic';
+import { assignTrips, buildJunctions, buildRoadGraph, buildTransitModel, congestionFactor, Destination, junctionGroup, LAYER, normalizeAvenueJunctions, Origin, parkingMinutes } from './traffic';
 
 export enum BState {
   Building = 0,
@@ -73,7 +73,7 @@ export interface Stats {
   speed: number;
   neighborConnected: boolean;
   transitRiders: number;
-  modeShare: { car: number; transit: number; walk: number };
+  modeShare: { car: number; transit: number; walk: number; parkRide?: number }; // parkRide は transit のうち駅まで車で行った割合
   rating: number;
   ratingParts: [string, number][];
   advice: Advice[];
@@ -1529,6 +1529,9 @@ export class World {
     const trucks = new Map<number, Origin>();
     const jobsAt = new Map<number, Destination[]>();
     const shopsAt = new Map<number, Destination[]>();
+    // 車で通勤先に着いたときの駐車の時間（分、道路マスごと）。高密度の街、とくに高層ビル街の中心ほど駐車場が遠く高い
+    const carArrive = new Float32Array(N);
+    const core = this.coreMap();
     // 車を持たない人の割合（所得が低いほど多い）。車を持たない人は、公共交通か徒歩しか使えない
     const NO_CAR: Record<string, number> = { R1: 0.4, R2: 0.15, R3: 0.05 };
     const NO_CAR_PENALTY = 999;
@@ -1572,6 +1575,10 @@ export class World {
         addOrigin(shoppers, cell, b.id, Math.round(shop * f), NO_CAR_PENALTY);
       } else {
         addDest(jobsAt, acc, { id: b.id, free: b.cap });
+        if (def.zone === ZoneType.C) {
+          const park = parkingMinutes(b.den, core[g.idx(b.x + (b.w >> 1), b.y + (b.h >> 1))]);
+          for (const c of acc) if (park > carArrive[c]) carArrive[c] = park;
+        }
         if (b.type === 'CS1' || b.type === 'CS2' || b.type === 'CS3') addDest(shopsAt, acc, { id: b.id, free: b.cap * 6 });
         if (def.zone === ZoneType.I || def.zone === ZoneType.F) addOrigin(trucks, cell, b.id, Math.max(1, Math.round(b.occ * (b.type === 'IA' ? 0.05 : 0.12))));
       }
@@ -1679,7 +1686,7 @@ export class World {
     this.seaportBoost = seaportBoost;
     this.freightBoost = freightBoost;
     const graph = buildRoadGraph(g, cong, junctions);
-    const rc = assignTrips(g, [...commuters.values()], jobsAt, cong, junctions, rnd, { externalCap: external, maxMinutes: 80, weight: 1 }, tm, graph);
+    const rc = assignTrips(g, [...commuters.values()], jobsAt, cong, junctions, rnd, { externalCap: external, maxMinutes: 80, weight: 1, parkRide: true, carArrive }, tm, graph);
     const rs = assignTrips(g, [...shoppers.values()], shopsAt, cong, junctions, rnd, { externalCap: this.neighborConnected ? pop * 0.03 : 0, maxMinutes: 30, weight: 0.5 }, tm, graph);
     // 公共交通の乗客数（バス、鉄道、高架鉄道、モノレール、地下鉄の順に N マスずつ）
     const riders = this.maps.riders;
@@ -1689,7 +1696,7 @@ export class World {
     }
     this.transitRiders = Math.round(rc.modes.transit + rs.modes.transit);
     const tot = Math.max(1, rc.modes.car + rc.modes.transit + rc.modes.walk);
-    this.modeShare = { car: rc.modes.car / tot, transit: rc.modes.transit / tot, walk: rc.modes.walk / tot };
+    this.modeShare = { car: rc.modes.car / tot, transit: rc.modes.transit / tot, walk: rc.modes.walk / tot, parkRide: rc.modes.parkRide / tot };
     // 貨物：隣の都市（道路・高速道路）、港、貨物駅のうち近いところへ
     const rf = assignTrips(g, [...trucks.values()], freightAt, cong, junctions, rnd, { externalCap: 1e9, externalOnly: freightAt.size === 0, carOnly: true, maxMinutes: 90, weight: 2.5 }, undefined, graph);
     // 交通量と混雑度（前の月と平均してなめらかにする）
@@ -1770,7 +1777,7 @@ export class World {
   zoneDemand: [number, number, number] = [0, 0, 0];
   private seaportBoost = 0;
   private freightBoost = 0; // 貨物駅（倉庫業の需要）
-  modeShare = { car: 0, transit: 0, walk: 0 };
+  modeShare: { car: number; transit: number; walk: number; parkRide?: number } = { car: 0, transit: 0, walk: 0, parkRide: 0 };
   static readonly CTL_AUTO = Ctl.Auto;
   tripStats = { shopping: 0, freight: 0, trucks: 0 };
 

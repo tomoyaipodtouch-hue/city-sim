@@ -7,6 +7,13 @@ import { CELL, DX, DY, isDiag } from './constants';
 import { BUS_WAIT, LINES, LineKind, ROADS, RoadType, isHighway } from './defs';
 
 const START_OVERHEAD_MIN = 2; // 家を出て駐車場まで等
+// パーク&ライド：駅に面した道路で車を降り、駐車して改札まで歩く時間（分）
+export const PARK_RIDE_MIN = 3;
+// 車で商業地（店・オフィス）に通勤したときの駐車の時間（分）。den = 密度（0..2）、core = 高層ビル街の中心らしさ（0..1）。
+// 低密度は店先に停められるので短く、高層ビル街の中心では駐車場が遠く高いので最大 10 分
+export function parkingMinutes(den: number, core: number) {
+  return den >= 2 ? 4 + 6 * Math.max(0, Math.min(1, core)) : den === 1 ? 2 : 1;
+}
 
 // 型付き配列の二分ヒープ（キー = 時刻、値 = ノード）
 class MinHeap {
@@ -262,6 +269,8 @@ export interface TripOptions {
   carOnly?: boolean; // 車だけ（貨物）
   maxMinutes: number;
   weight: number; // 交通量に加えるときの重み（トラックは大きい）
+  parkRide?: boolean; // 駅（鉄道・高架鉄道・モノレール・地下鉄）に車で行き、駐車して乗り換えられる（通勤）
+  carArrive?: Float32Array; // 道路マス（地上）ごと：車で目的地に着いたときの駐車の時間（分）。高密度の街ほど長い
 }
 
 // ---------------- 公共交通 ----------------
@@ -279,6 +288,7 @@ export interface TransitModel {
   busStop: Uint8Array; // バスに乗り降りできる道路のマス
   // 駅：道路のマス（徒歩）⇔ 線路のマス（各線）
   walkToLine: Map<number, number[]>; // 徒歩のノード → 線のノード
+  parkRide: Uint8Array; // 駅に面した道路のマス（車で来て駐車し、乗り換えられる）
   lineToWalk: Map<number, number[]>; // 線のノード → 徒歩のノード
   any: boolean; // 公共交通が1つでもあるか
   walkLinks: Map<number, [number, number][]>; // 旅客フェリー：徒歩のノード → [徒歩のノード, 分]
@@ -292,7 +302,7 @@ export function buildTransitModel(
   stations: { kind: 'bus' | LineKind; roadCells: number[]; lineCells: number[] }[],
 ): TransitModel {
   const N = g.n * g.n;
-  const walkable = new Uint8Array(N), busStop = new Uint8Array(N);
+  const walkable = new Uint8Array(N), busStop = new Uint8Array(N), parkRide = new Uint8Array(N);
   for (let i = 0; i < N; i++) {
     const t = g.road[i];
     if (t && !isHighway(t) && t !== RoadType.Ramp) walkable[i] = 1;
@@ -306,6 +316,7 @@ export function buildTransitModel(
     const L = LINE_LAYER[st.kind];
     for (const r of st.roadCells) {
       const wn = LAYER.walk * N + r;
+      if (st.lineCells.length) parkRide[r] = 1;
       for (const c of st.lineCells) {
         const ln = L * N + c;
         (walkToLine.get(wn) ?? walkToLine.set(wn, []).get(wn)!).push(ln);
@@ -313,13 +324,14 @@ export function buildTransitModel(
       }
     }
   }
-  return { walkable, busStop, walkToLine, lineToWalk, any: stations.length > 0, walkLinks: new Map(), carLinks: new Map(), carToExt: new Map(), railToExt: true };
+  return { walkable, busStop, walkToLine, lineToWalk, parkRide, any: stations.length > 0, walkLinks: new Map(), carLinks: new Map(), carToExt: new Map(), railToExt: true };
 }
 
 export interface ModeStats {
   car: number;
-  transit: number;
+  transit: number; // パーク&ライドも含む
   walk: number;
+  parkRide: number; // 公共交通のうち、駅まで車で行った人
 }
 
 // 車の道路網を、探索しやすい形（隣のノードと所要時間の一覧）にまとめたもの。
@@ -329,6 +341,7 @@ export interface RoadGraph {
   to: Int32Array;
   dir: Int8Array;
   min: Float32Array; // 道路の移動時間（分）
+  carMin: Float32Array; // 車が経路を選ぶときの移動時間（分）。ひどく混む道路は、遅れが読めないので実際より長く感じる
   jslot: Int32Array; // 交差点のマス → 待ち時間の表の番号（-1 = 交差点ではない）
   jdel: Float32Array; // [slot*64 + 入ってきた向き*8 + 出ていく向き] の待ち時間（-1 = 通れない）
   edge: Uint8Array; // マップの端のマス
@@ -362,12 +375,22 @@ export function buildRoadGraph(g: Grid, congestion: Float32Array, junctions: Jun
   for (let v = 0; v < M; v++) extPen[v] = isHighway(g.nodeType(v)) ? 6 : 14;
   const urban = new Uint8Array(M);
   for (let v = 0; v < M; v++) { const t = g.nodeType(v); urban[v] = isUrbanHighway(t) ? 1 : t === RoadType.Ramp ? 2 : 0; }
-  return { off, to: Int32Array.from(tmpTo), dir: Int8Array.from(tmpDir), min: Float32Array.from(tmpMin), jslot, jdel, edge, extPen, urban };
+  const min = Float32Array.from(tmpMin), carMin = new Float32Array(min.length);
+  for (let u = 0; u < M; u++) {
+    const f = perceivedCongestion(congestion[u]);
+    for (let e = off[u]; e < off[u + 1]; e++) carMin[e] = min[e] * f;
+  }
+  return { off, to: Int32Array.from(tmpTo), dir: Int8Array.from(tmpDir), min, carMin, jslot, jdel, edge, extPen, urban };
 }
 
 // 探索に使う作業用の配列（毎回作り直さない）
 let work: { size: number; dist: Float32Array; prev: Int32Array; inDir: Int8Array; walkFrom: Float32Array; stamp: Int32Array; done: Int32Array; gen: number } | null = null;
 const heap = new MinHeap();
+// 混雑度（実際の時間の倍率）→ 車の経路選びで感じる追加の倍率。容量を大きく超えて混む道路（倍率 1.5 以上）だけ、
+// 遅れが読めないぶん避けたくなる。急すぎると月ごとに経路がゆれるので、ゆるやかにする（最大 1.8 倍）
+export function perceivedCongestion(c: number) {
+  return c <= 1.5 ? 1 : Math.min(1.8, 1 + 0.3 * (c - 1.5));
+}
 function getWork(size: number) {
   if (!work || work.size !== size)
     work = { size, dist: new Float32Array(size), prev: new Int32Array(size), inDir: new Int8Array(size), walkFrom: new Float32Array(size), stamp: new Int32Array(size), done: new Int32Array(size), gen: 0 };
@@ -387,16 +410,20 @@ export function assignTrips(
 ): TripResult & { modes: ModeStats } {
   const n = g.n, N = n * n, NN = LAYERS * N;
   const EXT = NN;
+  const PARK = NN + 1; // PARK + マス = 車で目的地に着いて駐車し終えた（駐車の時間のための仮のノード）
   const G = graph ?? buildRoadGraph(g, congestion, junctions);
-  const { off, to, dir, min: emin, jslot, jdel } = G;
+  const { off, to, dir, min: emin, carMin, jslot, jdel } = G;
   const volume = new Float32Array(NN);
   const served = new Map<number, number>();
   const time = new Map<number, number>();
   const filled = new Map<number, number>();
-  const W = getWork(NN + 1);
+  const W = getWork(NN + 1 + N);
   const { dist, prev, inDir, walkFrom, stamp, done } = W;
-  const modes: ModeStats = { car: 0, transit: 0, walk: 0 };
+  const modes: ModeStats = { car: 0, transit: 0, walk: 0, parkRide: 0 };
   const useWalk = !opt.carOnly && !!transit;
+  const carArrive = opt.carArrive;
+  // パーク&ライド：駅に面した道路マスから、駅の線へ（駐車場からまっすぐホームへ。車を降りて街を歩くのには使わない）
+  const parkRide = useWalk && opt.parkRide && transit!.walkToLine.size ? transit!.parkRide : null;
   let extFree = opt.externalCap;
   let external = 0;
   // 同じ目的地が複数の道路マスに面している場合があるので、空き数は目的地単位で共有する。
@@ -467,8 +494,9 @@ export function assignTrips(
       if (done[u] === gen) continue;
       done[u] = gen;
       if (t > maxMin) break;
-      const layer = u === EXT ? -1 : (u / N) | 0;
-      const cell = u - layer * N;
+      const parked = u > EXT;
+      const layer = u === EXT ? -1 : parked ? 0 : (u / N) | 0;
+      const cell = parked ? u - PARK : u - layer * N;
 
       // 目的地の判定（車で着く、または歩いて着く）
       let take = 0;
@@ -477,7 +505,9 @@ export function assignTrips(
         extFree -= take;
         external += take;
       } else if ((layer === 0 || layer === LAYER.walk) && destIdx[cell] >= 0) {
-        for (const dd of destLists[destIdx[cell]]) {
+        // 車で着いたら、まず駐車する（駐車の時間がかかるマスでは、その時間だけ後に着いたことにする）
+        if (layer === 0 && !parked && carArrive && carArrive[cell] > 0) relax(PARK + cell, t + carArrive[cell], u, -1, 0);
+        else for (const dd of destLists[destIdx[cell]]) {
           if (dd.free <= 0) continue;
           const k = Math.min(remaining - take, dd.free);
           dd.free -= k;
@@ -492,7 +522,7 @@ export function assignTrips(
         got += take;
         timeAcc += take * t;
         // 経路に人数を加え、交通手段を数える
-        let c = u === EXT ? prev[EXT] : u;
+        let c = u >= EXT ? prev[u] : u;
         const w = take * opt.weight;
         let usedCar = false, usedTransit = false;
         while (c >= 0) {
@@ -502,12 +532,14 @@ export function assignTrips(
           else if (l >= LAYER.bus) usedTransit = true;
           c = prev[c];
         }
-        if (usedTransit) modes.transit += take;
-        else if (usedCar) modes.car += take;
+        if (usedTransit) {
+          modes.transit += take;
+          if (usedCar) modes.parkRide += take;
+        } else if (usedCar) modes.car += take;
         else modes.walk += take;
         if (totalFree <= 0) break;
       }
-      if (u === EXT) continue;
+      if (u >= EXT) continue;
 
       if (layer <= 1) {
         // 車
@@ -521,7 +553,7 @@ export function assignTrips(
             if (jd < 0) continue;
           } else if (din >= 0 && ((d - din + 8) & 7) === 4) continue; // Uターンはしない
           else if (urban[u] === 1 && (urban[to[e]] === 2 || (prev[u] >= 0 && prev[u] < 2 * N && urban[prev[u]] === 2)) && !urbanTurnOk(din, d)) continue;
-          relax(to[e], t + emin[e] + jd, u, d, 0);
+          relax(to[e], t + carMin[e] + jd, u, d, 0);
         }
         if (extFree > 0 && edge[cell]) relax(EXT, t + extPen[u], u, -1, 0);
         if (transit && u < N) {
@@ -530,6 +562,10 @@ export function assignTrips(
           if (fl) for (const [v, m] of fl) relax(v, t + m, u, -1, 0);
           const fe = transit.carToExt.size ? transit.carToExt.get(u) : undefined;
           if (fe !== undefined && extFree > 0) relax(EXT, t + fe, u, -1, 0);
+          if (parkRide && parkRide[u]) {
+            const lines = transit.walkToLine.get(WALK + u);
+            if (lines) for (const ln of lines) relax(ln, t + PARK_RIDE_MIN + lineWait[(ln / N) | 0], u, -1, 0);
+          }
         }
         continue;
       }
