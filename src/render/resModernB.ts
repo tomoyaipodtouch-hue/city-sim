@@ -66,12 +66,15 @@ function polyCap(mb: MeshBuilder, pts: P2[], y: number, col: THREE.Color, down =
   }
 }
 // 両面の薄い板（開いた折れ線に沿う。スクリーンや手すり）
-function sheet(mb: MeshBuilder, pts: P2[], y0: number, y1: number, col: THREE.Color, pat = 0) {
+function sheet(mb: MeshBuilder, pts: P2[], y0: number, y1: number, col: THREE.Color, pat = 0, m?: number) {
+  const keep = mb.matOverride;
+  if (m !== undefined) mb.matOverride = m;
   for (let i = 0; i + 1 < pts.length; i++) {
     const [ax, az] = pts[i], [bx2, bz] = pts[i + 1];
     wq(mb, ax, az, bx2, bz, y0, y1, col, pat, y0);
     wq(mb, bx2, bz, ax, az, y0, y1, col, pat, y0);
   }
+  mb.matOverride = keep;
 }
 const arc = (cx: number, cz: number, r: number, a0: number, a1: number, n: number): P2[] => {
   const o: P2[] = [];
@@ -231,7 +234,7 @@ function perfScreen(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: numb
             : [F.P(ua, 0), F.P(ua, pd), ...arc(x1 - rr, z1 + pd - rr, rr, Math.PI / 2, 0, 6), F.P(ub, 0)];
           mb.prism(pts, y - 0.25, y, wall, PAT.none, wall);
           polyCap(mb, pts, y - 0.25, r < 0.4 ? soffit : wall, true, r < 0.4 ? PAT.lit : PAT.none);
-          sheet(mb, pts, y, y + rail, scr, lit);
+          sheet(mb, pts, y, y + rail, scr, lit, MAT.metal);
           continue;
         }
         if (proj) {
@@ -242,23 +245,23 @@ function perfScreen(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: numb
             // 天井までのスクリーン：横は全面、正面は片側だけ（残りは手すりの高さ。引き戸のスクリーンを開けたところ）
             const op = (u1 - u0) * (0.3 + r * 0.3), right = r > 0.9;
             const um = right ? u1 - op : u0 + op;
-            sheet(mb, [F.P(u0, 0.02), F.P(u0, pd)], y, top - 0.3, scr, lit);
-            sheet(mb, [F.P(u1, pd), F.P(u1, 0.02)], y, top - 0.3, scr, lit);
-            sheet(mb, [F.P(u0, pd), F.P(u1, pd)], y, y + rail, scr, lit);
-            sheet(mb, right ? [F.P(u0, pd), F.P(um, pd)] : [F.P(um, pd), F.P(u1, pd)], y + rail, top - 0.3, scr, lit);
+            sheet(mb, [F.P(u0, 0.02), F.P(u0, pd)], y, top - 0.3, scr, lit, MAT.metal);
+            sheet(mb, [F.P(u1, pd), F.P(u1, 0.02)], y, top - 0.3, scr, lit, MAT.metal);
+            sheet(mb, [F.P(u0, pd), F.P(u1, pd)], y, y + rail, scr, lit, MAT.metal);
+            sheet(mb, right ? [F.P(u0, pd), F.P(um, pd)] : [F.P(um, pd), F.P(u1, pd)], y + rail, top - 0.3, scr, lit, MAT.metal);
             // 天井の板
             fbox(mb, F, u0, u1, 0, pd, top - 0.3, top - 0.05, wall, { skip: side === 0 ? 2 : 1, bot: soffit });
           } else {
-            sheet(mb, [F.P(u0, 0.02), F.P(u0, pd), F.P(u1, pd), F.P(u1, 0.02)], y, y + rail, scr, lit);
+            sheet(mb, [F.P(u0, 0.02), F.P(u0, pd), F.P(u1, pd), F.P(u1, 0.02)], y, y + rail, scr, lit, MAT.metal);
             if (r > 0.72) {
               // 片側だけ高いスクリーン（目隠し）
               const um = u0 + (u1 - u0) * 0.5;
-              sheet(mb, [F.P(um, pd), F.P(u1, pd), F.P(u1, 0.02)], y + rail, top - 0.3, scr, PAT.none);
+              sheet(mb, [F.P(um, pd), F.P(u1, pd), F.P(u1, 0.02)], y + rail, top - 0.3, scr, PAT.none, MAT.metal);
             }
           }
         } else if (r < flushP) {
           // 面一のスクリーン（窓の前の手すり）
-          sheet(mb, [F.P(u0 + 0.2, 0.12), F.P(u1 - 0.2, 0.12)], y, y + rail, scr, PAT.none);
+          sheet(mb, [F.P(u0 + 0.2, 0.12), F.P(u1 - 0.2, 0.12)], y, y + rail, scr, PAT.none, MAT.metal);
           fbox(mb, F, u0 + 0.1, u1 - 0.1, 0, 0.18, y - 0.15, y, wall, { skip: side === 0 ? 2 : 1 });
         }
       }
@@ -333,7 +336,7 @@ function greenTerrace(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: nu
         const P = back ? (u: number, w: number): P2 => [x1 - u, zb - w] : (u: number, w: number): P2 => [x0 + u, zf + w];
         const [a, b] = P(0.4, 0), [c, e] = P(x1 - x0 - 0.4, 1.4);
         bx(mb, a, y - 0.25, b, c, y, e, wall, { bot: wall });
-        planterRow(mb, P, 0.4, x1 - x0 - 0.4, 1.0, 1.4, y, pot, rng, true);
+        planterRow(mb, P, 0.4, x1 - x0 - 0.4, 1.0, 1.4, y, pot, rng, !tall);
       }
     }
     // 屋根（テラス）：舗装、前のふちに植え込み、横のふちにも小さな植え込み、小さな木
@@ -428,7 +431,14 @@ function zigzagBay(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: numbe
         mb.matOverride = keep;
         // 上と下のふた（床の板の色）
         const tri: P2[] = [A, B, Cc];
-        polyCap(mb, tri, yB, slab);
+        if (k1 === n) {
+          // 屋上の高さまで出窓の形のパラペットを立ち上げる（屋上のふちもジグザグに）
+          mb.matOverride = dark ? MAT.metal : MAT.plaster;
+          wq(mb, A[0], A[1], B[0], B[1], yB, yB + 1, dark ? wall : slab);
+          wq(mb, B[0], B[1], Cc[0], Cc[1], yB, yB + 1, dark ? wall : slab);
+          mb.matOverride = keep;
+        }
+        polyCap(mb, tri, k1 === n ? yB + 1 : yB, slab);
         polyCap(mb, tri, yA, slab, true);
       }
     }
@@ -518,5 +528,5 @@ function nordicTimber(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: nu
 
 RES['perfScreen'] = { fn: perfScreen, minF: 3, maxF: 36 };
 RES['greenTerrace'] = { fn: greenTerrace, minF: 3, maxF: 28 };
-RES['zigzagBay'] = { fn: zigzagBay, minF: 3, maxF: 24 };
+RES['zigzagBay'] = { fn: zigzagBay, minF: 3, maxF: 30 };
 RES['nordicTimber'] = { fn: nordicTimber, minF: 3, maxF: 45 };
