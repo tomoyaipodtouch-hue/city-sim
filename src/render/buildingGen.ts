@@ -3313,9 +3313,9 @@ function cemetery(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, stage: number)
 
 // ---------------- 斎場（火葬場）----------------
 // 打ち放しコンクリートとガラスの斎場。低く長い一つの箱（KAAN「Siesegem」）が道路に面し、
-// 正面は深い列柱（コンクリートの柱の列）とその奥の全面ガラス。箱には中庭を 2 つ切り込む（木の庭と水の庭）。
-// 中央の告別ホールだけ少し高く、大きなガラスの開口から、細い丸柱がランダムに立つ「柱の森」が見える
-// （Schultes Frank「Baumschulenweg」）。柱の頭のまわりは丸い天窓の光の輪で、夜は屋上の輪も光る。
+// 正面は深い列柱（コンクリートの柱の列）とその奥の全面ガラス。箱には中庭を 2 つ切り込む（白い砂利の庭と水の庭。木は植えない）。
+// 全体は同じ低い高さ。中央の告別ホールには細い丸柱がランダムに立つ「柱の森」があり、ガラス越しに見える
+// （Schultes Frank「Baumschulenweg」）。柱の頭のまわりは丸い天窓の光の輪で、夜は屋上の平らな輪も光る。
 // 火葬炉はホールの奥に同じ箱の一部として入れ、排気は屋上の低い囲いの中（煙突は見せない）
 function crematorium(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, pond?: PondBuilder) {
   const hw = f.W / 2, hd = f.D / 2;
@@ -3327,7 +3327,7 @@ function crematorium(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, pond?: Pond
   // ---- 箱の寸法 ----
   const X0 = -hw + 5, X1 = hw - 5, Z0 = -hd + 4, Z1 = hd - 14; // 低い棟の外形
   const H = 6; // 低い棟の高さ
-  const hx = Math.min(9.5, (X1 - X0) * 0.18), hz0 = Z0 + 6, hz1 = Z1 + 1.2, HH = 10.5; // 中央の告別ホール（少し前に出る）
+  const hx = Math.min(9.5, (X1 - X0) * 0.18), hz0 = Z0 + 6, hz1 = Z1; // 中央の告別ホール（ほかと同じ低い高さ、正面もそろえる）
   const colD = 3.4; // 列柱の奥行き（ガラスはこれだけ奥）
 
   // コンクリートの箱（打ち放しの素材）と、目地（型枠の継ぎ目）の細い線
@@ -3349,7 +3349,8 @@ function crematorium(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, pond?: Pond
     mb.matOverride = null;
   };
   // 屋上：内側に一段低く見える砂利の面と、まわりのパラペット（立ち上がり）
-  const roofTop = (x0: number, z0: number, x1: number, z1: number, y: number, hole?: [number, number, number, number]) => {
+  // skipX：その x の辺（ホールとつながる側）には立ち上がりを付けない（屋根を一続きに見せる）
+  const roofTop = (x0: number, z0: number, x1: number, z1: number, y: number, hole?: [number, number, number, number], skipX?: number) => {
     mb.matOverride = MAT.gravel;
     const gq = (a0: number, b0: number, a1: number, b1: number) => { if (a1 > a0 && b1 > b0) mb.quad([a0, y + 0.01, b1], [a1, y + 0.01, b1], [a1, y + 0.01, b0], [a0, y + 0.01, b0], roofG); };
     const ix0 = x0 + 0.35, ix1 = x1 - 0.35, iz0 = z0 + 0.35, iz1 = z1 - 0.35;
@@ -3365,8 +3366,8 @@ function crematorium(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, pond?: Pond
     const rim = (a0: number, b0: number, a1: number, b1: number) => {
       cbox(a0, y, b0, a1, y + 0.45, b0 + 0.35, concL);
       cbox(a0, y, b1 - 0.35, a1, y + 0.45, b1, concL);
-      cbox(a0, y, b0 + 0.35, a0 + 0.35, y + 0.45, b1 - 0.35, concL);
-      cbox(a1 - 0.35, y, b0 + 0.35, a1, y + 0.45, b1 - 0.35, concL);
+      if (a0 !== skipX) cbox(a0, y, b0 + 0.35, a0 + 0.35, y + 0.45, b1 - 0.35, concL);
+      if (a1 !== skipX) cbox(a1 - 0.35, y, b0 + 0.35, a1, y + 0.45, b1 - 0.35, concL);
     };
     rim(x0, z0, x1, z1);
     if (hole) rim(hole[0] - 0.35, hole[1] - 0.35, hole[2] + 0.35, hole[3] + 0.35);
@@ -3429,7 +3430,7 @@ function crematorium(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, pond?: Pond
     // 列柱の下の石の床（夜は庇の下の明かり）
     mb.ground(x0, zb, x1, Z1, 0.11, C(0xbdb9b0));
     mb.box(x0 + 0.6, H - 1.04, zb + 0.6, x1 - 0.6, H - 1.0, zb + 0.9, warm, PAT.glow, warm);
-    roofTop(x0, Z0, x1, Z1, H, c);
+    roofTop(x0, Z0, x1, Z1, H, c, x0 < 0 ? x1 : x0);
     // 中庭の中：木と苔、または水盤
     if (water) {
       mb.ground(cx0, cz0, cx1, cz1, 0.1, C(0x3a4044));
@@ -3442,9 +3443,9 @@ function crematorium(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, pond?: Pond
       mb.ground(cx0, cz0, cx0 + 0.6, cz1, 0.18, C(0x9c9a95));
       mb.ground(cx1 - 0.6, cz0, cx1, cz1, 0.18, C(0x9c9a95));
     } else {
-      mb.ground(cx0, cz0, cx1, cz1, 0.1, C(0x5f7f45));
-      mb.ground((cx0 + cx1) / 2 - 1.6, cz0, (cx0 + cx1) / 2 + 1.6, cz1, 0.12, C(0xcbc6bb));
-      tf((cx0 + cx1) / 2 + 1.8, (cz0 + cz1) / 2, 0.75, 0, 0, 0x8a3a2a, 2); // 中庭のもみじ
+      // 白い砂利の中庭（木は植えない）と、低い石の板
+      mb.ground(cx0, cz0, cx1, cz1, 0.1, C(0xd9d5cc));
+      cbox((cx0 + cx1) / 2 - 2.2, 0, (cz0 + cz1) / 2 - 0.5, (cx0 + cx1) / 2 + 2.2, 0.45, (cz0 + cz1) / 2 + 0.5, concD);
     }
     // 外側の妻壁の目地と、細い縦のスリット窓
     const ex = x0 < 0 ? x0 : x1, side = x0 < 0 ? 'nx' : 'px';
@@ -3458,80 +3459,58 @@ function crematorium(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, pond?: Pond
   wing(X0, -hx, [lc - cw / 2, Z0 + 5.5, lc + cw / 2, Z0 + 5.5 + cd], false);
   wing(hx, X1, [rc - cw / 2, Z1 - colD - 3 - cd, rc + cw / 2, Z1 - colD - 3], true);
 
-  // ---- 中央の告別ホール：高い箱、正面は大きなガラス、中は「柱の森」----
-  const fz = hz1; // ホールの正面
-  const wt = 0.8; // 壁の厚さ
-  cbox(-hx, 0, hz0, -hx + wt, HH, fz);
-  cbox(hx - wt, 0, hz0, hx, HH, fz);
-  cbox(-hx, 0, hz0, hx, HH, hz0 + wt);
-  cbox(-hx, HH - 1.6, fz - 1.4, hx, HH, fz, conc, true); // 正面の上の厚い梁
-  cbox(-hx + wt, HH - 0.9, hz0 + wt, hx - wt, HH, fz - 1.4, concD, true); // 屋根の板（下の面も描く）
-  roofTop(-hx, hz0, hx, fz, HH);
-  joints('nx', hz0, fz, 0, HH, -hx);
-  joints('px', hz0, fz, 0, HH, hx);
-  joints('pz', -hx, hx, HH - 1.6, HH, fz);
-  // ホールの床（夜は柱の森がほのかに明るい）
-  mb.box(-hx + wt, 0, hz0 + wt, hx - wt, 0.15, fz - 0.2, floorC, PAT.none, C(0x9a9083));
-  { // 床のほのかな明かり（夜）。箱の上の面は模様が付かないので、上向きの面を直接張る
-    const ga = -hx + wt + 0.5, gb = hx - wt - 0.5, gz0 = hz0 + wt + 0.5, gz1 = fz - 1.2, gy = 0.16, gc = C(0x7d6f58);
-    mb.quad([ga, gy, gz1], [gb, gy, gz1], [gb, gy, gz0], [ga, gy, gz0], gc, PAT.glow);
-  }
-  // 奥の壁の内側（夜は天窓からの光に照らされたように明るい）
-  mb.box(-hx + wt, 0.15, hz0 + wt, hx - wt, HH - 1.0, hz0 + wt + 0.05, C(0xd6c8aa), PAT.glow, C(0xd6c8aa));
-  // 正面の大きな開口：枠のガラス（方立てと無目だけで、中の柱が見える）
-  for (let x = -hx + wt + 1.6; x < hx - wt - 0.5; x += 1.6) mb.box(x - 0.04, 0.15, fz - 1.0, x + 0.04, HH - 1.6, fz - 0.92, mull);
-  mb.box(-hx + wt, 3.4, fz - 1.0, hx - wt, 3.47, fz - 0.92, mull);
-  mb.box(-hx + wt, 0.15, fz - 1.0, hx - wt, 0.3, fz - 0.92, mull);
-  // 入口：開口の前に出た薄い庇
-  cbox(-3.5, 3.6, fz, 3.5, 3.95, fz + 3.6, concL, true);
-  mb.box(-3.2, 3.55, fz + 3.2, 3.2, 3.6, fz + 3.4, warm, PAT.glow, warm);
-  // 柱の森：細い丸柱をランダムに（間をあけて）、頭のまわりに光の輪
+  // ---- 中央の告別ホール：左右の棟と同じ低い高さ。正面の列柱とガラスも続け、中に細い丸柱の「柱の森」----
+  const zb = Z1 - colD, wt = 0.8;
+  cbox(-hx, H - 0.9, hz0, hx, H, zb, concD, true); // 屋根の板（下の面も描く）
+  mb.matOverride = MAT.gravel;
+  mb.quad([-hx, H + 0.01, Z1 - 0.35], [hx, H + 0.01, Z1 - 0.35], [hx, H + 0.01, hz0], [-hx, H + 0.01, hz0], roofG);
+  mb.matOverride = null;
+  cbox(-hx, H, Z1 - 0.35, hx, H + 0.45, Z1, concL); // 正面のパラペット（左右の棟とつながる）
+  // 正面：奥まった全面ガラスと、深い庇・列柱（左右の棟と同じ）
+  glassZ(-hx + 0.4, hx - 0.4, 0.1, H - 1.0, zb + 0.08, 1.8);
+  cbox(-hx, H - 1.0, zb, hx, H, Z1, conc, true);
+  { const n = Math.max(2, Math.round((2 * hx) / 3.2)); for (let i = 1; i < n; i++) { const x = -hx + (2 * hx * i) / n; cbox(x - 0.35, 0, Z1 - 0.9, x + 0.35, H - 1.0, Z1 - 0.1); } }
+  mb.ground(-hx, zb, hx, Z1, 0.11, C(0xbdb9b0));
+  mb.box(-hx + 0.6, H - 1.04, zb + 0.6, hx - 0.6, H - 1.0, zb + 0.9, warm, PAT.glow, warm);
+  // ホールの床と、奥の壁の内側（夜はほのかに明るい）
+  mb.box(-hx, 0, hz0 + wt, hx, 0.15, zb - 0.2, floorC, PAT.none, C(0x9a9083));
+  { const gy = 0.16, gc = C(0x7d6f58); mb.quad([-hx + 0.5, gy, zb - 0.8], [hx - 0.5, gy, zb - 0.8], [hx - 0.5, gy, hz0 + wt + 0.5], [-hx + 0.5, gy, hz0 + wt + 0.5], gc, PAT.glow); }
+  mb.box(-hx, 0.15, hz0 + wt, hx, H - 1.0, hz0 + wt + 0.05, C(0xd6c8aa), PAT.glow, C(0xd6c8aa));
+  // 柱の森：細い丸柱をランダムに。頭のまわりの天井に光の輪、屋上は平らな丸い天窓
   const cols: [number, number][] = [];
-  const ix0 = -hx + wt + 1.2, ix1 = hx - wt - 1.2, iz0 = hz0 + wt + 1.2, iz1 = fz - 2.4;
-  for (let t = 0; t < 400 && cols.length < 26; t++) {
+  const ix0 = -hx + 1.2, ix1 = hx - 1.2, iz0 = hz0 + wt + 1.2, iz1 = zb - 1.6;
+  for (let t = 0; t < 400 && cols.length < 18; t++) {
     const x = ix0 + rng.next() * (ix1 - ix0), z = iz0 + rng.next() * (iz1 - iz0);
-    if (cols.every(([a, b]) => Math.hypot(a - x, b - z) > 2.6)) cols.push([x, z]);
+    if (cols.every(([a2, b2]) => Math.hypot(a2 - x, b2 - z) > 2.4)) cols.push([x, z]);
   }
-  const yC = HH - 0.9; // 屋根の板の下の面
-  const discDown = (cx: number, cz: number, y: number, r: number, col: THREE.Color, pat: number) => {
+  const yC = H - 0.9;
+  const disc = (cx: number, cz: number, y: number, r: number, col: THREE.Color, pat: number, up: boolean) => {
     const n = 18;
     for (let i = 0; i < n; i++) {
       const a0 = (i / n) * Math.PI * 2, a1 = ((i + 1) / n) * Math.PI * 2;
-      mb.tri([cx, y, cz], [cx + Math.cos(a0) * r, y, cz + Math.sin(a0) * r], [cx + Math.cos(a1) * r, y, cz + Math.sin(a1) * r], col, pat);
-    }
-  };
-  const discUp = (cx: number, cz: number, y: number, r: number, col: THREE.Color, pat: number) => {
-    const n = 20;
-    for (let i = 0; i < n; i++) {
-      const a0 = (i / n) * Math.PI * 2, a1 = ((i + 1) / n) * Math.PI * 2;
-      mb.tri([cx, y, cz], [cx + Math.cos(a1) * r, y, cz + Math.sin(a1) * r], [cx + Math.cos(a0) * r, y, cz + Math.sin(a0) * r], col, pat);
+      const p0: [number, number, number] = [cx + Math.cos(a0) * r, y, cz + Math.sin(a0) * r], p1: [number, number, number] = [cx + Math.cos(a1) * r, y, cz + Math.sin(a1) * r];
+      if (up) mb.tri([cx, y, cz], p1, p0, col, pat); else mb.tri([cx, y, cz], p0, p1, col, pat);
     }
   };
   for (const [x, z] of cols) {
     mb.matOverride = MAT.concrete;
-    mb.cylinder(x, z, 0.15, yC, 0.3, 12, concL);
+    mb.cylinder(x, z, 0.15, yC, 0.26, 12, concL);
     mb.matOverride = null;
-    discDown(x, z, yC - 0.02, 1.25, C(0xfff1d6), PAT.glow); // 柱の頭の光の輪（天井）
-    // 屋上の丸い天窓：ガラスの輪（夜は光る）と、柱の上のコンクリートの円板
-    mb.matOverride = MAT.concrete;
-    mb.cylinder(x, z, HH, HH + 0.2, 1.45, 20, concL);
-    mb.matOverride = null;
-    discUp(x, z, HH + 0.2, 1.3, C(0xf4ead2), PAT.glow);
-    mb.matOverride = MAT.concrete;
-    mb.cylinder(x, z, HH + 0.2, HH + 0.3, 0.7, 14, concL, concL);
-    mb.matOverride = null;
+    disc(x, z, yC - 0.02, 1.0, C(0xfff1d6), PAT.glow, false);
+    disc(x, z, H + 0.04, 0.95, C(0xf4ead2), PAT.glow, true); // 屋上の天窓（屋根と同じ高さの平らな輪）
+    disc(x, z, H + 0.06, 0.5, concL, PAT.none, true);
   }
-  // ホールの中の小さな丸い水盤（Baumschulenweg の中央の水）
-  mb.cylinder(0, (iz0 + iz1) / 2, 0.15, 0.45, 1.6, 20, C(0x9a978f), C(0x33393d));
 
-  // ---- 奥：火葬炉の棟（同じ箱の一部、少し高い）と排気の囲い ----
-  cbox(-hx, 0, Z0, hx, H + 1.2, hz0, concD);
-  roofTop(-hx, Z0, hx, hz0, H + 1.2);
-  joints('nz', -hx, hx, 0, H + 1.2, Z0);
-  cbox(-3, H + 1.2, Z0 + 1.2, 3, H + 2.6, Z0 + 4, conc);
-  for (let x = -2.7; x < 2.8; x += 0.45) mb.box(x, H + 1.4, Z0 + 3.98, x + 0.2, H + 2.4, Z0 + 4.08, mull);
-  // 裏の霊柩車の出入り口（奥の壁の大きな扉）
-  mb.box(-2.5, 0, Z0 - 0.06, 2.5, 3.8, Z0, C(0x4a4e52));
+  // ---- 奥：火葬炉の棟（同じ高さの箱の一部）と、低い排気の囲い ----
+  cbox(-hx, 0, Z0, hx, H, hz0 + wt, concD);
+  mb.matOverride = MAT.gravel;
+  mb.quad([-hx, H + 0.01, hz0 + wt], [hx, H + 0.01, hz0 + wt], [hx, H + 0.01, Z0 + 0.35], [-hx, H + 0.01, Z0 + 0.35], roofG);
+  mb.matOverride = null;
+  cbox(-hx, H, Z0, hx, H + 0.45, Z0 + 0.35, concL);
+  joints('nz', -hx, hx, 0, H, Z0);
+  cbox(-2.5, H, Z0 + 1.5, 2.5, H + 1.0, Z0 + 4, conc);
+  for (let x = -2.2; x < 2.3; x += 0.45) mb.box(x, H + 0.15, Z0 + 3.98, x + 0.2, H + 0.85, Z0 + 4.08, mull);
+  mb.box(-2.5, 0, Z0 - 0.06, 2.5, 3.8, Z0, C(0x4a4e52)); // 裏の霊柩車の出入り口
 
   // ---- まわりの林（敷地を静かに囲む）----
   for (let z = -hd + 2; z < lz0 - 1; z += 4.2) for (const sx of [-1, 1]) tf(sx * (hw - 1.8) + (rng.next() - 0.5), z + rng.next(), 0.8 + 0.3 * rng.next(), rng.next() < 0.5 ? 1 : 0);
