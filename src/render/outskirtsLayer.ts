@@ -92,38 +92,56 @@ export function planOutskirts(g: Grid): OutskirtsPlan {
   for (let i = 0; i < N; i++) {
     if (g.road[i] || g.up[i] || g.rail[i] || g.erail[i] || g.mono[i] || g.bldg[i] || g.zone[i] || g.quay[i]) dev[i] = 1;
   }
+  // 開発されたマスからの距離（3-4 の面取り距離。丸い等高線になる）
+  const INF = 1 << 20, dd = new Int32Array(N);
+  for (let i = 0; i < N; i++) dd[i] = dev[i] ? 0 : INF;
   for (let y = 0; y < n; y++)
     for (let x = 0; x < n; x++) {
       const i = y * n + x;
-      if (dev[i] || g.pline[i]) continue;
-      const lo = g.cellMinH(x, y), hi = g.cellMaxH(x, y);
+      let v = dd[i];
+      if (x > 0 && dd[i - 1] + 3 < v) v = dd[i - 1] + 3;
+      if (y > 0) {
+        const j = i - n;
+        if (dd[j] + 3 < v) v = dd[j] + 3;
+        if (x > 0 && dd[j - 1] + 4 < v) v = dd[j - 1] + 4;
+        if (x < n - 1 && dd[j + 1] + 4 < v) v = dd[j + 1] + 4;
+      }
+      dd[i] = v;
+    }
+  for (let y = n - 1; y >= 0; y--)
+    for (let x = n - 1; x >= 0; x--) {
+      const i = y * n + x;
+      let v = dd[i];
+      if (x < n - 1 && dd[i + 1] + 3 < v) v = dd[i + 1] + 3;
+      if (y < n - 1) {
+        const j = i + n;
+        if (dd[j] + 3 < v) v = dd[j] + 3;
+        if (x < n - 1 && dd[j + 1] + 4 < v) v = dd[j + 1] + 4;
+        if (x > 0 && dd[j - 1] + 4 < v) v = dd[j - 1] + 4;
+      }
+      dd[i] = v;
+    }
+  const dist = new Uint8Array(N);
+  for (let i = 0; i < N; i++) dist[i] = dd[i] >= INF ? 255 : Math.min(255, Math.round(dd[i] / 3));
+  // 飾ってよいマス（街の近くだけ調べる）
+  const Hs = g.heights, V = n + 1;
+  for (let y = 0; y < n; y++)
+    for (let x = 0; x < n; x++) {
+      const i = y * n + x;
+      if (dev[i] || dist[i] > OUT_MAXD || g.pline[i]) continue;
+      const a = Hs[y * V + x], b = Hs[y * V + x + 1], c = Hs[(y + 1) * V + x], d = Hs[(y + 1) * V + x + 1];
+      const lo = Math.min(a, b, c, d), hi = Math.max(a, b, c, d);
       // 水、砂浜、急な斜面には置かない
       if (lo < WATER_LEVEL + 2.3 || hi - lo > 6) continue;
       // 自然の林はそのまま（ぽつんと1本だけの木のマスは、畑の中の木として残す）
       if (g.tree[i]) {
         if (g.tree[i] > 1) continue;
         let nb = 0;
-        for (let d = 0; d < 8; d++) { const xx = x + DX[d], yy = y + DY[d]; if (g.inb(xx, yy) && g.tree[yy * n + xx]) nb++; }
+        for (let k = 0; k < 8; k++) { const xx = x + DX[k], yy = y + DY[k]; if (g.inb(xx, yy) && g.tree[yy * n + xx]) nb++; }
         if (nb >= 2) continue;
       }
       free[i] = 1;
     }
-  // 開発されたマスからの距離（3-4 の面取り距離。丸い等高線になる）
-  const INF = 1 << 20, dd = new Int32Array(N).fill(INF);
-  for (let i = 0; i < N; i++) if (dev[i]) dd[i] = 0;
-  const relax = (i: number, x: number, y: number, w: number) => { if (g.inb(x, y)) { const v = dd[y * n + x] + w; if (v < dd[i]) dd[i] = v; } };
-  for (let y = 0; y < n; y++)
-    for (let x = 0; x < n; x++) {
-      const i = y * n + x;
-      relax(i, x - 1, y, 3); relax(i, x - 1, y - 1, 4); relax(i, x, y - 1, 3); relax(i, x + 1, y - 1, 4);
-    }
-  for (let y = n - 1; y >= 0; y--)
-    for (let x = n - 1; x >= 0; x--) {
-      const i = y * n + x;
-      relax(i, x + 1, y, 3); relax(i, x + 1, y + 1, 4); relax(i, x, y + 1, 3); relax(i, x - 1, y + 1, 4);
-    }
-  const dist = new Uint8Array(N);
-  for (let i = 0; i < N; i++) dist[i] = dd[i] >= INF ? 255 : Math.min(255, Math.round(dd[i] / 3));
 
   const P: OutskirtsPlan = {
     n, dist, kind: new Uint8Array(N), parcel: new Int32Array(N), crop: new Uint8Array(N),
@@ -193,7 +211,7 @@ export function planOutskirts(g: Grid): OutskirtsPlan {
   for (let y = 1; y < n - 1; y++)
     for (let x = 1; x < n - 1; x++) {
       const i = y * n + x;
-      if (!P.kind[i] || P.lane[i] || dist[i] < 2 || dist[i] > 6) continue;
+      if (!P.kind[i] || P.lane[i] || dist[i] < 2 || dist[i] > 6 || g.cellMaxH(x, y) - g.cellMinH(x, y) > 2.5) continue;
       const h = hash2(x, y, 71);
       if (h < (roadNear(x, y, 2) ? 0.16 : 0.03)) cand[i] = h + 1e-6;
     }
