@@ -293,13 +293,17 @@ function greenTerrace(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: nu
   const both = f.D >= 40 && rng.next() < 0.65; // 前と後ろの両方へ段々にする
   const m = mass(f, floors, rng, tall ? 40 : 30, tall ? 40 : 60, 12);
   const { x0, x1, z0, z1 } = m;
-  const dep = z1 - z0, minCore = tall ? 11 : 8;
-  const d = Math.min(4, Math.max(2.4, 2.6 + rng.next() * 1.2));
-  const maxSteps = Math.max(1, Math.floor((dep - minCore) / (d * (both ? 2 : 1))) + 1);
-  let s = tall ? 2 : rng.next() < 0.7 ? 1 : 2; // 何階ごとに下がるか
-  s = Math.min(3, Math.max(s, Math.ceil(floors / maxSteps)));
-  const n = Math.max(3, Math.min(floors, maxSteps * s, m.n));
-  const steps = Math.ceil(n / s);
+  const dep = z1 - z0, minCore = tall ? 12 : 7;
+  const d = 3 + rng.next() * 1.4; // 1 段で下がる奥行き
+  // 下は真っすぐの本体（緑のバルコニー）、上の数階が段々に下がる。s 階ごとに 1 段
+  const s = tall ? (rng.next() < 0.5 ? 1 : 2) : 1;
+  const n = Math.max(3, Math.min(floors, m.n));
+  const maxSteps = Math.max(0, Math.floor((dep - minCore) / (d * (both ? 2 : 1))));
+  const nSteps = Math.max(0, Math.min(maxSteps, tall ? 5 : 4, Math.floor((n - 2) / s)));
+  const kB = n - nSteps * s; // 本体の階数
+  const levels: [number, number][] = [[0, kB]];
+  for (let j = 1; j <= nSteps; j++) levels.push([kB + (j - 1) * s, kB + j * s]);
+  const steps = levels.length;
   const wall = rng.pick(G_WALL), glass = rng.pick(G_GLASS), pot = rng.pick(G_PLANTER), pave = rng.pick([C(0xb9b4aa), C(0xa59d8c), C(0xc8c2b6)]);
   const H = fy(n);
   m.n = n; m.H = H;
@@ -308,7 +312,7 @@ function greenTerrace(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: nu
   const keep = mb.matOverride;
   const maxTrees = tall ? 2 : 3;
   for (let j = 0; j < steps; j++) {
-    const k0 = j * s, k1 = Math.min(n, (j + 1) * s);
+    const [k0, k1] = levels[j];
     const yA = Math.max(GH, fy(k0)), yB = fy(k1);
     const zf = z1 - j * d, zb = both ? z0 + j * d : z0;
     if (yB > yA) {
@@ -470,7 +474,7 @@ function nordicTimber(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: nu
     for (let k = 1; k <= n; k++) {
       const y = fy(k);
       const ya = k === 1 ? GH : y - 0.45, yb2 = k === n ? H : y + 0.85;
-      fbox(mb, F, e, F.L - e, -dp, 0, ya, yb2, clad, { skip: s === 0 ? 2 : s === 1 ? 1 : s === 2 ? 8 : 4, top: null, bot: clad });
+      fbox(mb, F, e, F.L - e, -dp, 0, ya, yb2, clad, { skip: s === 0 ? 2 : s === 1 ? 1 : s === 2 ? 8 : 4, top: k === n ? null : clad, bot: clad });
       if (k < n && !tall && s >= 2) for (let i = 0; i < nb; i++) if (rng.next() < 0.3) fbox(mb, F, cuts[i] + 0.2, cuts[i + 1] - 0.2, -dp, 0, y + 0.85, fy(k + 1) - 0.45, clad, { skip: s === 2 ? 8 : 4, top: null });
     }
     mb.matOverride = keep;
@@ -513,6 +517,6 @@ function nordicTimber(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: nu
 }
 
 RES['perfScreen'] = { fn: perfScreen, minF: 3, maxF: 36 };
-RES['greenTerrace'] = { fn: greenTerrace, minF: 3, maxF: 20 };
+RES['greenTerrace'] = { fn: greenTerrace, minF: 3, maxF: 28 };
 RES['zigzagBay'] = { fn: zigzagBay, minF: 3, maxF: 24 };
 RES['nordicTimber'] = { fn: nordicTimber, minF: 3, maxF: 45 };

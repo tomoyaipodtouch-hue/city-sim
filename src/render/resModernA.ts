@@ -22,7 +22,7 @@ const VS_CURTAIN = 3.7 / FH, VS_FULL = 3.8 / FH;
 const K = {
   lawn: C(0x6e9a4a), lawn2: C(0x7aa553), pave: C(0x9c9b96), paveLt: C(0xb7b3aa), gravel: C(0xa9a59b), asphalt: C(0x3d3f42),
   line: C(0xf0f0ea), hedge: C(0x3e6b2f), curb: C(0xc9c5bc), roof: C(0xb5b2aa), unit: C(0xb9bdc2), fan: C(0x3a3d42),
-  cap: C(0xd6d3cb), door: C(0x3a3f45), glow: C(0xe8f0f6), lamp: C(0xfff0cf), rail: C(0x9db7c2), railDk: C(0x7f9fb3),
+  cap: C(0xd6d3cb), door: C(0x3a3f45), glow: C(0xe8f0f6), lamp: C(0xfff0cf), rail: C(0x9db7c2), railLt: C(0xc6d7dd), railDk: C(0x7f9fb3),
   lobby: C(0x7fa6c4), steel: C(0x7a8088), soffit: C(0xd9dad8),
 };
 const CARS = [0xd8d8d8, 0x2b2b2b, 0x9a1d1d, 0x1d3f8a, 0x8a8f96, 0xf2f2f2, 0x3b5d3a, 0xb8bcc0, 0x101820].map(C);
@@ -81,10 +81,10 @@ function rim(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y:
 // ガラスの手すり（屋上のふち）
 function glassRim(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, h = 1.1) {
   const t = 0.08;
-  bx(mb, x0, y, z1 - t, x1, y + h, z1, K.rail);
-  bx(mb, x0, y, z0, x1, y + h, z0 + t, K.rail);
-  bx(mb, x0, y, z0 + t, x0 + t, y + h, z1 - t, K.rail);
-  bx(mb, x1 - t, y, z0 + t, x1, y + h, z1 - t, K.rail);
+  bx(mb, x0, y, z1 - t, x1, y + h, z1, K.railLt);
+  bx(mb, x0, y, z0, x1, y + h, z0 + t, K.railLt);
+  bx(mb, x0, y, z0 + t, x0 + t, y + h, z1 - t, K.railLt);
+  bx(mb, x1 - t, y, z0 + t, x1, y + h, z1 - t, K.railLt);
 }
 // 屋上の機械：階段室（エレベーターの機械室）と室外機。奥（-z）に寄せて、道路から目立たないように
 function roofKit(mb: MeshBuilder, rng: Rng, x0: number, z0: number, x1: number, z1: number, y: number, wall: THREE.Color, m: number = MAT.plaster) {
@@ -299,10 +299,12 @@ function rawConcrete(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors0: nu
     bx(mb, x0, y - 0.35, z0, x1, y + 0.3, z1, conc, 0, { ...CO, roof: conc, bot: concDk });
   }
   // 側面：コンクリートの壁。縦に 1 列だけ窓（壁を 2 つに分けてすき間をあける）
-  const gap = 1.6, gz = z0 + d * (0.35 + rng.next() * 0.3);
+  // 奥行きのある棟・塔は 2 列（大きな無窓の壁にならないように）
+  const gap = 1.6, gzs = tower || d > 15 ? [z0 + d * (0.25 + rng.next() * 0.08), z1 - d * (0.25 + rng.next() * 0.08)] : [z0 + d * (0.35 + rng.next() * 0.3)];
   for (const [sx, sk] of [[x0, 4], [x1 - ins, 8]] as [number, number][]) {
-    bx(mb, sx, gh, z0, sx + ins, H, gz - gap / 2, conc, 0, { ...CO, roof: null, skip: sk });
-    bx(mb, sx, gh, gz + gap / 2, sx + ins, H, z1, conc, 0, { ...CO, roof: null, skip: sk });
+    let za = z0;
+    for (const gz of gzs) { bx(mb, sx, gh, za, sx + ins, H, gz - gap / 2, conc, 0, { ...CO, roof: null, skip: sk }); za = gz + gap / 2; }
+    bx(mb, sx, gh, za, sx + ins, H, z1, conc, 0, { ...CO, roof: null, skip: sk });
   }
   // 正面と裏：縦のひれ（不規則な間隔）か、深いバルコニーの格子
   const fins: number[] = [];
@@ -319,7 +321,9 @@ function rawConcrete(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors0: nu
   const ft = deep ? 0.3 : 0.24;
   const proj = deep ? bal : 0.45 + rng.next() * 0.5;
   // 木の縦の格子で隠す列（1 列）
+  // 塔では全高の木の帯がうるさいので、下の 5 階ぶんだけ（足もとのアクセント）
   const woodBay = fins.length > 3 ? 1 + rng.int(fins.length - 3) : -1;
+  const woodTop = tower ? Math.min(H - 0.35, gh + 5 * FH - 0.35) : H - 0.35;
   for (const [s, sgn] of [[z1, 1], [z0, -1]] as [number, number][]) {
     const zin = s - sgn * ins;
     for (let i = 0; i < fins.length; i++) {
@@ -348,14 +352,13 @@ function rawConcrete(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors0: nu
     if (woodBay >= 0) {
       const a = fins[woodBay] + ft + 0.1, b = fins[woodBay + 1] - 0.1;
       const zs = sgn > 0 ? zin : zin;
-      for (let x = a + 0.15; x < b - 0.1; x += 0.42) slat(mb, sgn, x, x + 0.09, zs, ins - 0.1, gh + 0.3, H - 0.35, wood);
+      for (let x = a + 0.15; x < b - 0.1; x += 0.42) slat(mb, sgn, x, x + 0.09, zs, ins - 0.1, gh + 0.3, woodTop, wood);
     }
   }
   // ---- 屋上 ----
   bx(mb, x0, H - 0.35, z0, x1, H + 0.3, z1, conc, 0, { ...CO, roof: rng.pick(ROOFS), bot: concDk, rm: MAT.membrane });
   rim(mb, x0, z0 - (deep ? bal : 0), x1, z1 + (deep ? bal : 0), H + 0.3, conc, 0.9, 0.25, conc, MAT.concrete);
   roofKit(mb, rng, x0 + 0.3, z0 + 0.3, x1 - 0.3, z1 - 0.3, H + 0.3, conc, MAT.concrete);
-  void tower;
 }
 
 // ======================================================================
@@ -401,20 +404,20 @@ function staggeredBalcony(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors
   // 1 つのバルコニー：白い床（木の軒裏）と、ガラスの手すり（前と両わき）
   const balc = (a: number, b: number, y: number, s: number, sgn: number) => {
     const za = sgn > 0 ? s : s - dep, zb = sgn > 0 ? s + dep : s;
-    bx(mb, a, y - 0.3, za, b, y, zb, white, 0, { roof: white, bot: soffit, m: MAT.plaster, rm: MAT.none });
+    bx(mb, a, y - 0.42, za, b, y, zb, white, 0, { roof: white, bot: soffit, m: MAT.plaster, rm: MAT.none });
     const rz = sgn > 0 ? zb - 0.06 : za + 0.06;
     const keep = mb.matOverride; mb.matOverride = MAT.none;
-    mb.quad(sgn > 0 ? [a, y, rz] : [b, y, rz], sgn > 0 ? [b, y, rz] : [a, y, rz], sgn > 0 ? [b, y + 1.1, rz] : [a, y + 1.1, rz], sgn > 0 ? [a, y + 1.1, rz] : [b, y + 1.1, rz], K.rail);
-    mb.quad([b, y, sgn > 0 ? rz : s], [b, y, sgn > 0 ? s : rz], [b, y + 1.1, sgn > 0 ? s : rz], [b, y + 1.1, sgn > 0 ? rz : s], K.rail);
-    mb.quad([a, y, sgn > 0 ? s : rz], [a, y, sgn > 0 ? rz : s], [a, y + 1.1, sgn > 0 ? rz : s], [a, y + 1.1, sgn > 0 ? s : rz], K.rail);
+    mb.quad(sgn > 0 ? [a, y, rz] : [b, y, rz], sgn > 0 ? [b, y, rz] : [a, y, rz], sgn > 0 ? [b, y + 1.0, rz] : [a, y + 1.0, rz], sgn > 0 ? [a, y + 1.0, rz] : [b, y + 1.0, rz], K.railLt);
+    mb.quad([b, y, sgn > 0 ? rz : s], [b, y, sgn > 0 ? s : rz], [b, y + 1.0, sgn > 0 ? s : rz], [b, y + 1.0, sgn > 0 ? rz : s], K.railLt);
+    mb.quad([a, y, sgn > 0 ? s : rz], [a, y, sgn > 0 ? rz : s], [a, y + 1.0, sgn > 0 ? rz : s], [a, y + 1.0, sgn > 0 ? s : rz], K.railLt);
     mb.matOverride = keep;
   };
   const balcX = (a: number, b: number, y: number, s: number, sgn: number) => {
     // 側面（x の向き）のバルコニー
     const xa = sgn > 0 ? s : s - dep, xb = sgn > 0 ? s + dep : s;
-    bx(mb, xa, y - 0.3, a, xb, y, b, white, 0, { roof: white, bot: soffit, m: MAT.plaster, rm: MAT.none });
+    bx(mb, xa, y - 0.42, a, xb, y, b, white, 0, { roof: white, bot: soffit, m: MAT.plaster, rm: MAT.none });
     const rx = sgn > 0 ? xb - 0.06 : xa;
-    bx(mb, rx, y, a, rx + 0.06, y + 1.1, b, K.rail, 0, { roof: null, m: MAT.none });
+    bx(mb, rx, y, a, rx + 0.06, y + 1.0, b, K.railLt, 0, { roof: null, m: MAT.none });
   };
   for (let k = 1; k < n; k++) {
     const y = gh + k * FH;
@@ -515,10 +518,10 @@ function timberLouver(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors0: n
   // 機械を木の格子で囲む
   const mx0 = x0 + 1, mx1 = Math.min(x1 - 1, x0 + 1 + Math.max(6, w * 0.45)), mz0 = z0 + 1, mz1 = Math.min(z1 - 1, z0 + 7);
   roofKit(mb, rng, mx0, mz0, mx1, mz1, H + 0.5, frame, FM);
-  for (let x = mx0 + 0.3; x < mx1; x += 0.5) slat(mb, 1, x, x + 0.08, mz1, 0.08, H + 0.5, H + 3.0, wood);
+  for (let x = mx0 + 0.3; x < mx1; x += 0.32) slat(mb, 1, x, x + 0.14, mz1, 0.1, H + 0.5, H + 2.8, wood);
 }
 
 RES.ribbonWhite = { fn: ribbonWhite, minF: 3, maxF: 32 };
-RES.rawConcrete = { fn: rawConcrete, minF: 3, maxF: 22 };
+RES.rawConcrete = { fn: rawConcrete, minF: 3, maxF: 30 };
 RES.staggeredBalcony = { fn: staggeredBalcony, minF: 3, maxF: 36 };
 RES.timberLouver = { fn: timberLouver, minF: 3, maxF: 50 };
