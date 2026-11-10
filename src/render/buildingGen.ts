@@ -3116,8 +3116,7 @@ function recycling(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
 export function cemeteryStage(b: Building) {
   const cap = CIVIC.cemetery?.capacity || 1;
   const fill = Math.max(0, Math.min(1, (b.occ || 0) / cap));
-  const dbg = (globalThis as { __cemStage?: number }).__cemStage; // 確認用：段階を強制する
-  return dbg !== undefined ? dbg : Math.round(fill * 4);
+  return Math.round(fill * 4);
 }
 // 段階ごとの、墓石の立っている区画の割合
 const CEM_FILL = [0.06, 0.3, 0.55, 0.8, 1];
@@ -3130,7 +3129,7 @@ const FLOWER = [0xd8443c, 0xf0c63a, 0xf3f1ea, 0xc85a9c, 0xe9853a].map(C);
 // stage が上がるほど入口に近い区画から墓石が増える。まだ空いている区画は、外柵と玉砂利だけか、芝生の区画
 function cemetery(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, stage: number) {
   const hw = f.W / 2, hd = f.D / 2;
-  const lawn = C(0x74a04e), lawnPlot = C(0x84ad5a), pave = C(0xd6d1c7), path2 = C(0xc9c2b4), gravel = C(0xdcd9d1);
+  const lawn = C(0x74a04e), lawnPlot = C(0x84ad5a), pave = C(0xd6d1c7), path2 = C(0xbcb5a6), gravel = C(0xccc8bf);
   const granite = C(0x8e8f8f), hedge = C(0x3d6831), wood = C(0xb5875a), white = C(0xf3f3f0), white2 = C(0xe2e4e5);
   const glass = C(0x7d9fb6), dark = C(0x2c2f32), warm = C(0xffd9a0);
   mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.06, lawn);
@@ -3343,15 +3342,20 @@ function crematorium(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, pond?: Pond
   // ---- 屋根の形（敷地の座標）----
   const rx = -2, rz = -1.6, A = 17.5, B = 12, K = 0.35;
   const cols: [number, number][] = [[-9, 0.5], [3, -3.5], [-14, -8], [8, -9.5], [11, 5.5], [-14.5, 5.5]];
+  // 柱のところのくぼみ（上の面は浅く、下の面は深い：柱の頭が屋根の中にかくれる）
+  const dip = (x: number, z: number) => {
+    let d = 0;
+    for (const [cx, cz] of cols) d += Math.exp(-((x - cx) ** 2 + (z - cz) ** 2) / (2 * 2.4 * 2.4));
+    return d;
+  };
   const yTop = (x: number, z: number) => {
     let y = 7.4 + 0.45 * Math.sin(0.21 * x + 0.5) * Math.cos(0.18 * z - 0.4) + 0.25 * Math.sin(0.11 * x - 0.13 * z);
-    for (const [cx, cz] of cols) y -= 2.4 * Math.exp(-((x - cx) ** 2 + (z - cz) ** 2) / (2 * 2.4 * 2.4));
-    return y;
+    return y - 1.5 * dip(x, z);
   };
   // 木は屋根の下に植えない
   const tr: TF = (x, z, ...r) => { if (Math.abs(x - rx) < A + 1.5 && Math.abs(z - rz) < B + 1.5) return; tf(x, z, ...r); };
   const thick = (u: number, v: number) => 0.2 + 0.4 * (1 - u * u) * (1 - v * v);
-  const yBot = (x: number, z: number, u: number, v: number) => yTop(x, z) - thick(u, v);
+  const yBot = (x: number, z: number, u: number, v: number) => yTop(x, z) - thick(u, v) - 1.0 * dip(x, z);
   const NU = 44, NV = 32, nv = (NU + 1) * (NV + 1);
   const map = (i: number, j: number): [number, number, number, number] => {
     const u = -1 + (2 * i) / NU, v = -1 + (2 * j) / NV;
@@ -3430,12 +3434,16 @@ function crematorium(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, pond?: Pond
   mb.box(hx - 7, 4.6, hz - 0.4, hx + 7, 4.68, hz + 0.4, warm, PAT.glow, warm);
 
   // ---- 火葬炉の棟（奥の左、低く、木でかくす）----
-  const fx0 = -hw + 1.5, fx1 = -13.5, fz0 = -hd + 1.5, fz1 = -14.8;
-  mb.box(fx0, 0, fz0, fx1, 5.6, fz1, C(0xe7e7e3), PAT.none, C(0xd9dbdc));
-  mb.box(fx0, 4.4, fz1 - 0.02, fx1, 5.0, fz1 + 0.05, C(0x8a9096));
-  // 排気の囲い（屋上の低い箱、ルーバー）
-  mb.box(fx0 + 2.5, 5.6, fz0 + 2, fx0 + 6, 7.3, fz0 + 5, C(0xdfe0de), PAT.none, C(0x9aa0a6));
-  for (let x = fx0 + 2.7; x < fx0 + 5.9; x += 0.4) mb.box(x, 5.8, fz0 + 4.98, x + 0.15, 7.1, fz0 + 5.08, C(0x8d9399));
+  const fx0 = -hw + 3.2, fx1 = -14.2, fz0 = -hd + 3.2, fz1 = -15.4, fh = 4.4;
+  const clad = C(0xd3cfc6), roofG = C(0x6b8f4c);
+  mb.box(fx0, 0, fz0, fx1, fh, fz1, clad, PAT.none, roofG); // 屋上は緑化
+  mb.box(fx0 - 0.15, fh - 0.35, fz0 - 0.15, fx1 + 0.15, fh + 0.25, fz1 + 0.15, C(0xe9e9e5), PAT.none, roofG);
+  // 外壁の木の縦ルーバー（水盤側と表側）
+  for (let z = fz0 + 0.6; z < fz1 - 0.3; z += 0.55) mb.box(fx1, 0.3, z, fx1 + 0.12, fh - 0.5, z + 0.14, C(0xa98258));
+  for (let x = fx0 + 0.6; x < fx1 - 0.3; x += 0.55) mb.box(x, 0.3, fz1, x + 0.14, fh - 0.5, fz1 + 0.12, C(0xa98258));
+  // 排気の囲い（屋上の低い箱、ルーバー。煙突は見せない）
+  mb.box(fx0 + 1.5, fh + 0.25, fz0 + 1.5, fx0 + 4.5, fh + 1.5, fz0 + 4, C(0xc9cbc9), PAT.none, C(0x8d939a));
+  for (let x = fx0 + 1.7; x < fx0 + 4.4; x += 0.4) mb.box(x, fh + 0.4, fz0 + 3.98, x + 0.15, fh + 1.4, fz0 + 4.08, C(0x8d9399));
 
   // ---- 手前：車寄せ（屋根のふちの下）と駐車場 ----
   const lz0 = hz + hb + 1.2, lz1 = lz0 + 5.2;
@@ -3464,12 +3472,15 @@ function crematorium(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, pond?: Pond
   for (let z = -hd + 2; z < lz0 - 2; z += 4.5) tr(hw - 1.4, z + rng.next(), 0.8 + 0.3 * rng.next(), rng.next() < 0.5 ? 1 : 0);
   for (let x = qx0 + 1; x < hw - 2; x += 4.2) tr(x + rng.next(), -hd + 1.2, 0.85 + 0.3 * rng.next(), rng.next() < 0.4 ? 1 : 0);
   for (let z = fz1 + 2; z < hd - 2; z += 4) tr(-hw + 1.6, z + rng.next(), 0.8 + 0.25 * rng.next(), rng.next() < 0.6 ? 1 : 0);
-  for (let x = fx0 + 1; x < fx1; x += 3.5) tr(x, fz1 + 1.4, 0.9, 1);
+  for (let x = -hw + 1.5; x < fx1 + 1; x += 3.4) tr(x + rng.next() * 0.6, -hd + 1.4, 0.85 + 0.2 * rng.next(), 1);
+  for (let z = -hd + 4.5; z < fz1; z += 3.4) tr(-hw + 1.4, z, 0.85 + 0.2 * rng.next(), rng.next() < 0.7 ? 1 : 0);
+  tr(fx1 + 1.6, -hd + 3, 0.8, 1);
   tr(-hw + 1.4, hd - 2, 0.8);
   tr(-hw + 1.4, lz1 + 2, 0.75, 1);
   // 水盤に映る夜の明かり（柱を下から照らす）
   if (pond) for (const [cx, cz] of cols) if (cx > qx0 && cx < qx1 && cz > qz0 && cz < qz1) { const w = mb.world(cx, 0.4, cz + 0.8); pond.addLight(w[0], w[1], w[2], -5, 0.9, 0.75, 0.55); }
 }
+
 // ---------------- 工業（汚染型・製造業・倉庫業） ----------------
 // 汚染型：大きい敷地は製鉄所か石油化学プラント、中くらいは石油化学か煙突の工場、小さい敷地は煙突の工場。
 // 製造業：大きい敷地は自動車工場か現代の工場、ほかは現代の工場（のこぎり屋根の天窓）。
