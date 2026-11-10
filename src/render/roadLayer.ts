@@ -706,7 +706,7 @@ export class RoadLayer {
       if (A.dirs.length !== 1 || isDiag(A.dirs[0]) || A.openEnd >= 0) continue;
       const back = A.dirs[0];
       // マップの端で外へ向いている端は、隣の都市へ続くので転回場にしない（マスごとに、マップの端までまっすぐ描く）
-      if (offMapEnd(i, A.dirs)) continue;
+      if (offMapEnd(i, A.dirs) >= 0) continue;
       for (const sd of [(back + 2) & 7, (back + 6) & 7]) {
         const j = nb(i, sd);
         if (j < 0 || g.road[j] !== AV || !groundCell(j) || capOf[j] >= 0 || clusterOf[j] >= 0) continue;

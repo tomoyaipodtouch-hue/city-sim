@@ -213,6 +213,11 @@ export class RailLayer {
           const nh = g.inb(nx, ny) ? (kind === 'sub' ? g.cellH(nx, ny) + 0.6 : RailLayer.lineH(g, kind, j)) : ch;
           arms.push({ d, ex: cx + (DX[d] * CELL) / 2, ez: cz + (DY[d] * CELL) / 2, eh: (ch + nh) / 2 });
         }
+        // マップの端の行き止まり：隣の都市へ続くので、マップの外の向きにも同じ高さでまっすぐのばす（切り口はマップの端）
+        if (arms.length === 1 && !(arms[0].d & 1)) {
+          const d = (arms[0].d + 4) & 7;
+          if (!g.inb(x + DX[d], y + DY[d])) arms.push({ d, ex: cx + (DX[d] * CELL) / 2, ez: cz + (DY[d] * CELL) / 2, eh: ch });
+        }
         // 2本で向きが違えば曲線、それ以外は中心から腕ごとにまっすぐ
         const paths: P[][] = [];
         if (arms.length === 2 && ((arms[0].d + 4) & 7) !== arms[1].d) {

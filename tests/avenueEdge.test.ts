@@ -7,6 +7,8 @@ import { World } from '../src/sim/world';
 import { RoadType } from '../src/sim/defs';
 import { DX, DY } from '../src/sim/constants';
 import { assignTrips, buildJunctions } from '../src/sim/traffic';
+import { CELL } from '../src/sim/constants';
+import { RoadLayer } from '../src/render/roadLayer';
 
 const AV = RoadType.Avenue;
 const n = 32;
@@ -92,5 +94,27 @@ describe('大通りをマップの端まで', () => {
       externalCap: 100, externalOnly: true, carOnly: true, maxMinutes: 120, weight: 1,
     });
     expect(r2.external).toBe(10);
+  });
+
+  // 見た目：マップの端の行き止まりは転回場を描かずに、路面をマップの端（x = n * CELL）までのばす。
+  // 内側の行き止まりは、今までどおり転回場（路面はマスの端まで届かない）
+  it('見た目：マップの端では切り口、内側の端は転回場', () => {
+    for (const road of [RoadType.Street, RoadType.Road, AV, RoadType.GroundHighway]) {
+      const w = flat();
+      if (road === AV) draw(w, 10, 16, n, 16);
+      else expect(w.exec({ t: 'road', x0: 10, y0: 16, x1: n - 1, y1: 16, road }).ok).toBe(true);
+      const L = new RoadLayer();
+      L.rebuild(w.g);
+      const pos = (L as unknown as { surface: { geometry: { getAttribute(k: string): { count: number; getX(k: number): number; getZ(k: number): number } } } }).surface.geometry.getAttribute('position');
+      let hi = 0, lo = Infinity;
+      for (let k = 0; k < pos.count; k++) {
+        if (pos.getZ(k) < 13 * CELL || pos.getZ(k) > 19 * CELL) continue;
+        hi = Math.max(hi, pos.getX(k));
+        lo = Math.min(lo, pos.getX(k));
+      }
+      expect(hi, `road ${road}: east end`).toBeCloseTo(n * CELL, 3);
+      // 内側の端（マス x = 10 の西の辺）：丸い転回場なので、西の辺にまっすぐな切り口がない
+      expect(Math.abs(lo - 10 * CELL), `road ${road}: west end ${lo}`).toBeGreaterThan(0.1);
+    }
   });
 });
