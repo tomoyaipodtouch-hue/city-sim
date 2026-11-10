@@ -3209,10 +3209,9 @@ function cemetery(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, stage: number)
     const zs = L.z - s * 0.55; // 墓石は区画の奥（通路と反対側）
     const bx = (xa: number, ya: number, dza: number, xb: number, yb: number, dzb: number, col: THREE.Color, pat: number = PAT.none) =>
       mb.box(L.x + xa, ya, zs + Math.min(dza, dzb), L.x + xb, yb, zs + Math.max(dza, dzb), col, pat, col);
-    // 植え込みの床（濃い緑の地被と、季節の花）
+    // 植え込みの床（濃い緑の地被）
     const bz0 = Math.min(zs, L.z + s * 0.9), bz1 = Math.max(zs, L.z + s * 0.9);
     flat(L.x - 0.55, bz0, L.x + 0.55, bz1, 0.075, C(0x4f7f3a));
-    flat(L.x - 0.3, L.z + s * 0.35 - 0.18, L.x + 0.3, L.z + s * 0.35 + 0.18, 0.08, L.fl);
     // 小さな墓石：形は 5 種類（四角、上が丸い、横長で低い、十字架、細長い）
     const h = L.h * 0.75; // 0.7〜0.95m
     const t = 0.13, sy = 0.06;
