@@ -3315,7 +3315,7 @@ function cemetery(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, stage: number)
 // 打ち放しコンクリートとガラスの斎場。低く長い一つの箱（KAAN「Siesegem」）が道路に面し、
 // 正面は深い列柱（コンクリートの柱の列）とその奥の全面ガラス。箱には中庭を 2 つ切り込む（白い砂利の庭と水の庭。木は植えない）。
 // 全体は同じ低い高さ。中央の告別ホールには細い丸柱がランダムに立つ「柱の森」があり、ガラス越しに見える
-// （Schultes Frank「Baumschulenweg」）。柱の頭のまわりは丸い天窓の光の輪で、夜は屋上の平らな輪も光る。
+// （Schultes Frank「Baumschulenweg」）。柱の頭のまわりの天井は光の輪（屋上には何も出さない）。
 // 火葬炉はホールの奥に同じ箱の一部として入れ、排気は屋上の低い囲いの中（煙突は見せない）
 function crematorium(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, pond?: PondBuilder) {
   const hw = f.W / 2, hd = f.D / 2;
@@ -3476,7 +3476,7 @@ function crematorium(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, pond?: Pond
   mb.box(-hx, 0, hz0 + wt, hx, 0.15, zb - 0.2, floorC, PAT.none, C(0x9a9083));
   { const gy = 0.16, gc = C(0x7d6f58); mb.quad([-hx + 0.5, gy, zb - 0.8], [hx - 0.5, gy, zb - 0.8], [hx - 0.5, gy, hz0 + wt + 0.5], [-hx + 0.5, gy, hz0 + wt + 0.5], gc, PAT.glow); }
   mb.box(-hx, 0.15, hz0 + wt, hx, H - 1.0, hz0 + wt + 0.05, C(0xd6c8aa), PAT.glow, C(0xd6c8aa));
-  // 柱の森：細い丸柱をランダムに。頭のまわりの天井に光の輪、屋上は平らな丸い天窓
+  // 柱の森：細い丸柱をランダムに。頭のまわりの天井に光の輪
   const cols: [number, number][] = [];
   const ix0 = -hx + 1.2, ix1 = hx - 1.2, iz0 = hz0 + wt + 1.2, iz1 = zb - 1.6;
   for (let t = 0; t < 400 && cols.length < 18; t++) {
@@ -3497,8 +3497,6 @@ function crematorium(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, pond?: Pond
     mb.cylinder(x, z, 0.15, yC, 0.26, 12, concL);
     mb.matOverride = null;
     disc(x, z, yC - 0.02, 1.0, C(0xfff1d6), PAT.glow, false);
-    disc(x, z, H + 0.04, 0.95, C(0xf4ead2), PAT.glow, true); // 屋上の天窓（屋根と同じ高さの平らな輪）
-    disc(x, z, H + 0.06, 0.5, concL, PAT.none, true);
   }
 
   // ---- 奥：火葬炉の棟（同じ高さの箱の一部）と、低い排気の囲い ----
