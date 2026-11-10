@@ -287,7 +287,7 @@ export const CIVIC: Record<CivicId, CivicDef> = {
   future_stadium: { id: 'future_stadium', name: '近未来スタジアム', w: 8, h: 8, cost: 60000, upkeep: 500, park: 0.12, reward: true, desc: '記念施設。白い曲面の大きなスタジアム。商業の需要が上がり、市長評価が上がる' },
   stadium: { id: 'stadium', name: 'スタジアム', w: 6, h: 6, cost: 40000, upkeep: 400, park: 0.1, reward: true, desc: '記念施設。商業の需要が上がり、市長評価が上がる' },
   cemetery: { id: 'cemetery', name: '霊園', w: 4, h: 4, cost: 15000, upkeep: 120, service: 'cemetery', capacity: 3000, gloom: 0.08, desc: '亡くなった人を葬る公園型の霊園（3,000 区画）。少しずつ埋まり、満杯になると新しい霊園が必要。周りの地価が少し下がる' },
-  crematorium: { id: 'crematorium', name: '斎場', w: 3, h: 3, cost: 25000, upkeep: 300, service: 'crematorium', capacity: 80, gloom: 0.1, desc: '火葬場とお葬式の式場。月 80 人まで。足りないと住みやすさと市長評価が下がる。周りの地価が少し下がる' },
+  crematorium: { id: 'crematorium', name: '斎場', w: 4, h: 3, rotate: true, cost: 25000, upkeep: 300, service: 'crematorium', capacity: 80, gloom: 0.1, desc: '火葬場とお葬式の式場。月 80 人まで。足りないと住みやすさと市長評価が下がる。周りの地価が少し下がる' },
   recycling: { id: 'recycling', name: 'リサイクルセンター', w: 3, h: 2, cost: 6000, upkeep: 200, service: 'recycling', capacity: 4000, desc: 'ゴミを月 4,000 減らす' },
   ciq: { id: 'ciq', name: 'CIQ庁舎', w: 4, h: 3, rotate: true, cost: 20000, upkeep: 200, ciq: true, radius: CIQ_RADIUS, desc: '税関・出入国管理・検疫の庁舎と、コンテナのX線検査場。半径20マスの工業ゾーンが倉庫業になり、大きな倉庫も建つ。古い工場も少しずつ倉庫に建て替わる' },
   freight_st: { id: 'freight_st', name: '貨物駅', w: 3, h: 2, cost: 8000, upkeep: 120, freightRail: true, desc: '線路と道路に接するように置く。線路がマップの端まで続いていれば、トラックの荷物を鉄道で運び、倉庫業の需要が上がる' },

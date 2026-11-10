@@ -104,7 +104,7 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { tool: 'plop:incinerator', name: CIVIC.incinerator.name, note: yen(CIVIC.incinerator.cost) },
       { tool: 'plop:incinerator_l', name: `${CIVIC.incinerator_l.name}（4×6）`, note: yen(CIVIC.incinerator_l.cost) },
       { tool: 'plop:recycling', name: CIVIC.recycling.name, note: yen(CIVIC.recycling.cost) },
-      { tool: 'plop:crematorium', name: `${CIVIC.crematorium.name}（3×3）`, note: yen(CIVIC.crematorium.cost) },
+      { tool: 'plop:crematorium', name: `${CIVIC.crematorium.name}（4×3）`, note: yen(CIVIC.crematorium.cost) },
       { tool: 'plop:cemetery', name: `${CIVIC.cemetery.name}（4×4）`, note: yen(CIVIC.cemetery.cost) },
       { tool: 'plop:ciq', name: `${CIVIC.ciq.name}（4×3）`, note: yen(CIVIC.ciq.cost) },
       { tool: 'plop:mayor_house', name: `記念：${CIVIC.mayor_house.name}`, note: '人口2千・評価55' },
