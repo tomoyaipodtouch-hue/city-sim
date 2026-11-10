@@ -5,6 +5,9 @@ import { World } from '../src/sim/world';
 import { RoadType, ZoneType } from '../src/sim/defs';
 import { OK, OUT_MAXD, OutskirtsLayer, planOutskirts } from '../src/render/outskirtsLayer';
 
+// 畑は区画を丸ごと描くので、ふちの区画は OUT_MAXD より少し外まで
+const EXT = 8;
+
 function town() {
   const w = World.create({ name: 't', seed: 7, style: 'river', difficulty: 0, sandbox: true, n: 128 });
   // 平らな地面で、決まった街を作る（地形の生成によらないように）
@@ -37,7 +40,7 @@ describe('町はずれの田園', () => {
       if (P.kind[i] === OK.meadow) meadows++;
       expect(g.road[i] || g.bldg[i] || g.zone[i]).toBeFalsy();
       expect(P.dist[i]).toBeGreaterThanOrEqual(1);
-      expect(P.dist[i]).toBeLessThanOrEqual(OUT_MAXD);
+      expect(P.dist[i]).toBeLessThanOrEqual(OUT_MAXD + EXT);
     }
     expect(fields).toBeGreaterThan(500);
     expect(meadows).toBeGreaterThan(100);

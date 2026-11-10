@@ -1,6 +1,7 @@
 // 町はずれ（ヨーロッパの田園）：街のふちから外へ、少しずつ田園に変わっていく飾り（描画だけ。シミュレーションには関係しない）
 //   1. 街のすぐ外（1〜2マス）：草地の色のむら、背の高い草の株、野の花、低い茂み、ところどころの生け垣と小さな林
-//   2. その外（3〜14マス）：生け垣で囲まれた畑のパッチワーク（小麦・菜の花・牧草地・耕した畑・トウモロコシ・刈り取りあと）、干し草のロール
+//   2. その外（3〜14マス）：畑のパッチワーク。地方ごとに、生け垣で囲まれた小さめの区画（ボカージュ）、開けた大きな区画（ボース平野・干拓地）、
+//      細長い短冊の畑（ポーランドなど）。区画のふちは草の帯で、生け垣・農道（2本の轍）・用水路が通る。干し草のロール
 //   3. 農家（母屋、大きな納屋、サイロ、砂利の庭、果樹園）
 //   4. 一軒家（急な瓦屋根、しっくいの壁、庭と生け垣）
 //   5. 風車（白い3枚羽根。ゆっくり回る）
@@ -18,22 +19,54 @@ import type { TreeSpot } from './buildingGen';
 
 const CHUNK = 16;
 export const OUT_MAXD = 14; // 飾るのは、開発されたマスからこのマス数まで
+const OUT_EXT = 8; // 区画は丸ごと描く（ふちの区画は、この分まではみ出してよい）
 const LIFT = 0.12; // 地面をおおう面の浮かせる高さ（地形の面と重ならないように）
+const MAC = 24; // 区画を分ける大きなブロック（マス）
 const MAX_TURBINES = 6;
 
 // マスの種類
 export const OK = { none: 0, meadow: 1, field: 2, house: 3, farm: 4, farmPart: 5 } as const;
-// 作物（シェーダーの畑の模様の番号と同じ）
-export const CROP = { plough: 1, maize: 2, wheat: 3, rape: 4, pasture: 5, stubble: 6 } as const;
+// 畑の模様（シェーダーの番号と同じ）
+const PT = { plough: 1, maize: 2, cereal: 3, rape: 4, grass: 5, stubble: 6, rows: 7 } as const;
+// 区画の地方：0 = 生け垣の多い地方（ボカージュ）、1 = 開けた畑、2 = 細長い短冊の畑
+export const RT = { bocage: 0, open: 1, strip: 2 } as const;
 
 const C = (hex: number) => new THREE.Color(hex);
-const CROP_COL = [C(0), C(0x6b5139), C(0x4d7a2b), C(0xc9a656), C(0xe0cc2c), C(0x6c9a3e), C(0xc4b07c)];
-const CROP_SIDE = [C(0), C(0x4d3a28), C(0x3a5d22), C(0xa48744), C(0x8b9a35), C(0x55803a), C(0xa09060)];
-// 作物の背の高さ（m）。0 は地面と同じ
-const CROP_H = [0, 0, 2.3, 0.6, 0.95, 0, 0];
+// 作物（航空写真のような落ちついた色）。pat = 模様、h = 背の高さ（m）、side = 区画のふちの側面の色
+interface CropDef { pat: number; col: THREE.Color; h: number; side: THREE.Color; bales?: boolean }
+const CR = (pat: number, col: number, h: number, side: number, bales = false): CropDef => ({ pat, col: C(col), h, side: C(side), bales });
+export const CROPS: CropDef[] = [
+  CR(0, 0, 0, 0),
+  CR(PT.plough, 0x7a6550, 0, 0), // 1 耕した畑（茶色）
+  CR(PT.plough, 0x8f7c62, 0, 0), // 2 ならした畑（明るい土）
+  CR(PT.maize, 0x56703a, 2.2, 0x3e5129), // 3 トウモロコシ
+  CR(PT.cereal, 0xb3a06c, 0.7, 0x8f7f52), // 4 実った小麦
+  CR(PT.cereal, 0xa59d70, 0.6, 0x847c56), // 5 大麦
+  CR(PT.cereal, 0x7c8a4f, 0.5, 0x5e6b3b), // 6 青い麦
+  CR(PT.rape, 0xbfae55, 0.9, 0x76803e), // 7 菜の花（くすんだ黄色）
+  CR(PT.grass, 0x6b8247, 0, 0, true), // 8 牧草地
+  CR(PT.grass, 0x84895a, 0, 0, true), // 9 干し草の草地
+  CR(PT.stubble, 0xbfb08a, 0, 0, true), // 10 刈り取りあと
+  CR(PT.rows, 0x58703f, 0.35, 0x45582f), // 11 ビート・ジャガイモ
+];
+// 地方ごとの作物の割合
+const CROP_W: [number, number][][] = [
+  [[8, 0.36], [9, 0.1], [4, 0.13], [6, 0.06], [3, 0.14], [1, 0.07], [10, 0.08], [7, 0.02], [5, 0.04]],
+  [[4, 0.26], [5, 0.12], [6, 0.08], [7, 0.04], [3, 0.12], [11, 0.08], [1, 0.1], [2, 0.05], [10, 0.1], [8, 0.05]],
+  [[4, 0.16], [5, 0.1], [6, 0.1], [7, 0.03], [3, 0.08], [11, 0.12], [1, 0.1], [2, 0.06], [10, 0.08], [8, 0.1], [9, 0.07]],
+];
+// 区画のふち：0 = なし（同じ区画）、1 = 草の帯、2 = 生け垣、3 = 農道（2本の轍）、4 = 用水路
+export const EF = { none: 0, margin: 1, hedge: 2, track: 3, ditch: 4 } as const;
+// ふちの種類ごとに、作物を内側へ下げる幅（m）
+const INSET = [0, 1.3, 2.4, 3.0, 2.1];
 const COL = {
-  lush: C(0x5c8a39),
-  dry: C(0x9c9a58),
+  lush: C(0x5a8238),
+  dry: C(0xa29d60),
+  margin: C(0x72874a),
+  marginDry: C(0x8f9160),
+  rut: C(0x8a7a5f),
+  ditch: C(0x3c4637),
+  reed: C(0x7f8651),
   grassA: C(0x6d8f45), // 地形の草の色（terrainLayer と同じ）
   grassB: C(0x87a052),
   tuft: [C(0x5f7434), C(0x7f8443), C(0x6a7a3a)],
@@ -66,15 +99,48 @@ function vnoise(x: number, y: number, seed: number) {
   const a = hash2(x0, y0, seed), b = hash2(x0 + 1, y0, seed), c = hash2(x0, y0 + 1, seed), d = hash2(x0 + 1, y0 + 1, seed);
   return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
 }
-// 生け垣の多い地方（ノルマンディーのボカージュ）か、開けた畑の地方（ボース平野、干拓地）か
-const bocage = (x: number, y: number) => vnoise(x / 22 + 3.1, y / 22 + 7.7, 61) > 0.5;
+// 区画の地方と区画：大きなブロック（MAC マス、行ごとにずらす）を、地方ごとの大きさになるまで二つに分けていく。
+// 戻り値 = [区画の番号, 地方, 畝が x の向きか]
+export function parcelOf(x: number, y: number): [number, number, boolean] {
+  const my = Math.floor(y / MAC), xo = Math.floor(hash2(my, 0, 51) * MAC), mx = Math.floor((x + xo) / MAC);
+  const r = vnoise(mx / 1.6 + 0.3, my / 1.6 + 0.7, 61), r2 = hash2(mx, my, 62);
+  const rt = r > 0.56 ? RT.bocage : r < 0.3 && r2 < 0.75 ? RT.strip : RT.open;
+  let x0 = mx * MAC - xo, y0 = my * MAC, w = MAC, h = MAC;
+  const along = hash2(mx, my, 57) < 0.5; // 短冊の畑の長い向き（true = x）
+  for (let depth = 0; depth < 12; depth++) {
+    const hs = hash2(x0 * 131 + w * 7, y0 * 137 + h * 11, 58 + depth);
+    let axisX: boolean, pos: number;
+    if (rt === RT.strip) {
+      const long = along ? w : h, short = along ? h : w;
+      if (long > 15) { axisX = along; pos = 8 + Math.floor(hs * (long - 15)); }
+      else if (short > 3) { axisX = !along; pos = short - 2 < 2 ? 2 : hs < 0.5 ? 2 : 3; if (short - pos < 2) pos = 2; }
+      else break;
+    } else {
+      const [minW, maxW, minH, maxH] = rt === RT.bocage ? [4, 8, 4, 6] : [6, 12, 6, 8];
+      const sx = w > maxW && w >= minW * 2, sy = h > maxH && h >= minH * 2;
+      if (!sx && !sy) break;
+      axisX = sx && sy ? w / maxW >= h / maxH : sx;
+      const len = axisX ? w : h, mn = axisX ? minW : minH;
+      pos = mn + Math.floor(hs * (len - mn * 2 + 1));
+    }
+    if (axisX) { if (x - x0 < pos) w = pos; else { x0 += pos; w -= pos; } }
+    else { if (y - y0 < pos) h = pos; else { y0 += pos; h -= pos; } }
+  }
+  const id = (Math.imul(x0 + 4096, 73856093) ^ Math.imul(y0 + 4096, 19349663) ^ Math.imul(w * 64 + h, 83492791) ^ (rt << 29)) | 0;
+  // 畝は長い向き（短冊の畑は必ず長い向き）
+  return [id, rt, w >= h];
+}
 
 export interface OutskirtsPlan {
   n: number;
   dist: Uint8Array; // 開発されたマスからの距離（マス）。255 = 遠い
   kind: Uint8Array;
   parcel: Int32Array; // 畑の区画の番号
-  crop: Uint8Array;
+  crop: Uint8Array; // CROPS の番号
+  region: Uint8Array; // 区画の地方（RT）
+  rowX: Uint8Array; // 1 = 畝が x の向き
+  edgeE: Uint8Array; // マスの東の辺のふち（EF）
+  edgeS: Uint8Array; // マスの南の辺のふち（EF）
   lane: Uint8Array; // 農道：進む向き + 1（0 = なし）
   laneStep: Uint8Array; // 道の端から何マス目か（1..）
   laneLen: Uint8Array; // 農道の長さ（マス）
@@ -128,7 +194,7 @@ export function planOutskirts(g: Grid): OutskirtsPlan {
   for (let y = 0; y < n; y++)
     for (let x = 0; x < n; x++) {
       const i = y * n + x;
-      if (dev[i] || dist[i] > OUT_MAXD || g.pline[i]) continue;
+      if (dev[i] || dist[i] > OUT_MAXD + OUT_EXT || g.pline[i]) continue;
       const a = Hs[y * V + x], b = Hs[y * V + x + 1], c = Hs[(y + 1) * V + x], d = Hs[(y + 1) * V + x + 1];
       const lo = Math.min(a, b, c, d), hi = Math.max(a, b, c, d);
       // 水、砂浜、急な斜面には置かない
@@ -144,7 +210,7 @@ export function planOutskirts(g: Grid): OutskirtsPlan {
     }
 
   const P: OutskirtsPlan = {
-    n, dist, kind: new Uint8Array(N), parcel: new Int32Array(N), crop: new Uint8Array(N),
+    n, dist, kind: new Uint8Array(N), parcel: new Int32Array(N), crop: new Uint8Array(N), region: new Uint8Array(N), rowX: new Uint8Array(N), edgeE: new Uint8Array(N), edgeS: new Uint8Array(N),
     lane: new Uint8Array(N), laneStep: new Uint8Array(N), laneLen: new Uint8Array(N), face: new Uint8Array(N), turbine: new Uint8Array(N),
   };
   const near = (i: number) => free[i] && dist[i] >= 1 && dist[i] <= OUT_MAXD;
@@ -172,34 +238,28 @@ export function planOutskirts(g: Grid): OutskirtsPlan {
     }
 
   // ---- 草地と畑 ----
+  // 畑は区画を丸ごと描く：区画のどこかが街から OUT_MAXD マス以内なら、はみ出したところ（OUT_EXT まで）も描く（外のふちが区画の形になる）
+  const pmin = new Map<number, number>();
   for (let y = 0; y < n; y++)
     for (let x = 0; x < n; x++) {
       const i = y * n + x;
-      if (!near(i)) continue;
-      if (dist[i] <= 2) { P.kind[i] = OK.meadow; continue; }
-      P.kind[i] = OK.field;
-      // 区画：ずらしたレンガ積みのブロックを、ハッシュで2つか4つに分ける
-      const boc = bocage(x, y), t = boc ? 0 : 1;
-      const bw = boc ? 4 : 8, bh = boc ? 4 : 6;
-      const row = Math.floor(y / bh), xo = Math.floor(hash2(row, t, 51) * bw);
-      const col = Math.floor((x + xo) / bw), lx = x + xo - col * bw, ly = y - row * bh;
-      const hs = hash2(col, row, 52 + t), hs2 = hash2(col, row, 54 + t);
-      let sub = 0;
-      if (hs < 0.25) sub = 0;
-      else if (hs < 0.55) sub = lx < 1 + Math.floor(hs2 * (bw - 1)) ? 1 : 2;
-      else if (hs < 0.8) sub = ly < 1 + Math.floor(hs2 * (bh - 1)) ? 3 : 4;
-      else sub = 5 + (lx < bw / 2 ? 0 : 1) + (ly < bh / 2 ? 0 : 2);
-      const pid = (Math.imul(col, 73856093) ^ Math.imul(row, 19349663) ^ Math.imul(sub + 1, 83492791) ^ (t << 30)) | 0;
-      P.parcel[i] = pid;
-      const hc = hash2(pid, t, 55);
-      // 生け垣の地方は牧草地が多く、開けた地方は小麦と菜の花が多い
-      const w = boc
-        ? [[CROP.pasture, 0.42], [CROP.wheat, 0.17], [CROP.maize, 0.15], [CROP.plough, 0.09], [CROP.rape, 0.05], [CROP.stubble, 0.12]]
-        : [[CROP.wheat, 0.34], [CROP.rape, 0.15], [CROP.maize, 0.14], [CROP.plough, 0.15], [CROP.stubble, 0.12], [CROP.pasture, 0.1]];
-      let acc = 0;
-      for (const [c, p] of w) { acc += p; if (hc < acc) { P.crop[i] = c; break; } }
-      if (!P.crop[i]) P.crop[i] = CROP.pasture;
+      if (!free[i] || dist[i] < 1) continue;
+      if (dist[i] <= 2) { if (dist[i] <= OUT_MAXD) P.kind[i] = OK.meadow; continue; }
+      const [pid, rt, rx] = parcelOf(x, y);
+      P.parcel[i] = pid; P.region[i] = rt; P.rowX[i] = rx ? 1 : 0;
+      const m = pmin.get(pid);
+      if (m === undefined || dist[i] < m) pmin.set(pid, dist[i]);
     }
+  for (let i = 0; i < N; i++) {
+    if (!free[i] || dist[i] < 3) continue;
+    const pid = P.parcel[i];
+    if ((pmin.get(pid) ?? 255) > OUT_MAXD) { P.parcel[i] = 0; continue; }
+    P.kind[i] = OK.field;
+    const hc = hash2(pid, P.region[i], 55);
+    let acc = 0;
+    for (const [c, p] of CROP_W[P.region[i]]) { acc += p; if (hc < acc) { P.crop[i] = c; break; } }
+    if (!P.crop[i]) P.crop[i] = 8;
+  }
 
   // ---- 一軒家（街の近く。道路や農道に面して） ----
   const roadNear = (x: number, y: number, r: number) => {
@@ -266,7 +326,51 @@ export function planOutskirts(g: Grid): OutskirtsPlan {
     }
   tc.sort((a, b) => a[0] - b[0]);
   for (const [, i] of tc.slice(0, MAX_TURBINES)) P.turbine[i] = 1;
+  planEdges(g, P);
   return P;
+}
+
+// 区画のふち（生け垣・農道・用水路・草の帯）。辺ごとに1回だけ決める（西・北のマスの edgeE / edgeS に入れる）
+function planEdges(g: Grid, P: OutskirtsPlan) {
+  const n = g.n;
+  const isField = (j: number) => P.kind[j] === OK.field && !P.lane[j];
+  // 農道は、ブロックを分けた線に沿って続く（線ごとに決める）
+  const trackLine = (vert: boolean, line: number, along: number, rt: number) => hash2(line * 2 + (vert ? 1 : 0), Math.floor(along / MAC), 140) < [0.22, 0.38, 0.6][rt];
+  for (let y = 0; y < n; y++)
+    for (let x = 0; x < n; x++) {
+      const i = y * n + x;
+      for (const vert of [true, false]) {
+        const xx = vert ? x + 1 : x, yy = vert ? y : y + 1;
+        if (!g.inb(xx, yy)) continue;
+        const j = yy * n + xx;
+        const fa = isField(i), fb = isField(j);
+        if (!fa && !fb) continue;
+        if (fa && fb && P.parcel[i] === P.parcel[j]) continue;
+        const f = fa ? i : j, other = fa ? j : i, ok = P.kind[other];
+        const rt = P.region[f];
+        let e: number = EF.margin;
+        const blocked = P.lane[other] || ok === OK.house || ok === OK.farm || ok === OK.farmPart || g.isWater(xx, yy) || g.isWater(x, y);
+        if (!blocked) {
+          const h = hash2(vert ? xx * 2 + 1 : x * 2, vert ? y * 2 : yy * 2, 141);
+          if (fa && fb && trackLine(vert, vert ? xx : yy, vert ? y : x, rt)) e = EF.track;
+          else if (rt === RT.bocage) e = h < 0.86 ? EF.hedge : EF.margin;
+          else if (rt === RT.open) e = !(fa && fb) ? (h < 0.4 ? EF.hedge : EF.margin) : h < 0.1 ? EF.hedge : h < 0.26 ? EF.ditch : EF.margin;
+          else e = !(fa && fb) ? (h < 0.2 ? EF.hedge : EF.margin) : h < 0.07 ? EF.ditch : EF.margin;
+        }
+        if (vert) P.edgeE[i] = e; else P.edgeS[i] = e;
+      }
+    }
+  // 農道を、草地を通って道路まで（3マスまで）のばす
+  const free2 = (j: number) => P.kind[j] === OK.meadow && !P.lane[j];
+  for (let pass = 0; pass < 3; pass++)
+    for (let y = 1; y < n - 1; y++)
+      for (let x = 1; x < n - 1; x++) {
+        const i = y * n + x;
+        // 南北の線（マス x と x+1 のあいだ）
+        if (!P.edgeE[i] && free2(i) && free2(i + 1) && (P.edgeE[i - n] === EF.track || P.edgeE[i + n] === EF.track)) P.edgeE[i] = EF.track;
+        // 東西の線（マス y と y+1 のあいだ）
+        if (!P.edgeS[i] && free2(i) && free2(i + n) && (P.edgeS[i - 1] === EF.track || P.edgeS[i + 1] === EF.track)) P.edgeS[i] = EF.track;
+      }
 }
 
 interface Chunk {
@@ -338,10 +442,10 @@ export class OutskirtsLayer {
         for (let y = Math.max(0, y0 - 1); y < Math.min(n, y1 + 1); y++)
           for (let x = Math.max(0, x0 - 1); x < Math.min(n, x1 + 1); x++) {
             const i = y * n + x, k = P.kind[i];
-            if (!k) continue;
+            if (!k && !P.edgeE[i] && !P.edgeS[i]) continue;
             if (x >= x0 && x < x1 && y >= y0 && y < y1) any = true;
             mix(i); mix(k | (k === OK.meadow ? P.dist[i] << 4 : 0) | (P.lane[i] << 12) | (P.laneStep[i] << 16) | (P.laneLen[i] << 20) | (P.face[i] << 24) | (P.turbine[i] << 27) | ((g.road[i] ? 1 : 0) << 28));
-            mix(P.parcel[i]); mix(P.crop[i]);
+            mix(P.parcel[i]); mix(P.crop[i] | (P.region[i] << 8) | (P.rowX[i] << 10) | (P.edgeE[i] << 12) | (P.edgeS[i] << 16));
             mix(Math.round(g.vh(x, y) * 16)); mix(Math.round(g.vh(x + 1, y + 1) * 16)); mix(Math.round(g.vh(x + 1, y) * 16)); mix(Math.round(g.vh(x, y + 1) * 16));
           }
         const sig = any ? h : 0;
@@ -422,34 +526,102 @@ export class OutskirtsLayer {
       terrCol(vx, vy, out);
       if (!(covered(vx - 1, vy - 1) && covered(vx, vy - 1) && covered(vx - 1, vy) && covered(vx, vy))) return out;
       const m = vnoise(vx / 3.3, vy / 3.3, 85), m2 = vnoise(vx / 1.7 + 9, vy / 1.7 + 4, 86);
-      const c = COL.lush.clone().lerp(COL.dry, Math.min(1, Math.max(0, (m - 0.3) * 1.6)));
-      c.multiplyScalar(0.92 + m2 * 0.16);
-      return out.lerp(c, 0.65);
+      const c = COL.lush.clone().lerp(COL.dry, Math.min(1, Math.max(0, (m - 0.25) * 1.7)));
+      c.multiplyScalar(0.88 + m2 * 0.22);
+      return out.lerp(c, 0.82);
     };
-    const hedgeBox = (x0: number, z0: number, x1: number, z1: number, ht: number, col: THREE.Color) => {
-      const lo = Math.min(gy(x0, z0), gy(x1, z1), gy(x0, z1), gy(x1, z0)), hi = Math.max(gy(x0, z0), gy(x1, z1), gy(x0, z1), gy(x1, z0));
-      mb.matOverride = MAT.none;
-      mb.box(x0, lo - 0.3, z0, x1, hi + ht, z1, col, PAT.gardenLeaf);
-    };
-    // 生け垣（マスの辺に沿って。vert = 南北の辺）。木を混ぜる割合 pt
-    const hedge = (ex: number, ez: number, len: number, vert: boolean, key: number, pt: number, tall = 1) => {
-      const parts = 2;
-      let s = 0;
-      for (let p = 0; p < parts; p++) {
-        const hs = hash2(key, p, 101), l = p === parts - 1 ? len - s : len * (0.35 + hs * 0.3);
-        // ところどころ、畑の出入口のすき間
-        if (hash2(key, p, 102) > 0.1) {
-          const w = (1.2 + hash2(key, p, 103) * 0.8) * (0.8 + tall * 0.2), ht = (1.4 + hash2(key, p, 104) * 1.2) * tall;
-          const col = COL.hedge[Math.floor(hash2(key, p, 105) * COL.hedge.length)];
-          if (vert) hedgeBox(ex - w / 2, ez + s, ex + w / 2, ez + s + l, ht, col);
-          else hedgeBox(ex + s, ez - w / 2, ex + s + l, ez + w / 2, ht, col);
-        }
-        s += l;
+    // 頂点のずらし：区画のふちを、ゆるやかに曲げる（まわりの4マスがすべて畑で、平らなときだけ。ずらした頂点はとなりのマスと共有）
+    const jcache = new Map<number, [number, number]>();
+    const J = (vx: number, vy: number): [number, number] => {
+      const key = vy * (n + 1) + vx;
+      const c = jcache.get(key);
+      if (c) return c;
+      let ok = true;
+      for (let k2 = 0; k2 < 4 && ok; k2++) {
+        const cx = vx - 1 + (k2 & 1), cy = vy - 1 + (k2 >> 1);
+        if (!g.inb(cx, cy)) { ok = false; break; }
+        const j = cy * n + cx;
+        if (P.kind[j] !== OK.field || P.lane[j] || P.turbine[j] || g.cellMaxH(cx, cy) - g.cellMinH(cx, cy) > 1.5) ok = false;
       }
-      if (hash2(key, 7, 106) < pt) {
-        const a = (0.15 + hash2(key, 8, 107) * 0.7) * len;
-        const tx = vert ? ex : ex + a, tz = vert ? ez + a : ez;
-        trees.push({ x: tx, y: gy(tx, tz), z: tz, s: 1.05 + hash2(key, 9, 108) * 0.55, kind: 0, shape: hash2(key, 10, 109) < 0.6 ? 0 : 3 });
+      const A = 4.2;
+      const r: [number, number] = ok
+        ? [vx * CELL + (vnoise(vx / 3.1 + 0.5, vy / 3.1 + 0.2, 301) - 0.5) * 2 * A, vy * CELL + (vnoise(vx / 3.1 + 0.8, vy / 3.1 + 0.6, 302) - 0.5) * 2 * A]
+        : [vx * CELL, vy * CELL];
+      jcache.set(key, r);
+      return r;
+    };
+    // マスの中の位置 (u, v)（0..1）を、ずらした4つの角から求める
+    const Qw = (x: number, y: number, u: number, v: number): [number, number] => {
+      const a = J(x, y), b = J(x + 1, y), c = J(x, y + 1), d = J(x + 1, y + 1);
+      return [a[0] * (1 - u) * (1 - v) + b[0] * u * (1 - v) + c[0] * (1 - u) * v + d[0] * u * v, a[1] * (1 - u) * (1 - v) + b[1] * u * (1 - v) + c[1] * (1 - u) * v + d[1] * u * v];
+    };
+    const Q3 = (x: number, y: number, u: number, v: number, lift: number): V3 => { const [wx, wz] = Qw(x, y, u, v); return [wx, gy(wx, wz) + lift, wz]; };
+    // マスの中の四角 (u0..u1, v0..v1) を地面に沿わせて描く（斜面では細かく分ける）
+    const patch = (x: number, y: number, u0: number, v0: number, u1: number, v1: number, lift: number, col: THREE.Color, mat: number, pat = 0, pu = 0, pv = 0) => {
+      if (u1 - u0 < 0.01 || v1 - v0 < 0.01) return;
+      const k = g.cellMaxH(x, y) - g.cellMinH(x, y) > 1.2 ? 2 : 1;
+      for (let a = 0; a < k; a++)
+        for (let b = 0; b < k; b++) {
+          const ua = u0 + ((u1 - u0) * a) / k, ub = u0 + ((u1 - u0) * (a + 1)) / k, va = v0 + ((v1 - v0) * b) / k, vb = v0 + ((v1 - v0) * (b + 1)) / k;
+          mb.quadC(Q3(x, y, ua, vb, lift), Q3(x, y, ub, vb, lift), Q3(x, y, ub, va, lift), Q3(x, y, ua, va, lift), col, col, col, col, mat, pat, pu, pv);
+        }
+    };
+    // 生け垣の一区切り（A から B へ、向きのついた箱。上に小さな箱を重ねて、てっぺんをでこぼこに）
+    const hedgeSeg = (ax: number, az: number, bx: number, bz: number, w: number, ht: number, col: THREE.Color, crown: number) => {
+      const len = Math.hypot(bx - ax, bz - az);
+      if (len < 0.5) return;
+      const lo = Math.min(gy(ax, az), gy(bx, bz)), hi = Math.max(gy(ax, az), gy(bx, bz));
+      mb.setTransform(Math.atan2(bz - az, bx - ax), (ax + bx) / 2, 0, (az + bz) / 2);
+      mb.matOverride = MAT.none;
+      mb.box(-len / 2, lo - 0.4, -w / 2, len / 2, hi + ht, w / 2, col, PAT.gardenLeaf);
+      // てっぺんの盛り上がり（2つ、少し細く。並べて、平らな箱に見えないように）
+      if (crown > 0) {
+        const c2 = col.clone().multiplyScalar(1.08);
+        mb.box(-len / 2 + 0.3, hi + ht - 0.3, -w * 0.38, -len * 0.05, hi + ht + crown, w * 0.38, c2, PAT.gardenLeaf);
+        mb.box(len * 0.08, hi + ht - 0.3, -w * 0.36, len / 2 - 0.4, hi + ht + crown * 0.7, w * 0.36, c2, PAT.gardenLeaf);
+      }
+      mb.setTransform(0, 0, 0, 0);
+    };
+    // 区画のふち（辺の A から B）：生け垣・農道・用水路
+    const edgeLine = (ax: number, az: number, bx: number, bz: number, e: number, key: number, rt: number) => {
+      const len = Math.hypot(bx - ax, bz - az), ux = (bx - ax) / len, uz = (bz - az) / len;
+      if (e === EF.hedge) {
+        const boc = rt === RT.bocage;
+        let s0 = 0;
+        for (let p = 0; p < 2; p++) {
+          const s1 = p === 1 ? len : len * (0.38 + hash2(key, p, 101) * 0.24);
+          // ところどころ、畑の出入口のすき間
+          if (hash2(key, p, 102) > 0.04) {
+            const w = boc ? 2.3 + hash2(key, p, 103) * 0.9 : 1.5 + hash2(key, p, 103) * 0.7;
+            const ht = boc ? 2.3 + hash2(key, p, 104) * 1.6 : 1.4 + hash2(key, p, 104) * 1.0;
+            const col = COL.hedge[Math.floor(hash2(key, p, 105) * COL.hedge.length)];
+            hedgeSeg(ax + ux * s0, az + uz * s0, ax + ux * s1, az + uz * s1, w, ht, col, hash2(key, p, 106) < (boc ? 0.85 : 0.5) ? 0.4 + hash2(key, p, 107) * 0.7 : 0);
+          }
+          s0 = s1;
+        }
+        // 生け垣の木（ボカージュは多い）
+        const pt = boc ? 0.62 : rt === RT.open ? 0.2 : 0.1;
+        for (let t = 0; t < 2; t++) {
+          if (hash2(key, t, 108) >= (t ? pt * 0.4 : pt)) continue;
+          const a = (0.12 + hash2(key, t, 109) * 0.76) * len, tx = ax + ux * a, tz = az + uz * a;
+          trees.push({ x: tx, y: gy(tx, tz), z: tz, s: 1.0 + hash2(key, t, 110) * 0.6, kind: 0, shape: hash2(key, t, 111) < 0.6 ? 0 : 3 });
+        }
+      } else if (e === EF.track) {
+        // 農道：土の2本の轍（まん中と両側は草）
+        for (const o of [-1, 1]) strip(ax, az, ux, uz, -0.25, len + 0.25, o * 0.6 - 0.28, o * 0.6 + 0.28, LIFT + 0.06, COL.rut, COL.rut, MAT.gravel);
+        if (hash2(key, 3, 112) < 0.07) {
+          const a = hash2(key, 4, 113) * len, tx = ax + ux * a - uz * 2.6, tz = az + uz * a + ux * 2.6;
+          trees.push({ x: tx, y: gy(tx, tz), z: tz, s: 1.1 + hash2(key, 5, 114) * 0.4, kind: 0 });
+        }
+      } else if (e === EF.ditch) {
+        // 用水路：暗い水と、両側のアシ
+        strip(ax, az, ux, uz, -0.2, len + 0.2, -0.55, 0.55, LIFT + 0.05, COL.ditch, COL.ditch, MAT.none);
+        for (const o of [-1, 1]) strip(ax, az, ux, uz, -0.2, len + 0.2, o > 0 ? 0.55 : -1.05, o > 0 ? 1.05 : -0.55, LIFT + 0.07, COL.reed, COL.reed, MAT.ground);
+        // 干拓地の水路ぞいの木（ヤナギ）
+        if (hash2(key, 6, 115) < 0.14) {
+          const a = hash2(key, 7, 116) * len, tx = ax + ux * a + uz * 1.6, tz = az + uz * a - ux * 1.6;
+          trees.push({ x: tx, y: gy(tx, tz), z: tz, s: 0.9 + hash2(key, 8, 117) * 0.3, kind: 0, shape: 3, col: 0x7a8a55 });
+        }
       }
     };
     // 地面の飾りの向きの帯（農道の轍など）：中心 c から向き u に sA..sB、横に oL..oR。地面に沿わせる
@@ -497,6 +669,17 @@ export class OutskirtsLayer {
     for (let y = Y0; y < Y1; y++)
       for (let x = X0; x < X1; x++) {
         const i = y * n + x, k = P.kind[i];
+        // 区画のふち（東と南の辺は、このマスが受け持つ）
+        if (P.edgeE[i] > EF.margin && x + 1 < n) {
+          const [ax, az] = J(x + 1, y), [bx, bz] = J(x + 1, y + 1);
+          const f = P.kind[i] === OK.field ? i : i + 1;
+          edgeLine(ax, az, bx, bz, P.edgeE[i], (x + 1) * 2 * 65599 + y * 2 + 1, P.region[f]);
+        }
+        if (P.edgeS[i] > EF.margin && y + 1 < n) {
+          const [ax, az] = J(x, y + 1), [bx, bz] = J(x + 1, y + 1);
+          const f = P.kind[i] === OK.field ? i : i + n;
+          edgeLine(ax, az, bx, bz, P.edgeS[i], x * 2 * 65599 + (y + 1) * 2, P.region[f]);
+        }
         if (!k) continue;
         const cxw = (x + 0.5) * CELL, czw = (y + 0.5) * CELL;
         const H = (s: number) => hash2(x * 5 + s, y * 7 - s, 120 + s);
@@ -547,61 +730,66 @@ export class OutskirtsLayer {
             }
           }
         } else if (k === OK.field) {
-          // ---- 畑 ----
-          const crop = P.crop[i];
-          const raised = lane || P.turbine[i] ? 0 : CROP_H[crop];
-          const ang = (hash2(P.parcel[i], 3, 56) < 0.5 ? 0 : Math.PI / 2) + 0.001;
-          const cc = CROP_COL[crop];
-          cellTop(x, y, LIFT + raised, [cc, cc, cc, cc], MAT.ground, PAT.field, ang, crop);
-          const same = (xx: number, yy: number) => g.inb(xx, yy) && P.kind[yy * n + xx] === OK.field && P.parcel[yy * n + xx] === P.parcel[i];
-          if (raised > 0) {
-            // 背の高い作物の、区画のふちの側面
-            const x0 = x * CELL, x1 = x0 + CELL, z0 = y * CELL, z1 = z0 + CELL, sc = CROP_SIDE[crop];
-            const top = raised + LIFT;
-            mb.matOverride = MAT.ground;
-            const side = (a: V3, b: V3, c: V3, d: V3) => mb.quad(a, b, c, d, sc, PAT.none, CELL, raised);
-            if (!same(x + 1, y) || P.lane[i + 1]) side([x1, vh(x + 1, y + 1), z1], [x1, vh(x + 1, y), z0], [x1, vh(x + 1, y) + top, z0], [x1, vh(x + 1, y + 1) + top, z1]);
-            if (!same(x - 1, y) || P.lane[i - 1]) side([x0, vh(x, y), z0], [x0, vh(x, y + 1), z1], [x0, vh(x, y + 1) + top, z1], [x0, vh(x, y) + top, z0]);
-            if (!same(x, y + 1) || P.lane[i + n]) side([x0, vh(x, y + 1), z1], [x1, vh(x + 1, y + 1), z1], [x1, vh(x + 1, y + 1) + top, z1], [x0, vh(x, y + 1) + top, z1]);
-            if (!same(x, y - 1) || P.lane[i - n]) side([x1, vh(x + 1, y), z0], [x0, vh(x, y), z0], [x0, vh(x, y) + top, z0], [x1, vh(x + 1, y) + top, z0]);
-            mb.matOverride = null;
+          // ---- 畑：草の帯（区画のふち）の上に、内側へ下げた作物の面。ふちに沿って枕地（トラクターが回る帯） ----
+          const cd = CROPS[P.crop[i]];
+          {
+            const mc = (vx: number, vy: number, out: THREE.Color) => out.copy(COL.margin).lerp(COL.marginDry, vnoise(vx / 2.3, vy / 2.3, 311)).multiplyScalar(0.93 + hash2(vx, vy, 312) * 0.12);
+            const [a0, a1] = J(x, y + 1), [b0, b1] = J(x + 1, y + 1), [c0, c1] = J(x + 1, y), [d0, d1] = J(x, y);
+            mb.quadC([a0, gy(a0, a1) + LIFT, a1], [b0, gy(b0, b1) + LIFT, b1], [c0, gy(c0, c1) + LIFT, c1], [d0, gy(d0, d1) + LIFT, d1], mc(x, y + 1, tmp[0]), mc(x + 1, y + 1, tmp[1]), mc(x + 1, y, tmp[2]), mc(x, y, tmp[3]), MAT.ground);
           }
-          // 区画のふちの生け垣（となりも畑なら、東と南の辺だけこのマスが受け持つ）
           if (!lane) {
-            const boc = bocage(x, y);
-            for (let f = 0; f < 4; f++) {
-              const nx2 = x + DX[f * 2], ny2 = y + DY[f * 2];
-              if (!g.inb(nx2, ny2)) continue;
-              const j = ny2 * n + nx2, nk = P.kind[j];
-              if (P.lane[j] || g.isWater(nx2, ny2) || nk === OK.house || nk === OK.farm || nk === OK.farmPart) continue;
-              if (nk === OK.field && P.parcel[j] === P.parcel[i]) continue;
-              if (nk === OK.field && (f === 2 || f === 3)) continue;
-              const ex = f === 0 ? (x + 1) * CELL : x * CELL, ez = f === 1 ? (y + 1) * CELL : y * CELL;
-              const vert = f === 0 || f === 2;
-              // 辺ごとに決まった値（となりのマスから見ても同じ）
-              const key = vert ? (ex / CELL) * 2 * 65599 + y * 2 + 1 : x * 2 * 65599 + (ez / CELL) * 2;
-              const hp = hash2(key, 1, 110);
-              const p = boc ? 0.93 : nk === OK.field ? 0.14 : 0.45;
-              if (hp > p) continue;
-              hedge(ex, ez, CELL, vert, key, boc ? 0.5 : 0.12, boc ? 1 : 0.85);
+            const raised = P.turbine[i] ? 0 : cd.h;
+            // 4つの辺のふち（東・南・西・北）
+            const E = [P.edgeE[i], P.edgeS[i], x > 0 ? P.edgeE[i - 1] : EF.margin, y > 0 ? P.edgeS[i - n] : EF.margin];
+            const u0 = INSET[E[2]] / CELL, u1 = 1 - INSET[E[0]] / CELL, v0 = INSET[E[3]] / CELL, v1 = 1 - INSET[E[1]] / CELL;
+            const pid = P.parcel[i];
+            // 区画ごとの色の違い（同じ作物でも少しずつ違う）
+            const tint = new THREE.Color().copy(cd.col).multiplyScalar(0.92 + hash2(pid, 5, 57) * 0.16);
+            tint.lerp(COL.dry, (hash2(pid, 6, 58) - 0.5) * 0.12);
+            const off = Math.floor(hash2(pid, 7, 59) * 6) * 4;
+            const ang = (P.rowX[i] ? Math.PI / 2 : 0) + 0.001;
+            const top = LIFT + 0.03 + raised;
+            patch(x, y, u0, v0, u1, v1, top, tint, MAT.ground, PAT.field, ang + off, cd.pat);
+            if (raised > 0) {
+              // 背の高い作物の、区画のふちの側面
+              mb.matOverride = MAT.ground;
+              const side = (ua: number, va: number, ub: number, vb: number) => {
+                const A = Q3(x, y, ua, va, 0), B = Q3(x, y, ub, vb, 0);
+                const L = Math.hypot(B[0] - A[0], B[2] - A[2]);
+                mb.quad(A, B, [B[0], B[1] + top, B[2]], [A[0], A[1] + top, A[2]], cd.side, PAT.none, L, raised);
+              };
+              if (E[0]) side(u1, v1, u1, v0);
+              if (E[2]) side(u0, v0, u0, v1);
+              if (E[1]) side(u0, v1, u1, v1);
+              if (E[3]) side(u1, v0, u0, v0);
+              mb.matOverride = null;
             }
-          }
-          // 干し草のロール（牧草地と刈り取りあと）
-          if (!lane && !P.turbine[i] && (crop === CROP.pasture || crop === CROP.stubble) && H(130) < (crop === CROP.stubble ? 0.3 : 0.14)) {
-            const nb = 3 + Math.floor(H(131) * 4);
-            const col = crop === CROP.stubble ? COL.strawBale : H(132) < 0.5 ? COL.wrapDark : COL.wrapWhite;
-            const bx = (x + 0.25 + H(133) * 0.5) * CELL, bz = (y + 0.25 + H(134) * 0.5) * CELL;
-            for (let b = 0; b < nb; b++) {
-              const row = H(135) < 0.5;
-              const px = bx + (row ? (b - nb / 2) * 2.1 : (H(140 + b) - 0.5) * 9), pz = bz + (row ? 0 : (H(150 + b) - 0.5) * 9);
-              bale(px, pz, row ? Math.PI / 2 : H(160 + b) * 3, col);
+            // 枕地：ふちに沿った帯は、畝の向きがふちと平行で、色が少し違う（牧草地・刈り取りあとにはない）
+            if (cd.pat !== PT.grass && cd.pat !== PT.stubble) {
+              const hw = 6 / CELL, hc = tint.clone().multiply(cd.pat === PT.plough ? new THREE.Color(0.86, 0.85, 0.84) : new THREE.Color(0.9, 0.93, 0.82)), lt = top + 0.025;
+              const vA = v0 + (E[3] ? hw : 0), vB = v1 - (E[1] ? hw : 0);
+              if (E[3]) patch(x, y, u0, v0, u1, Math.min(v1, v0 + hw), lt, hc, MAT.ground, PAT.field, Math.PI / 2 + 0.001 + off, cd.pat);
+              if (E[1]) patch(x, y, u0, Math.max(v0, v1 - hw), u1, v1, lt, hc, MAT.ground, PAT.field, Math.PI / 2 + 0.001 + off, cd.pat);
+              if (E[2] && vB > vA) patch(x, y, u0, vA, Math.min(u1, u0 + hw), vB, lt, hc, MAT.ground, PAT.field, 0.001 + off, cd.pat);
+              if (E[0] && vB > vA) patch(x, y, Math.max(u0, u1 - hw), vA, u1, vB, lt, hc, MAT.ground, PAT.field, 0.001 + off, cd.pat);
+            }
+            // 干し草のロール（牧草地と刈り取りあと）
+            if (cd.bales && !P.turbine[i] && H(130) < (cd.pat === PT.stubble ? 0.28 : 0.1)) {
+              const nb = 3 + Math.floor(H(131) * 4);
+              const col = cd.pat === PT.stubble ? COL.strawBale : H(132) < 0.5 ? COL.wrapDark : COL.wrapWhite;
+              const [bx, bz] = Qw(x, y, 0.3 + H(133) * 0.4, 0.3 + H(134) * 0.4);
+              for (let b = 0; b < nb; b++) {
+                const row = H(135) < 0.5;
+                const px = bx + (row ? (b - nb / 2) * 2.1 : (H(140 + b) - 0.5) * 8), pz = bz + (row ? 0 : (H(150 + b) - 0.5) * 8);
+                bale(px, pz, row ? Math.PI / 2 : H(160 + b) * 3, col);
+              }
             }
           }
           // 風車
           if (P.turbine[i]) {
             const b = gy(cxw, czw), hub = b + 80;
             mb.matOverride = MAT.gravel;
-            mb.box(cxw - 4, b - 0.5, czw - 4, cxw + 4, b + raised + LIFT + 0.08, czw + 4, COL.gravel);
+            mb.box(cxw - 4, b - 0.5, czw - 4, cxw + 4, b + LIFT + 0.12, czw + 4, COL.gravel);
             mb.matOverride = MAT.none;
             mb.cylinder(cxw, czw, b - 0.5, hub - 1.8, 2.1, 14, COL.white, undefined, 1.25);
             // 風は西南西から（羽根は風上を向く）

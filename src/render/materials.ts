@@ -119,6 +119,7 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
         // 庭（苔・小石・石・葉の房）と、夜にともる灯籠の火袋
         float gGarden = 0.0;
         float gFol = 0.0;
+        vec3 gBump = vec3(0.0); // 畑の畝の凹凸（世界の向き）。光の計算の前に面の向きに足す
         float gGlowG = 0.0;
         ${GARDEN_LIGHT_PARS}
         uniform highp sampler2DArray uDetail;
@@ -368,40 +369,83 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
               diffuseColor.rgb *= 0.7 + 0.6 * n1.r;
               gRough = 0.95;
             }
-          } else if (pat > 17.5 && pat < 18.5) { // 畑：畝・轍・刈り跡（作物ごと）。遠くでは平均の色にする（ちらつかないように）
+          } else if (pat > 17.5 && pat < 18.5) { // 畑：面の座標 = (畝を横切る向き[rad] + 4 × 轍のずれ, 作物の模様)
+            // 1 = 耕した畑, 2 = トウモロコシ, 3 = 麦, 4 = 菜の花, 5 = 牧草地, 6 = 刈り取りあと, 7 = ビート・ジャガイモ
+            // 色のむら（湿り気・育ちぐあい）、細かい粒、作業の帯ごとの濃淡、轍、畝の凹凸（日の向きで陰ができる）。遠くでは平均の色に
             float crop = floor(uv.y + 0.5);
-            vec2 fd = vec2(cos(uv.x), sin(uv.x));
-            float s = dot(vWp.xz, fd);
-            float tr = dot(vWp.xz, vec2(-fd.y, fd.x));
-            vec4 nA = texture2D(uSurf, vWp.xz * (1.0 / 41.0) + 0.21);
-            vec4 nB = texture2D(uSurf, mat2(0.8, -0.6, 0.6, 0.8) * vWp.xz * (1.0 / 7.3) + 0.63);
+            float off = floor(uv.x / 4.0);
+            float ang = uv.x - off * 4.0;
+            vec2 fd = vec2(cos(ang), sin(ang));
+            vec2 fp = vWp.xz;
+            float s = dot(fp, fd) + off * 4.1;
+            float tr = dot(fp, vec2(-fd.y, fd.x));
+            vec4 nL = texture2D(uSurf, fp * (1.0 / 127.0) + 0.17);
+            vec4 nM = texture2D(uSurf, mat2(0.8, -0.6, 0.6, 0.8) * fp * (1.0 / 41.0) + 0.41);
+            vec4 nF = texture2D(uSurf, mat2(0.28, 0.96, -0.96, 0.28) * fp * (1.0 / 2.7) + 0.77);
             float fs = max(fwidth(s), 1e-4);
-            vec3 c = diffuseColor.rgb * (0.9 + 0.2 * nA.g) * (0.94 + 0.12 * nB.r);
-            if (crop < 1.5) { // 耕した畑：細かい畝
-              float a = 1.0 - smoothstep(0.15, 0.45, fs / 0.9);
-              float f = sin(s * 6.2832 / 0.9);
-              c *= 1.0 + a * (0.22 * f) + (nB.g - 0.5) * 0.25;
-            } else if (crop < 2.5) { // トウモロコシ：緑の列と、すき間の土
-              float a = 1.0 - smoothstep(0.15, 0.45, fs / 1.4);
-              float row = smoothstep(0.25, 0.6, abs(fract(s / 1.4) - 0.5) * 2.0);
-              c = mix(c, mix(c, vec3(0.16, 0.13, 0.08), row * 0.55), a);
-              c *= 0.92 + 0.16 * nB.g;
-            } else if (crop < 4.5) { // 小麦・菜の花：作業の轍（24m ごと）と、風のむら
-              float a = 1.0 - smoothstep(0.1, 0.5, fs / 0.6);
-              float q = abs(fract(s / 24.0) - 0.5) * 24.0;
-              float track = (1.0 - smoothstep(0.15, 0.4, abs(q - 0.9))) * a;
-              c *= 0.95 + 0.1 * nA.a;
-              c = mix(c, c * (crop < 3.5 ? vec3(0.8, 0.85, 0.7) : vec3(0.62, 0.7, 0.4)), track);
-            } else if (crop < 5.5) { // 牧草地：刈ったあとの縞
-              float a = 1.0 - smoothstep(0.3, 1.2, fs / 6.0);
-              c *= 1.0 + a * 0.07 * sign(fract(s / 12.0) - 0.5);
-            } else { // 刈り取ったあとの畑：麦わらの列（明るい）と刈り株
-              float a = 1.0 - smoothstep(0.15, 0.5, fs / 1.5);
-              float sw = 1.0 - smoothstep(0.3, 0.7, abs(fract(s / 7.0) - 0.5) * 7.0);
-              c = mix(c, c * 1.18 + vec3(0.03, 0.025, 0.0), sw * a);
-              c *= 1.0 + a * 0.06 * sin(tr * 6.2832 / 0.35 + s);
+            vec3 c = diffuseColor.rgb;
+            // 大きなむら：湿ったところは濃く青み、乾いたところは明るく黄み
+            float moist = nL.a * 0.55 + nM.g * 0.45;
+            c *= mix(vec3(0.84, 0.88, 0.9), vec3(1.12, 1.07, 0.92), smoothstep(0.2, 0.8, moist));
+            c *= 0.92 + 0.16 * nM.r;
+            // 細かい粒（遠くでは消す）
+            float fg = 1.0 - smoothstep(0.08, 0.5, fs);
+            c *= 1.0 + (nF.g - 0.5) * 0.2 * fg;
+            // 作業の帯（種まき機の幅 3m）ごとの、わずかな濃淡
+            float pass = h21(vec2(floor(s / 3.0), off + crop * 7.0));
+            float pa = 1.0 - smoothstep(0.3, 1.2, fs);
+            vec3 bump = vec3(0.0);
+            // 轍（24m ごとに、1.8m 離れた2本）
+            float q = abs(fract(s / 24.0) - 0.5) * 24.0;
+            // 線の幅より画面の1ピクセルが大きいときは、線を太らせて薄くする（遠くでも細い線として残る）
+            float ww = max(0.32, fs * 1.5);
+            float wheel = (1.0 - smoothstep(ww * 0.5, ww * 0.5 + fs * 0.6, abs(q - 0.9))) * (0.32 / ww) * (1.0 - smoothstep(2.0, 4.0, fs));
+            if (crop < 1.5) { // 耕した畑：0.9m の畝。凹凸に日が当たる
+              float a = 1.0 - smoothstep(0.12, 0.4, fs / 0.9);
+              float ph = s * 6.2832 / 0.9;
+              // 鋤の通った帯（5m）ごとの濃淡と、土くれ
+              float land = h21(vec2(floor(s / 5.0), off + 3.0));
+              float la = 1.0 - smoothstep(0.4, 1.6, fs);
+              c *= 1.0 + a * 0.16 * sin(ph) + (nF.r - 0.5) * 0.3 * fg + (land - 0.5) * 0.2 * la;
+              bump = vec3(fd.x, 0.0, fd.y) * cos(ph) * 0.75 * a;
+            } else if (crop < 2.5) { // トウモロコシ：0.75m の列と、すき間の暗い土
+              float a = 1.0 - smoothstep(0.12, 0.4, fs / 0.75);
+              float ph = s * 6.2832 / 0.75;
+              c = mix(c, c * vec3(0.55, 0.52, 0.45), a * smoothstep(0.2, 0.9, -sin(ph)) * 0.6);
+              // 遠くからは、列が細い線の束に見える（6m の帯ごとの濃淡）
+              float band = h21(vec2(floor(s / 6.0), off + 5.0));
+              c *= 1.0 + (band - 0.5) * 0.16 * (1.0 - smoothstep(0.5, 2.0, fs)) + 0.05 * sin(s * 6.2832 / 1.5) * (1.0 - smoothstep(0.2, 0.7, fs));
+              bump = vec3(fd.x, 0.0, fd.y) * cos(ph) * 0.35 * a;
+            } else if (crop < 4.5) { // 麦・菜の花：轍、帯の濃淡、風になびくむら
+              c *= 1.0 + (pass - 0.5) * 0.12 * pa;
+              c *= 0.92 + 0.16 * smoothstep(0.3, 0.7, nM.a);
+              if (crop > 3.5) {
+                // 菜の花：花の咲きぐあいのむら（緑の茎が見えるところ）
+                c = mix(c, c * vec3(0.72, 0.9, 0.62), smoothstep(0.55, 0.3, nM.b + (nF.r - 0.5) * 0.3 * fg) * 0.7);
+              }
+              c = mix(c, c * vec3(0.58, 0.58, 0.52), wheel * 0.85);
+              bump = vec3(fd.x, 0.0, fd.y) * sign(q - 0.9) * wheel * 0.25;
+            } else if (crop < 5.5) { // 牧草地：刈ったあとの縞と、草の株
+              float a = 1.0 - smoothstep(0.4, 1.4, fs / 6.0);
+              c *= 1.0 + a * 0.06 * sign(fract(s / 12.0) - 0.5);
+              c *= 1.0 + (nF.b - 0.5) * 0.25 * fg;
+              c = mix(c, c * vec3(0.8, 0.86, 0.72), smoothstep(0.62, 0.8, nM.a) * 0.5);
+            } else if (crop < 6.5) { // 刈り取りあと：明るい麦わらの列、刈り株の筋、うすい轍
+              float a = 1.0 - smoothstep(0.15, 0.6, fs / 1.6);
+              float sw = 1.0 - smoothstep(0.25, 0.75, abs(fract(s / 7.2) - 0.5) * 7.2);
+              c = mix(c, c * 1.15 + vec3(0.03, 0.025, 0.0), sw * a * 0.8);
+              c *= 1.0 + fg * 0.07 * sin(s * 6.2832 / 0.18);
+              c = mix(c, c * vec3(0.78, 0.76, 0.7), wheel * 0.5);
+              bump = vec3(fd.x, 0.0, fd.y) * cos(s * 6.2832 / 7.2) * 0.2 * a;
+            } else { // ビート・ジャガイモ：0.5m の畝（盛り上がった列）と、すき間の土
+              float a = 1.0 - smoothstep(0.1, 0.35, fs / 0.5);
+              float ph = s * 6.2832 / 0.5;
+              c = mix(c, vec3(0.2, 0.16, 0.11), a * smoothstep(0.1, 0.9, -sin(ph)) * 0.45);
+              c *= 1.0 + (pass - 0.5) * 0.12 * pa;
+              bump = vec3(fd.x, 0.0, fd.y) * cos(ph) * 0.45 * a;
             }
             diffuseColor.rgb = c;
+            gBump = bump;
             gRough = 0.95;
           } else { // 搬入口
             float f = mod(uv.x, 6.0);
@@ -452,6 +496,11 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
           gAO = mix(0.5, 1.0, k);
           diffuseColor.rgb *= mix(0.86, 1.0, k);
         }`,
+      )
+      .replace(
+        '#include <normal_fragment_maps>',
+        `#include <normal_fragment_maps>
+        if (dot(gBump, gBump) > 1e-6) normal = normalize(normal + (viewMatrix * vec4(gBump, 0.0)).xyz);`,
       )
       .replace(
         '#include <roughnessmap_fragment>',
