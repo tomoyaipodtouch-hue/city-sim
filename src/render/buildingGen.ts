@@ -3432,15 +3432,15 @@ function crematorium(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, pond?: Pond
     roofTop(x0, Z0, x1, Z1, H, c);
     // 中庭の中：木と苔、または水盤
     if (water) {
-      mb.ground(cx0, cz0, cx1, cz1, 0.0, C(0x3a4044));
+      mb.ground(cx0, cz0, cx1, cz1, 0.1, C(0x3a4044));
       if (pond) {
         const sd = (x: number, z: number) => Math.min(x - cx0 - 0.6, cx1 - 0.6 - x, z - cz0 - 0.6, cz1 - 0.6 - z);
-        pond.addLocal(cx0, cz0, cx1, cz1, 0.08, (x, z) => LAKE_T + 0.012 + sd(x, z) * 0.6, (x, y, z) => mb.world(x, y, z), 0.6);
-      } else mb.ground(cx0 + 0.6, cz0 + 0.6, cx1 - 0.6, cz1 - 0.6, 0.08, PALETTE.water);
-      mb.ground(cx0, cz0, cx1, cz0 + 0.6, 0.12, C(0x9c9a95));
-      mb.ground(cx0, cz1 - 0.6, cx1, cz1, 0.12, C(0x9c9a95));
-      mb.ground(cx0, cz0, cx0 + 0.6, cz1, 0.12, C(0x9c9a95));
-      mb.ground(cx1 - 0.6, cz0, cx1, cz1, 0.12, C(0x9c9a95));
+        pond.addLocal(cx0, cz0, cx1, cz1, 0.14, (x, z) => LAKE_T + 0.012 + sd(x, z) * 0.6, (x, y, z) => mb.world(x, y, z), 0.6);
+      } else mb.ground(cx0 + 0.6, cz0 + 0.6, cx1 - 0.6, cz1 - 0.6, 0.14, PALETTE.water);
+      mb.ground(cx0, cz0, cx1, cz0 + 0.6, 0.18, C(0x9c9a95));
+      mb.ground(cx0, cz1 - 0.6, cx1, cz1, 0.18, C(0x9c9a95));
+      mb.ground(cx0, cz0, cx0 + 0.6, cz1, 0.18, C(0x9c9a95));
+      mb.ground(cx1 - 0.6, cz0, cx1, cz1, 0.18, C(0x9c9a95));
     } else {
       mb.ground(cx0, cz0, cx1, cz1, 0.1, C(0x5f7f45));
       mb.ground((cx0 + cx1) / 2 - 1.6, cz0, (cx0 + cx1) / 2 + 1.6, cz1, 0.12, C(0xcbc6bb));
@@ -3471,9 +3471,13 @@ function crematorium(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, pond?: Pond
   joints('px', hz0, fz, 0, HH, hx);
   joints('pz', -hx, hx, HH - 1.6, HH, fz);
   // ホールの床（夜は柱の森がほのかに明るい）
-  mb.box(-hx + wt, 0, hz0 + wt, hx - wt, 0.15, fz - 0.2, floorC, PAT.lit, floorC);
+  mb.box(-hx + wt, 0, hz0 + wt, hx - wt, 0.15, fz - 0.2, floorC, PAT.none, C(0x9a9083));
+  { // 床のほのかな明かり（夜）。箱の上の面は模様が付かないので、上向きの面を直接張る
+    const ga = -hx + wt + 0.5, gb = hx - wt - 0.5, gz0 = hz0 + wt + 0.5, gz1 = fz - 1.2, gy = 0.16, gc = C(0x7d6f58);
+    mb.quad([ga, gy, gz1], [gb, gy, gz1], [gb, gy, gz0], [ga, gy, gz0], gc, PAT.glow);
+  }
   // 奥の壁の内側（夜は天窓からの光に照らされたように明るい）
-  mb.box(-hx + wt, 0.15, hz0 + wt, hx - wt, HH - 1.0, hz0 + wt + 0.05, C(0xcfc9bd), PAT.lit, C(0xcfc9bd));
+  mb.box(-hx + wt, 0.15, hz0 + wt, hx - wt, HH - 1.0, hz0 + wt + 0.05, C(0xd6c8aa), PAT.glow, C(0xd6c8aa));
   // 正面の大きな開口：枠のガラス（方立てと無目だけで、中の柱が見える）
   for (let x = -hx + wt + 1.6; x < hx - wt - 0.5; x += 1.6) mb.box(x - 0.04, 0.15, fz - 1.0, x + 0.04, HH - 1.6, fz - 0.92, mull);
   mb.box(-hx + wt, 3.4, fz - 1.0, hx - wt, 3.47, fz - 0.92, mull);
