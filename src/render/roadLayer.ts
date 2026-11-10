@@ -3339,7 +3339,7 @@ export class RoadLayer {
   }
 
   // 送電線：ヨーロッパのドナウ型の格子鉄塔（上の段に短い腕、下の段に長い腕）。
-  // 鉄塔は線の端・曲がり角・分かれ目と、まっすぐなところは 3 マスごと。電線は鉄塔の間をたるませて張る
+  // 鉄塔は線の端・曲がり角・分かれ目と、まっすぐなところは 8 マス以内ごと（等間隔）。電線は鉄塔の間をたるませて張る
   private rebuildLines(g: Grid) {
     const n = g.n;
     const P: number[] = [], NN: number[] = [], I: number[] = [];
@@ -3389,7 +3389,7 @@ export class RoadLayer {
         nb[i].push(j); nb[j].push(i);
       }
     }
-    // 鉄塔を立てるマス：端・曲がり角・分かれ目と、まっすぐなところは 3 マスごと
+    // 鉄塔を立てるマス：端・曲がり角・分かれ目と、まっすぐなところは 8 マス以内ごと
     const dirOf2 = (i: number, j: number) => [(j % n) - (i % n), ((j / n) | 0) - ((i / n) | 0)];
     const straight = (i: number) => {
       if (nb[i].length !== 2) return false;
@@ -3400,16 +3400,26 @@ export class RoadLayer {
     for (let i = 0; i < n * n; i++) if (has(i) && !straight(i)) tower[i] = 1;
     // まっすぐな線だけの輪（端がない）のために、どこか 1 つを起点にする
     const seen = new Uint8Array(n * n);
+    // 鉄塔の間の線を集め、間隔が SPAN マス以内になるよう等間隔に中間の鉄塔を立てる
+    const SPAN = 8;
     const walk = (start: number) => {
       for (const first of nb[start]) {
-        let prev = start, cur = first, k = 1;
-        while (has(cur) && !tower[cur] && !seen[cur]) {
+        const run: number[] = [];
+        let prev = start, cur = first, closed = false;
+        while (has(cur) && !seen[cur]) {
+          if (tower[cur]) { closed = true; break; }
           seen[cur] = 1;
-          if (k % 3 === 0) tower[cur] = 1;
+          run.push(cur);
           const next = nb[cur].find((v) => v !== prev);
           if (next === undefined) break;
-          prev = cur; cur = next; k++;
+          prev = cur; cur = next;
         }
+        if (!run.length) continue;
+        // 両端が鉄塔なら区間は run.length + 1、行き止まりで終わるなら最後のマスにも鉄塔を立てる
+        if (!closed) tower[run[run.length - 1]] = 1;
+        const L = closed ? run.length + 1 : run.length;
+        const m = Math.ceil(L / SPAN);
+        for (let k = 1; k < m; k++) tower[run[Math.round((k * L) / m) - 1]] = 1;
       }
     };
     for (let i = 0; i < n * n; i++) if (tower[i]) walk(i);
