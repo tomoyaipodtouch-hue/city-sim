@@ -418,7 +418,7 @@ export class RoadLayer {
     this.solid = new THREE.Mesh(new THREE.BufferGeometry(), createRoadSolidMaterial());
     this.solid.castShadow = true;
     this.solid.receiveShadow = true;
-    this.poles = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ color: 0x6b5b4a }));
+    this.poles = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ color: 0x9aa0a4 }));
     this.poles.castShadow = true;
     this.wires = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x222222, transparent: true, opacity: 0.7 }));
     this.group.add(this.surface, this.marks, this.solid, this.poles, this.wires);
@@ -3338,47 +3338,178 @@ export class RoadLayer {
     this.rebuildLines(g);
   }
 
+  // 送電線：ヨーロッパのドナウ型の格子鉄塔（上の段に短い腕、下の段に長い腕）。
+  // 鉄塔は線の端・曲がり角・分かれ目と、まっすぐなところは 3 マスごと。電線は鉄塔の間をたるませて張る
   private rebuildLines(g: Grid) {
     const n = g.n;
     const P: number[] = [], NN: number[] = [], I: number[] = [];
     const W: number[] = [];
-    const poleH = 11;
-    const top = (i: number) => {
+    const TH = 36; // 鉄塔の高さ（m）
+    // 鉄塔の足元の位置と高さ（道路の上なら道路の端へずらす）
+    const footOf = (i: number): [number, number, number] => {
       const x = i % n, y = (i / n) | 0;
-      return [(x + 0.5) * CELL + (g.road[i] ? 6.5 : 0), (g.road[i] ? g.roadH(i) : g.cellH(x, y)) + poleH, (y + 0.5) * CELL + (g.road[i] ? 6.5 : 0)];
+      return [(x + 0.5) * CELL + (g.road[i] ? 6.5 : 0), g.road[i] ? g.roadH(i) : g.cellH(x, y), (y + 0.5) * CELL + (g.road[i] ? 6.5 : 0)];
     };
-    const box = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number) => {
-      const faces: [number[], number[]][] = [
-        [[0, 0, 1], [x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y1, z1]],
-        [[0, 0, -1], [x1, y0, z0, x0, y0, z0, x0, y1, z0, x1, y1, z0]],
-        [[1, 0, 0], [x1, y0, z1, x1, y0, z0, x1, y1, z0, x1, y1, z1]],
-        [[-1, 0, 0], [x0, y0, z0, x0, y0, z1, x0, y1, z1, x0, y1, z0]],
-        [[0, 1, 0], [x0, y1, z1, x1, y1, z1, x1, y1, z0, x0, y1, z0]],
-      ];
-      for (const [nrm, v] of faces) {
-        const b = P.length / 3;
-        P.push(...v);
-        for (let k = 0; k < 4; k++) NN.push(...nrm);
-        I.push(b, b + 1, b + 2, b, b + 2, b + 3);
+    // 2 点の間の細い角柱（格子の部材）
+    const beam = (ax: number, ay: number, az: number, bx: number, by: number, bz: number, r: number) => {
+      let dx = bx - ax, dy = by - ay, dz = bz - az;
+      const L = Math.hypot(dx, dy, dz) || 1;
+      dx /= L; dy /= L; dz /= L;
+      // 直交する 2 つの向き
+      let ux = 0, uy = 1, uz = 0;
+      if (Math.abs(dy) > 0.9) { ux = 1; uy = 0; }
+      let px = dy * uz - dz * uy, py = dz * ux - dx * uz, pz = dx * uy - dy * ux;
+      const pl = Math.hypot(px, py, pz) || 1; px /= pl; py /= pl; pz /= pl;
+      const qx = dy * pz - dz * py, qy = dz * px - dx * pz, qz = dx * py - dy * px;
+      const off = [[1, 1], [-1, 1], [-1, -1], [1, -1]].map(([s1, s2]) => [(px * s1 + qx * s2) * r, (py * s1 + qy * s2) * r, (pz * s1 + qz * s2) * r]);
+      for (let k = 0; k < 4; k++) {
+        const o0 = off[k], o1 = off[(k + 1) % 4];
+        const nx = (o0[0] + o1[0]), ny = (o0[1] + o1[1]), nz = (o0[2] + o1[2]);
+        const nl = Math.hypot(nx, ny, nz) || 1;
+        const base = P.length / 3;
+        P.push(ax + o0[0], ay + o0[1], az + o0[2], bx + o0[0], by + o0[1], bz + o0[2], bx + o1[0], by + o1[1], bz + o1[2], ax + o1[0], ay + o1[1], az + o1[2]);
+        for (let m = 0; m < 4; m++) NN.push(nx / nl, ny / nl, nz / nl);
+        I.push(base, base + 1, base + 2, base, base + 2, base + 3);
       }
     };
+    // 送電線のつながり（右・下・斜め。今までと同じ規則）
+    const nb: number[][] = [];
+    const has = (i: number) => g.pline[i] !== 0;
+    for (let i = 0; i < n * n; i++) nb.push([]);
     for (let i = 0; i < n * n; i++) {
-      if (!g.pline[i]) continue;
+      if (!has(i)) continue;
       const x = i % n, y = (i / n) | 0;
-      const [tx, ty, tz] = top(i);
-      // 2マスに1本の電柱（すべてのマスに置くと多すぎる）
-      box(tx - 0.2, ty - poleH, tz - 0.2, tx + 0.2, ty, tz + 0.2);
-      box(tx - 1.4, ty - 1.0, tz - 0.12, tx + 1.4, ty - 0.75, tz + 0.12);
-      // 電線（右・下・斜めの隣とつなぐ）
       for (const d of [0, 1, 2, 3]) {
         const nx = x + DX[d], ny = y + DY[d];
         if (!g.inb(nx, ny)) continue;
         const j = ny * n + nx;
-        if (!g.pline[j]) continue;
-        if (d === 1 && (g.pline[y * n + x + 1] || g.pline[(y + 1) * n + x])) continue;
-        if (d === 3 && (g.pline[y * n + x - 1] || g.pline[(y + 1) * n + x])) continue;
-        const [sx, sy, sz] = top(j);
-        for (const off of [-1.2, 1.2]) W.push(tx + off, ty - 0.9, tz, sx + off, sy - 0.9, sz);
+        if (!has(j)) continue;
+        if (d === 1 && (has(y * n + x + 1) || has((y + 1) * n + x))) continue;
+        if (d === 3 && (has(y * n + x - 1) || has((y + 1) * n + x))) continue;
+        nb[i].push(j); nb[j].push(i);
+      }
+    }
+    // 鉄塔を立てるマス：端・曲がり角・分かれ目と、まっすぐなところは 3 マスごと
+    const dirOf2 = (i: number, j: number) => [(j % n) - (i % n), ((j / n) | 0) - ((i / n) | 0)];
+    const straight = (i: number) => {
+      if (nb[i].length !== 2) return false;
+      const [ax, ay] = dirOf2(i, nb[i][0]), [bx, by] = dirOf2(i, nb[i][1]);
+      return ax === -bx && ay === -by;
+    };
+    const tower = new Uint8Array(n * n);
+    for (let i = 0; i < n * n; i++) if (has(i) && !straight(i)) tower[i] = 1;
+    // まっすぐな線だけの輪（端がない）のために、どこか 1 つを起点にする
+    const seen = new Uint8Array(n * n);
+    const walk = (start: number) => {
+      for (const first of nb[start]) {
+        let prev = start, cur = first, k = 1;
+        while (has(cur) && !tower[cur] && !seen[cur]) {
+          seen[cur] = 1;
+          if (k % 3 === 0) tower[cur] = 1;
+          const next = nb[cur].find((v) => v !== prev);
+          if (next === undefined) break;
+          prev = cur; cur = next; k++;
+        }
+      }
+    };
+    for (let i = 0; i < n * n; i++) if (tower[i]) walk(i);
+    for (let i = 0; i < n * n; i++) if (has(i) && !seen[i] && !tower[i]) { tower[i] = 1; walk(i); }
+    // 鉄塔の向き：線の向き（端や曲がり角は、つながる向きの平均）
+    const lineDir = (i: number): [number, number] => {
+      let sx = 0, sz = 0;
+      for (const j of nb[i]) {
+        let [dx, dz] = dirOf2(i, j);
+        const l = Math.hypot(dx, dz); dx /= l; dz /= l;
+        // 向きを片方にそろえて足す（逆向きで打ち消さないように）
+        if (dx < -1e-6 || (Math.abs(dx) < 1e-6 && dz < 0)) { dx = -dx; dz = -dz; }
+        sx += dx; sz += dz;
+      }
+      const l = Math.hypot(sx, sz);
+      return l > 1e-6 ? [sx / l, sz / l] : [1, 0];
+    };
+    // 電線をかける点（鉄塔の腕の先）：[横の位置, 高さ]。上の段は左右 1 本ずつ、下の段は左右 2 本ずつ、てっぺんに架空地線
+    const ARM_LO = 22, ARM_HI = 29.5, LO_W = 9.5, HI_W = 5.5, INS = 2.6;
+    const PTS: [number, number][] = [[-HI_W, ARM_HI - INS], [HI_W, ARM_HI - INS], [-LO_W, ARM_LO - INS], [-LO_W * 0.55, ARM_LO - INS], [LO_W * 0.55, ARM_LO - INS], [LO_W, ARM_LO - INS], [0, TH + 0.6]];
+    const attach = new Map<number, [number, number, number][]>();
+    for (let i = 0; i < n * n; i++) {
+      if (!tower[i]) continue;
+      const [fx, fy, fz] = footOf(i);
+      const [lx, lz] = lineDir(i);
+      const ax = -lz, az = lx; // 腕の向き（線と直角）
+      const at = (u: number, v: number, h: number): [number, number, number] => [fx + ax * u + lx * v, fy + h, fz + az * u + lz * v];
+      // 4 本の脚：足元は 3.4m、腕の高さで 1.3m、てっぺんで 0.6m
+      const half = (h: number) => (h <= ARM_LO ? 3.4 + (1.3 - 3.4) * (h / ARM_LO) : 1.3 + (0.6 - 1.3) * ((h - ARM_LO) / (TH - ARM_LO)));
+      const lv = [0, 7.5, 15, ARM_LO, ARM_HI, TH];
+      const R = 0.16;
+      for (let k = 0; k < lv.length - 1; k++) {
+        const h0 = lv[k], h1 = lv[k + 1], w0 = half(h0), w1 = half(h1);
+        const c0 = [[w0, w0], [-w0, w0], [-w0, -w0], [w0, -w0]], c1 = [[w1, w1], [-w1, w1], [-w1, -w1], [w1, -w1]];
+        for (let q = 0; q < 4; q++) {
+          const a = at(c0[q][0], c0[q][1], h0), b = at(c1[q][0], c1[q][1], h1);
+          beam(a[0], a[1], a[2], b[0], b[1], b[2], R + 0.04);
+          // 面の X 形の筋かい
+          const q2 = (q + 1) % 4;
+          const a2 = at(c0[q2][0], c0[q2][1], h0), b2 = at(c1[q2][0], c1[q2][1], h1);
+          beam(a[0], a[1], a[2], b2[0], b2[1], b2[2], R * 0.6);
+          beam(a2[0], a2[1], a2[2], b[0], b[1], b[2], R * 0.6);
+        }
+      }
+      // 腕（上と下の弦の 2 本で三角の形）と、碍子（がいし）の吊り下げ
+      for (const [hA, wA] of [[ARM_LO, LO_W], [ARM_HI, HI_W]] as const) {
+        const hw = half(hA);
+        for (const sg of [-1, 1]) {
+          const tip = at(sg * wA, 0, hA), tipT = at(sg * wA, 0, hA + 0.4);
+          for (const v of [-hw, hw]) {
+            const r0 = at(sg * hw, v, hA), r1 = at(sg * hw, v, hA + 2.2);
+            beam(r0[0], r0[1], r0[2], tip[0], tip[1], tip[2], R * 0.8);
+            beam(r1[0], r1[1], r1[2], tipT[0], tipT[1], tipT[2], R * 0.6);
+          }
+          const xs = hA === ARM_LO ? [sg * wA, sg * wA * 0.55] : [sg * wA];
+          for (const u of xs) {
+            const t0 = at(u, 0, hA), t1 = at(u, 0, hA - INS);
+            beam(t0[0], t0[1], t0[2], t1[0], t1[1], t1[2], 0.14);
+          }
+        }
+      }
+      // てっぺん（架空地線をかける小さな頂部）
+      const p0 = at(0, 0, TH), p1 = at(0, 0, TH + 0.8);
+      beam(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], 0.25);
+      attach.set(i, PTS.map(([u, h]) => at(u, 0, h)));
+    }
+    // 電線：となりの鉄塔まで線をたどり、たるみをつけて張る（下の段は少し多めにたるむ）
+    const done = new Set<string>();
+    for (let i = 0; i < n * n; i++) {
+      if (!tower[i]) continue;
+      for (const first of nb[i]) {
+        let prev = i, cur = first, guard = 0;
+        while (!tower[cur] && guard++ < n * 4) {
+          const next = nb[cur].find((v) => v !== prev);
+          if (next === undefined) break;
+          prev = cur; cur = next;
+        }
+        if (!tower[cur] || cur === i) continue;
+        const key = i < cur ? `${i}-${cur}` : `${cur}-${i}`;
+        if (done.has(key)) continue;
+        done.add(key);
+        const A = attach.get(i)!, B = attach.get(cur)!;
+        // 腕の向きが鉄塔どうしで逆向きなら、左右を入れかえてつなぐ
+        const flip = (A[0][0] - A[1][0]) * (B[0][0] - B[1][0]) + (A[0][2] - A[1][2]) * (B[0][2] - B[1][2]) < 0;
+        const span = Math.hypot(B[0][0] - A[0][0], B[0][2] - A[0][2]);
+        for (let c = 0; c < PTS.length; c++) {
+          const a = A[c];
+          const bIdx = flip ? (c === 6 ? 6 : c < 2 ? 1 - c : 5 - (c - 2)) : c;
+          const b = B[bIdx];
+          const sag = span * (c === 6 ? 0.025 : 0.045);
+          const seg = 8;
+          let lx = a[0], ly = a[1], lz = a[2];
+          for (let s = 1; s <= seg; s++) {
+            const t = s / seg;
+            const x2 = a[0] + (b[0] - a[0]) * t, z2 = a[2] + (b[2] - a[2]) * t;
+            const y2 = a[1] + (b[1] - a[1]) * t - sag * 4 * t * (1 - t);
+            W.push(lx, ly, lz, x2, y2, z2);
+            lx = x2; ly = y2; lz = z2;
+          }
+        }
       }
     }
     const geo = new THREE.BufferGeometry();
