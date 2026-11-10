@@ -12,6 +12,9 @@ import { kyotoGarden } from './gardenGen';
 import { forcedLogi, LOGI } from './logiRegistry';
 import './logisticsA';
 import './logisticsB';
+import './resModernA';
+import './resModernB';
+import { forcedRes, pickRes } from './resRegistry';
 import { ciqOffice } from './ciqGen';
 import { CIVIC } from '../sim/defs';
 
@@ -1297,6 +1300,9 @@ const GLASS = [0x4f7fae, 0x3f6f9a, 0x5a9a8e, 0x6f9aa0, 0xa8b4bf, 0x8f9aa6, 0x9a7
 
 // 中層の集合住宅（3〜8階）
 function apartments(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number, kind: string) {
+  // 近代的なマンション（中所得・高所得の約半分）。確認用に形を強制しているときはその形
+  { const fr = forcedRes(); if (fr) return fr(mb, f, rng, tf, floors); }
+  if (kind !== 'R1' && rng.next() < 0.5) { const fn = pickRes(rng, floors); if (fn) return fn(mb, f, rng, tf, floors); }
   lawn(mb, f, rng);
   // 中高層（R2・R3）の多くは、白やグレーの近代的なマンション（ガラスの手すりのバルコニー）
   const modernApt = kind !== 'R1' && resPat === PAT.balcony;
@@ -1710,6 +1716,11 @@ function highrise(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, floors: number
     if (floors >= 25) ds.push(skyGardenTower);
     if (floors >= 30) ds.push(spiralTaperTower, shardTower);
     return ds[Math.floor(rng.next() * ds.length)](mb, f, rng, tf, floors);
+  }
+  if (!office) {
+    // 近代的なマンション（高層の約 3 割）
+    const fr = forcedRes(); if (fr) return fr(mb, f, rng, tf, floors);
+    if (rng.next() < 0.3) { const fn = pickRes(rng, floors); if (fn) return fn(mb, f, rng, tf, floors); }
   }
   const r = rng.next();
   const big = Math.min(f.W, f.D) >= 30;
