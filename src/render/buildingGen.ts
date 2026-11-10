@@ -3129,7 +3129,7 @@ const FLOWER = [0xd8443c, 0xf0c63a, 0xf3f1ea, 0xc85a9c, 0xe9853a].map(C);
 // stage が上がるほど入口に近い区画から墓石が増える。まだ空いている区画は、外柵と玉砂利だけか、芝生の区画
 function cemetery(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, stage: number) {
   const hw = f.W / 2, hd = f.D / 2;
-  const lawn = C(0x74a04e), lawnPlot = C(0x84ad5a), pave = C(0xd6d1c7), path2 = C(0xbcb5a6), gravel = C(0xccc8bf);
+  const lawn = C(0x74a04e), lawnPlot = C(0x84ad5a), pave = C(0xd6d1c7), path2 = C(0xbcb5a6);
   const granite = C(0x8e8f8f), hedge = C(0x3d6831), wood = C(0xb5875a), white = C(0xf3f3f0), white2 = C(0xe2e4e5);
   const glass = C(0x7d9fb6), dark = C(0x2c2f32), warm = C(0xffd9a0);
   mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.06, lawn);
@@ -3179,8 +3179,8 @@ function cemetery(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, stage: number)
         lots.push({
           x, z, s, w: lw,
           key: Math.hypot(x * 1.15, z - gateZ) + rng.next() * 7,
-          kind: rng.next() < 0.22 ? 1 : 0,
-          col: GRANITE[rng.pick([0, 1, 2, 7])].clone().lerp(C(0xd4d5d3), 0.35).multiplyScalar(0.94 + rng.next() * 0.1), // 明るい灰色の御影石
+          kind: Math.floor(rng.next() * 5), // 墓石の形（5 種類）
+          col: (rng.next() < 0.5 ? GRANITE[rng.pick([3, 4, 5, 7])] : GRANITE[rng.pick([0, 1, 2, 6])].clone().lerp(C(0xd4d5d3), 0.3)).clone().multiplyScalar(0.94 + rng.next() * 0.1), // 黒っぽい石と明るい灰色の石
           h: 0.9 + rng.next() * 0.35,
           fl: rng.pick(FLOWER),
         });
@@ -3203,20 +3203,35 @@ function cemetery(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, stage: number)
       flat(x0 + 0.1, za + 0.1, x1 - 0.1, zb - 0.1, 0.07, lawnPlot);
       return;
     }
-    // 外柵（低い御影石の縁）と、中の玉砂利
-    mb.box(x0, 0, za, x1, k < nFull ? 0.3 : 0.2, zb, k < nFull ? L.col.clone().lerp(granite, 0.5) : granite, PAT.none, gravel);
-    if (k >= nFull) return;
+    // 墓：芝生の上の小さな植え込みの床と、奥に小さな墓石（台石はなし）。ヨーロッパの墓地のように
+    if (k >= nFull) { flat(x0 + 0.1, za + 0.1, x1 - 0.1, zb - 0.1, 0.07, lawnPlot); return; }
     const c = L.col, s = L.s;
     const zs = L.z - s * 0.55; // 墓石は区画の奥（通路と反対側）
-    const bx = (xa: number, ya: number, dza: number, xb: number, yb: number, dzb: number, col: THREE.Color, top?: THREE.Color) =>
-      mb.box(L.x + xa, ya, zs + Math.min(dza, dzb), L.x + xb, yb, zs + Math.max(dza, dzb), col, PAT.none, top);
-    // 低い灰色の墓石：薄い台石の上に、横長の低い石を立てる
-    bx(-0.62, 0.3, -0.34, 0.62, 0.42, 0.34, c);
-    bx(-0.48, 0.42, -0.11, 0.48, 0.42 + 0.42 + (L.h - 0.9) * 0.5, 0.11, c);
-    // 花立て（花の色）と香炉
-    const zf = s * 0.78;
-    for (const x of [-0.5, 0.5]) bx(x - 0.08, 0.3, zf - 0.08, x + 0.08, 0.72, zf + 0.08, c, L.fl);
-    bx(-0.2, 0.3, zf - 0.14, 0.2, 0.5, zf + 0.14, c);
+    const bx = (xa: number, ya: number, dza: number, xb: number, yb: number, dzb: number, col: THREE.Color, pat: number = PAT.none) =>
+      mb.box(L.x + xa, ya, zs + Math.min(dza, dzb), L.x + xb, yb, zs + Math.max(dza, dzb), col, pat, col);
+    // 植え込みの床（濃い緑の地被と、季節の花）
+    const bz0 = Math.min(zs, L.z + s * 0.9), bz1 = Math.max(zs, L.z + s * 0.9);
+    flat(L.x - 0.55, bz0, L.x + 0.55, bz1, 0.075, C(0x4f7f3a));
+    flat(L.x - 0.3, L.z + s * 0.35 - 0.18, L.x + 0.3, L.z + s * 0.35 + 0.18, 0.08, L.fl);
+    // 小さな墓石：形は 5 種類（四角、上が丸い、横長で低い、十字架、細長い）
+    const h = L.h * 0.75; // 0.7〜0.95m
+    const t = 0.13, sy = 0.06;
+    switch (L.kind) {
+      case 0: bx(-0.3, sy, -t, 0.3, h, t, c); break;
+      case 1: // 上が丸い（段を重ねて丸く見せる）
+        bx(-0.3, sy, -t, 0.3, h - 0.12, t, c);
+        bx(-0.24, h - 0.12, -t, 0.24, h - 0.04, t, c);
+        bx(-0.14, h - 0.04, -t, 0.14, h + 0.02, t, c);
+        break;
+      case 2: bx(-0.45, sy, -t, 0.45, 0.5, t, c); break;
+      case 3: // 十字架
+        bx(-0.06, sy, -0.08, 0.06, h + 0.1, 0.08, c);
+        bx(-0.24, h - 0.22, -0.08, 0.24, h - 0.1, 0.08, c);
+        break;
+      default: bx(-0.2, sy, -t, 0.2, h + 0.25, t, c); break;
+    }
+    // 小さな刈り込みの木（ところどころ）
+    if ((L.key * 7.3) % 1 < 0.35) bx(0.35, 0, s * 0.25, 0.65, 0.4, s * 0.55, hedge, PAT.gardenLeaf);
   });
 
   // 園路（区画の通路の上に描く）と、園路の灯り（夜にほのかに光る）
@@ -3228,15 +3243,9 @@ function cemetery(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, stage: number)
     mb.box(x - 0.16, 2.6, z - 0.16, x + 0.16, 2.95, z + 0.16, warm, PAT.glow, dark);
   }
 
-  // ---- 水場（蛇口と手桶の棚）と、園路ぞいの木 ----
+  // ---- 園路ぞいの木 ----
   for (let r = 0; r < rows; r++) {
-    const zg = rowZ[r][0] - gap / 2, sd = r % 2 ? 1 : -1, x = pathX(zg) + sd * 3.4;
-    if (r < rows - 1 || Math.hypot(x, zg - monZ) > monR + 1) {
-      mb.box(x - 0.45, 0, zg - 0.35, x + 0.45, 0.8, zg + 0.35, C(0x9fa09f), PAT.none, C(0x3b4146));
-      mb.box(x - 0.05, 0.8, zg - 0.25, x + 0.05, 1.2, zg - 0.15, C(0xc8ccd0));
-      mb.box(x + sd * 0.6, 0, zg - 0.3, x + sd * 1.8, 0.95, zg + 0.3, wood);
-      for (let i = 0; i < 3; i++) mb.cylinder(x + sd * (0.8 + i * 0.4), zg, 0.95, 1.25, 0.15, 8, i === 1 ? C(0xc8573e) : wood, C(0x5a4632));
-    }
+    const zg = rowZ[r][0] - gap / 2, sd = r % 2 ? 1 : -1;
     if (r > 0) tf(pathX(zg) - sd * 3.6, zg, 0.75 + 0.15 * rng.next(), 0, 0, undefined, 3);
   }
 
