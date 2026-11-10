@@ -447,6 +447,7 @@ export class Hud {
           if (m && b.state === BState.Normal) rows.push(['犯罪', `${Math.round((m.crime[g.idx(b.x, b.y)] / 255) * 100)}`]);
           if (isR && b.state === BState.Normal) {
             rows.push(['職のある人', `${Math.round(b.employed * 100)}%`]);
+            if (b.ages) rows.push(['年齢層', `子ども ${Math.round(b.ages[0] * 100)}%・働く世代 ${Math.round(b.ages[1] * 100)}%・高齢者 ${Math.round(b.ages[2] * 100)}%`]);
             rows.push(['通勤時間', b.commute ? `${b.commute.toFixed(0)} 分` : '-']);
           }
         }
@@ -697,6 +698,11 @@ export class Hud {
         <table class="tbl">
           <tr><td>教育水準（子ども／大人／高齢者）</td><td>${Math.round(s.services.eq.child)} ／ ${Math.round(s.services.eq.adult)} ／ ${Math.round(s.services.eq.elderly)}</td></tr>
           <tr><td>健康度・平均寿命</td><td>${Math.round(s.services.hq)} ・ ${s.services.lifeExp.toFixed(0)} 歳</td></tr>
+          ${s.services.funeral ? (() => { const f = s.services.funeral, a = f.ages; return `
+          <tr><td>年齢層（子ども／働く世代／高齢者）</td><td>${Math.round(a[0] * 100)}% ／ ${Math.round(a[1] * 100)}% ／ <span class="${a[2] > 0.3 ? 'neg' : ''}">${Math.round(a[2] * 100)}%</span></td></tr>
+          <tr><td>出生・死亡</td><td>${num(Math.round(f.births))} ・ ${num(Math.round(f.deaths))} 人/月</td></tr>
+          <tr><td>斎場（火葬／受け入れ）</td><td class="${f.waiting >= 1 ? 'neg' : ''}">${num(Math.round(f.cremated))} ／ ${num(Math.round(f.capacity))} 人/月${f.waiting >= 1 ? `・待ち ${num(Math.round(f.waiting))} 人` : ''}</td></tr>
+          <tr><td>霊園（空き／全部）</td><td class="${f.ashes >= 1 ? 'neg' : ''}">${num(Math.round(f.graveFree))} ／ ${num(Math.round(f.graves))} 区画${f.ashes >= 1 ? `・納骨待ち ${num(Math.round(f.ashes))} 人` : ''}</td></tr>`; })() : ''}
           <tr><td>犯罪（住人が感じる度合い）</td><td>${Math.round(s.services.crime * 100)}</td></tr>
           <tr><td>ゴミ（出る量／処理／残り）</td><td class="${s.services.garbage.excess > 0 ? 'neg' : ''}">${num(s.services.garbage.produced)} ／ ${num(s.services.garbage.handled)} ／ ${num(s.services.garbage.excess)} /月</td></tr>
         </table>

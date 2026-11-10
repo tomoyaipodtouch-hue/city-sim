@@ -181,7 +181,7 @@ export const ESTOP_UPKEEP = 60; // 1駅・1か月
 export const FARE = 1.0; // 1日の乗客1人あたりの、月の運賃収入
 
 // ---- 公共サービス ----
-export type ServiceKind = 'police' | 'fire' | 'health' | 'school' | 'high' | 'college' | 'library' | 'landfill' | 'incinerator' | 'recycling';
+export type ServiceKind = 'police' | 'fire' | 'health' | 'school' | 'high' | 'college' | 'library' | 'landfill' | 'incinerator' | 'recycling' | 'cemetery' | 'crematorium';
 // 予算の部門
 export type Dept = 'police' | 'fire' | 'health' | 'education' | 'transit' | 'garbage';
 export const DEPTS: Dept[] = ['police', 'fire', 'health', 'education', 'transit', 'garbage'];
@@ -189,6 +189,7 @@ export const DEPT_NAMES: Record<Dept, string> = { police: '警察', fire: '消�
 export const SERVICE_DEPT: Record<ServiceKind, Dept> = {
   police: 'police', fire: 'fire', health: 'health', school: 'education', high: 'education', college: 'education', library: 'education',
   landfill: 'garbage', incinerator: 'garbage', recycling: 'garbage',
+  cemetery: 'health', crematorium: 'health',
 };
 // ゴミ（1人・1雇用あたり、月）
 export const GARBAGE_PER_RES = 0.9;
@@ -197,7 +198,7 @@ export const GARBAGE_PER_JOB = 0.6;
 export type CivicId = 'coal' | 'gas' | 'oil' | 'nuclear' | 'nuclear_in' | 'nuclear_sea' | 'wind' | 'solar' | 'pump' | 'tower' | 'water_plant' | 'desal' | 'incinerator_l' | 'seaport_l' | 'park_s' | 'park_l' | 'plaza' | 'playground' | 'greenway' | 'sports' | 'garden' | 'cpark_a' | 'cpark_b' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station'
   | 'ferry_p' | 'ferry_c' | 'seaport' | 'airport_s' | 'airport_l' | 'freight_st'
   | 'police_s' | 'police_l' | 'fire_s' | 'fire_l' | 'clinic' | 'hospital' | 'school_e' | 'school_h' | 'college' | 'library'
-  | 'landfill' | 'incinerator' | 'recycling'
+  | 'landfill' | 'incinerator' | 'recycling' | 'cemetery' | 'crematorium'
   | 'mayor_house' | 'city_hall' | 'statue' | 'museum' | 'stadium' | 'future_stadium' | 'ciq';
 
 export interface CivicDef {
@@ -223,6 +224,7 @@ export interface CivicDef {
   service?: ServiceKind; // 公共サービス
   radius?: number; // 効果が届く範囲（マス）
   capacity?: number; // 受け入れ人数（学校の席、病院のベッドなど）／ゴミの処理量（月）
+  gloom?: number; // まわりの地価を下げる（霊園・斎場）
   reward?: boolean; // 記念施設（条件を満たすと建てられる）
   cpark?: boolean; // つなげて大きな公園にできる
   rotate?: boolean; // 細長い施設：道路に面する向きに自動で回す
@@ -284,6 +286,8 @@ export const CIVIC: Record<CivicId, CivicDef> = {
   museum: { id: 'museum', name: '博物館', w: 3, h: 3, cost: 15000, upkeep: 200, park: 0.25, reward: true, desc: '記念施設。周りの地価と、大人の教育水準が上がる' },
   future_stadium: { id: 'future_stadium', name: '近未来スタジアム', w: 8, h: 8, cost: 60000, upkeep: 500, park: 0.12, reward: true, desc: '記念施設。白い曲面の大きなスタジアム。商業の需要が上がり、市長評価が上がる' },
   stadium: { id: 'stadium', name: 'スタジアム', w: 6, h: 6, cost: 40000, upkeep: 400, park: 0.1, reward: true, desc: '記念施設。商業の需要が上がり、市長評価が上がる' },
+  cemetery: { id: 'cemetery', name: '霊園', w: 4, h: 4, cost: 15000, upkeep: 120, service: 'cemetery', capacity: 3000, gloom: 0.08, desc: '亡くなった人を葬る公園型の霊園（3,000 区画）。少しずつ埋まり、満杯になると新しい霊園が必要。周りの地価が少し下がる' },
+  crematorium: { id: 'crematorium', name: '斎場', w: 3, h: 3, cost: 25000, upkeep: 300, service: 'crematorium', capacity: 80, gloom: 0.1, desc: '火葬場とお葬式の式場。月 80 人まで。足りないと住みやすさと市長評価が下がる。周りの地価が少し下がる' },
   recycling: { id: 'recycling', name: 'リサイクルセンター', w: 3, h: 2, cost: 6000, upkeep: 200, service: 'recycling', capacity: 4000, desc: 'ゴミを月 4,000 減らす' },
   ciq: { id: 'ciq', name: 'CIQ庁舎', w: 4, h: 3, rotate: true, cost: 20000, upkeep: 200, ciq: true, radius: CIQ_RADIUS, desc: '税関・出入国管理・検疫の庁舎と、コンテナのX線検査場。半径20マスの工業ゾーンが倉庫業になり、大きな倉庫も建つ。古い工場も少しずつ倉庫に建て替わる' },
   freight_st: { id: 'freight_st', name: '貨物駅', w: 3, h: 2, cost: 8000, upkeep: 120, freightRail: true, desc: '線路と道路に接するように置く。線路がマップの端まで続いていれば、トラックの荷物を鉄道で運び、倉庫業の需要が上がる' },

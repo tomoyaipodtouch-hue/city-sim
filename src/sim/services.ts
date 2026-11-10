@@ -2,6 +2,7 @@
 import { Grid } from './grid';
 import { CIVIC, CivicId, DEPTS, Dept, DEPT_NAMES, GARBAGE_PER_JOB, GARBAGE_PER_RES, GROW, GrowKind, SERVICE_DEPT, ZoneType } from './defs';
 import type { Building } from './world';
+import { defaultFuneral, FuneralState } from './population';
 
 export interface ServiceState {
   funding: Record<Dept, number>; // 部門ごとの予算（%）
@@ -10,11 +11,12 @@ export interface ServiceState {
   eq: { child: number; adult: number; elderly: number }; // 年齢層ごとの教育水準（0..150）
   hq: number; // 健康度（0..100）
   garbage: { produced: number; handled: number; excess: number };
+  funeral: FuneralState; // 年齢層・出生・死亡・葬送
 }
 
 export function defaultServiceState(): ServiceState {
   const r = (v: number) => Object.fromEntries(DEPTS.map((d) => [d, v])) as Record<Dept, number>;
-  return { funding: r(100), lowMonths: r(0), strike: r(0), eq: { child: 30, adult: 30, elderly: 25 }, hq: 50, garbage: { produced: 0, handled: 0, excess: 0 } };
+  return { funding: r(100), lowMonths: r(0), strike: r(0), eq: { child: 30, adult: 30, elderly: 25 }, hq: 50, garbage: { produced: 0, handled: 0, excess: 0 }, funeral: defaultFuneral() };
 }
 
 export interface ServiceMaps {
@@ -57,7 +59,7 @@ export interface ServiceResult {
 
 export function updateServices(
   g: Grid, buildings: Iterable<Building>, s: ServiceState, m: ServiceMaps,
-  ctx: { pollution: Uint8Array; landValue: Uint8Array; resDensity: Float32Array; crimeMul?: number; fireMul?: number; hqBonus?: number; garbageMul?: number },
+  ctx: { pollution: Uint8Array; landValue: Uint8Array; resDensity: Float32Array; crimeMul?: number; fireMul?: number; hqBonus?: number; garbageMul?: number; ages?: (b: Building) => [number, number, number] },
 ): ServiceResult {
   const n = g.n, N = n * n;
   const news: string[] = [];
@@ -121,8 +123,10 @@ export function updateServices(
     }
   }
   // 医療：範囲内の住人に対して、受け入れ人数が足りているか
+  // 高齢者は医療をたくさん使う（子どもは少し）
+  const need = (b: Building) => { const a = ctx.ages?.(b); return a ? 0.75 * a[0] + 0.8 * a[1] + 1.9 * a[2] : 1; };
   let covered = 0;
-  for (const b of homes) if (health[g.idx(b.x, b.y)] > 0) covered += b.occ;
+  for (const b of homes) if (health[g.idx(b.x, b.y)] > 0) covered += b.occ * need(b);
   const healthRatio = covered > 0 ? Math.min(1, healthCap / covered) : 0;
   for (let i = 0; i < N; i++) health[i] *= healthRatio;
 
@@ -155,7 +159,9 @@ export function updateServices(
   const hqTarget = Math.min(100, (pop > 0 ? (hqSum / pop) * 100 : 50) + (ctx.hqBonus ?? 0));
   s.hq += (hqTarget - s.hq) / 6;
   // 教育水準（子ども → 大人 → 高齢者）
-  const children = pop * 0.22, adults = pop * 0.6;
+  // 子どもと大人の数は、住宅ごとの年齢層から
+  let children = 0, adults = 0;
+  for (const b of homes) { const a = ctx.ages?.(b) ?? [0.22, 0.6, 0.18]; children += b.occ * a[0]; adults += b.occ * a[1]; }
   const elem = children > 0 ? Math.min(1, seatsE / children) : 0;
   const high = children > 0 ? Math.min(1, seatsH / (children * 0.45)) : 0;
   const libr = pop > 0 ? libSum / pop : 0;

@@ -12,7 +12,8 @@ import {
 } from './plan';
 import { CELL } from './constants';
 import { ADVISORS, Advice, computeRating, Loan, LOAN_AMOUNTS, loanRate, makeAdvice, MAX_LOANS, newLoan, ordinanceCost, ordinanceEffects, OrdinanceEffects, OrdinanceId, ORDINANCES, payLoan, rewardUnlocked, REWARD_REQ } from './governance';
-import { defaultServiceState, makeServiceMaps, ServiceMaps, ServiceState, updateServices } from './services';
+import { defaultServiceState, facilityEffect, makeServiceMaps, ServiceMaps, ServiceState, updateServices } from './services';
+import { Ages, agesOf, FuneralState, taxFactor, updatePopulation, WORK_RATE, workersOf } from './population';
 import { assignTrips, buildJunctions, buildRoadGraph, buildTransitModel, congestionFactor, Destination, junctionGroup, LAYER, normalizeAvenueJunctions, Origin } from './traffic';
 
 export enum BState {
@@ -47,6 +48,8 @@ export interface Building {
   fund?: number; // 施設ごとの予算（%、公共サービス）
   employed: number; // 職のある住人の割合（住宅）
   badMonths: number;
+  ages?: Ages; // 住宅：年齢層の割合 [子ども, 働く世代, 高齢者]
+  aOcc?: number; // 住宅：前の月の住人数（増えた分を引っ越してきた世帯として数える）
 }
 
 export interface Stats {
@@ -77,7 +80,7 @@ export interface Stats {
   ordinances: OrdinanceId[];
   loans: Loan[];
   loanRate: number;
-  services: { funding: Record<Dept, number>; strike: Record<Dept, number>; eq: { child: number; adult: number; elderly: number }; hq: number; lifeExp: number; crime: number; garbage: { produced: number; handled: number; excess: number } };
+  services: { funding: Record<Dept, number>; strike: Record<Dept, number>; eq: { child: number; adult: number; elderly: number }; hq: number; lifeExp: number; crime: number; garbage: { produced: number; handled: number; excess: number }; funeral: FuneralState };
 }
 
 export interface Maps extends ServiceMaps {
@@ -351,6 +354,7 @@ export class World {
     w.history = d.history || [];
     w.milestones = d.milestones || [];
     if (d.services) w.services = { ...defaultServiceState(), ...d.services };
+    if (!w.services.funeral) w.services.funeral = defaultServiceState().funeral;
     w.ordinances = new Set(d.ordinances ?? []);
     w.fx = ordinanceEffects(w.ordinances);
     w.loans = (d.loans ?? []).map((l) => ({ ...l }));
@@ -871,7 +875,7 @@ export class World {
     const hlt = this.maps.health[i] / 255, edu = this.maps.edu[i] / 255;
     const garbage = this.svc.garbageLevel;
     const eq = this.services.eq.adult;
-    const svcR = -0.45 * crime - 0.25 * fire - 0.35 * garbage + 0.15 * hlt + 0.1 * edu + this.fx.rDesire;
+    const svcR = -0.45 * crime - 0.25 * fire - 0.35 * garbage + 0.15 * hlt + 0.1 * edu + this.fx.rDesire - 0.3 * this.services.funeral.shortage;
     const svcC = -0.3 * crime - 0.2 * fire - 0.25 * garbage;
     let base = this.desirabilityBase(kind, lv, pol, commutePen, res, traffic, water, eq);
     const zone = GROW[kind].zone;
@@ -1445,6 +1449,7 @@ export class World {
     const g = this.g, n = g.n, N = n * n;
     const src = new Float32Array(N);
     const park = new Float32Array(N);
+    const gloom = new Float32Array(N);
     const res = new Float32Array(N);
     for (const b of this.buildings.values()) {
       if (b.state === BState.Building) continue;
@@ -1454,6 +1459,7 @@ export class World {
         const def = CIVIC[b.type as CivicId];
         p = (def.pollution || 0) / area;
         pk = def.park || 0;
+        if (def.gloom) for (let y = b.y; y < b.y + b.h; y++) for (let x = b.x; x < b.x + b.w; x++) gloom[g.idx(x, y)] = def.gloom;
       } else {
         const def = GROW[b.type as GrowKind];
         p = (b.state === BState.Abandoned ? def.pollution * 0.2 : def.pollution * (b.occ / Math.max(1, b.cap))) * (def.zone === ZoneType.I ? this.fx.indPollution : 1);
@@ -1473,6 +1479,8 @@ export class World {
 
     // 公園の効果（半径6マス）
     const parkFx = blur(park, n, 5, 2);
+    // 霊園・斎場（半径 4 マスくらい、少しだけ地価が下がる）
+    const gloomFx = blur(gloom, n, 3, 2);
     // 水辺
     const waterNear = new Float32Array(N);
     for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (g.isWater(x, y)) waterNear[y * n + x] = 1;
@@ -1485,6 +1493,7 @@ export class World {
         let v = 0.3 + Math.min(0.12, Math.max(0, h / 300));
         v += Math.min(0.28, wn[i] * 1.2) * (g.isWater(x, y) ? 0 : 1);
         v += Math.min(0.35, parkFx[i] * 6);
+        v -= Math.min(0.12, gloomFx[i] * 4);
         v += g.tree[i] ? 0.04 : 0;
         v -= Math.min(0.6, pol[i] * 0.9);
         v -= (this.maps.crime[i] / 255) * 0.25 + this.svc.garbageLevel * 0.15;
@@ -1541,7 +1550,7 @@ export class World {
       if (def.zone === ZoneType.R) {
         cell = repCell(cell);
         const f = NO_CAR[b.type] ?? 0;
-        const workers = b.occ * 0.5, shop = b.occ * 0.2;
+        const workers = workersOf(b), shop = b.occ * 0.2;
         addOrigin(commuters, cell, b.id, Math.round(workers * (1 - f)), 0);
         addOrigin(commuters, cell, b.id, Math.round(workers * f), NO_CAR_PENALTY);
         addOrigin(shoppers, cell, b.id, Math.round(shop * (1 - f)), 0);
@@ -1683,7 +1692,7 @@ export class World {
       if (b.civic || b.state !== BState.Normal) continue;
       const def = GROW[b.type as GrowKind];
       if (def.zone === ZoneType.R) {
-        const workers = Math.round(b.occ * 0.5);
+        const workers = Math.round(workersOf(b));
         const e = rc.served.get(b.id);
         if (e === undefined) {
           b.employed = 0;
@@ -1774,7 +1783,7 @@ export class World {
     }
     const jobs = capK.CS1 + capK.CS2 + capK.CS3 + capK.CO2 + capK.CO3 + capK.IA + capK.ID + capK.IM + capK.IL + capK.IH;
     const ext = this.neighborConnected ? 200 + pop * 0.25 : 0;
-    const workers = pop * 0.5;
+    const workers = pop * this.services.funeral.ages[1] * WORK_RATE;
     const unemployment = workers > 50 ? Math.max(0, (workers - this.employedTotal) / workers) : 0;
     const rBase = ((jobs + ext + 250) * 2 - pop) / Math.max(400, pop * 0.4);
     const raw = emptyKinds(0);
@@ -1915,7 +1924,7 @@ export class World {
       if (b.state !== BState.Normal) continue;
       const def = GROW[b.type as GrowKind];
       const rate = this.taxes[b.type as GrowKind] / 100;
-      const v = b.occ * rate * def.wealth * 3;
+      const v = b.occ * rate * def.wealth * 3 * (def.zone === ZoneType.R ? taxFactor(b) : 1);
       if (def.zone === ZoneType.R) inc.住宅 += v;
       else if (def.zone === ZoneType.C) inc.商業 += v;
       else inc.工業 += v;
@@ -1981,8 +1990,20 @@ export class World {
   private updateServicesMonthly() {
     const r = updateServices(this.g, this.buildings.values(), this.services, this.maps, {
       pollution: this.maps.pollution, landValue: this.maps.landValue, resDensity: this.resDensity,
-      crimeMul: this.fx.crime, fireMul: this.fx.fire, hqBonus: this.fx.hqBonus, garbageMul: this.fx.garbage,
+      crimeMul: this.fx.crime, fireMul: this.fx.fire, hqBonus: this.fx.hqBonus, garbageMul: this.fx.garbage, ages: agesOf,
     });
+    // 年齢層・出生・死亡と、斎場・霊園
+    const f = this.services.funeral;
+    const before = f.shortage;
+    const fill = (): string => [...this.buildings.values()].filter((b) => b.type === 'cemetery').map((b) => Math.floor((b.occ / 3000) * 5)).join(',');
+    const f0 = fill();
+    updatePopulation(this.buildings.values(), f, this.services.hq, (b) => facilityEffect(this.services, b), r.pop);
+    if (fill() !== f0) this.buildingVersion++; // 霊園の埋まり具合が変わったら描き直す
+    if (f.shortage > 0.3 && before <= 0.3) this.pushNews(f.waiting > f.ashes ? '斎場が足りず、火葬を待つ人が増えています。斎場を作りましょう。' : '霊園がいっぱいで、納骨を待つ人が増えています。霊園を作りましょう。');
+    for (const b of this.buildings.values()) {
+      if (b.type === 'crematorium') b.note = `月 ${Math.round(f.cremated)} 人を火葬（受け入れ ${Math.round(f.capacity)} 人）${f.waiting >= 1 ? `・<span class="neg">待っている人 ${Math.round(f.waiting)} 人</span>` : ''}`;
+      if (b.type === 'cemetery') b.note = `${Math.round(b.occ).toLocaleString()} / ${(CIVIC.cemetery.capacity ?? 0).toLocaleString()} 区画`;
+    }
     this.svcCover = r.cover;
     this.schoolSeats = r.schoolSeats;
     for (const msg of r.news) this.pushNews(msg);
@@ -1998,13 +2019,14 @@ export class World {
       n += b.occ;
     }
     const taxes = Object.values(this.taxes);
-    const workers = pop * 0.5;
+    let workers = 0;
+    for (const b of this.buildings.values()) if (!b.civic && b.state === BState.Normal && GROW[b.type as GrowKind].zone === ZoneType.R) workers += workersOf(b);
     const r = computeRating({
       pop, avgTax: taxes.reduce((a, b) => a + b, 0) / taxes.length, crime: this.svc.crimeAvg, pollution: n ? polSum / n : 0,
       commute: this.avgCommute, unemployment: workers > 50 ? Math.max(0, 1 - this.employedTotal / workers) : 0,
       garbage: this.svc.garbageLevel, powerShort: this.powerDemand > this.powerSupply && this.powerSupply > 0,
       waterShort: this.waterDemand > this.waterSupply && this.waterSupply > 0, health: this.services.hq, eq: this.services.eq.adult,
-      funds: this.funds, ordinanceBonus: this.fx.rating,
+      funds: this.funds, ordinanceBonus: this.fx.rating, funeral: this.services.funeral.shortage,
       rewards: [...this.buildings.values()].filter((b) => REWARD_REQ[b.type as string]).length,
     });
     this.rating += (r.value - this.rating) * 0.25;
@@ -2025,6 +2047,7 @@ export class World {
       powerShort: this.powerDemand > this.powerSupply && this.powerSupply > 0, waterShort: this.waterDemand > this.waterSupply && this.waterSupply > 0,
       powerMargin: this.powerSupply > 0 ? 1 - this.powerDemand / this.powerSupply : 1, waterMargin: this.waterSupply > 0 ? 1 - this.waterDemand / this.waterSupply : 1,
       garbage: this.svc.garbageLevel, pollution: n ? polSum / n : 0,
+      funeral: this.services.funeral, elderly: this.services.funeral.ages[2],
       strikes: Object.entries(this.services.strike).filter(([, v]) => v > 0).map(([k]) => DEPT_NAMES[k as Dept]),
       rating: this.rating,
       sandbox: this.sandbox,
@@ -2091,7 +2114,7 @@ export class World {
       funds: Math.round(this.funds),
       population: pop,
       jobs,
-      workers: Math.round(pop * 0.5),
+      workers: Math.round([...this.buildings.values()].reduce((t, b) => t + (!b.civic && b.state === BState.Normal && GROW[b.type as GrowKind].zone === ZoneType.R ? workersOf(b) : 0), 0)),
       employed: Math.round(this.employedTotal),
       demand: { ...d },
       demandRCI: [...this.zoneDemand] as [number, number, number],
@@ -2111,6 +2134,7 @@ export class World {
       services: {
         funding: { ...this.services.funding }, strike: { ...this.services.strike }, eq: { ...this.services.eq }, hq: this.services.hq,
         lifeExp: this.svc.lifeExp, crime: this.svc.crimeAvg, garbage: { ...this.services.garbage },
+        funeral: { ...this.services.funeral, ages: [...this.services.funeral.ages] as Ages },
       },
       rating: Math.round(this.rating),
       ratingParts: this.ratingParts,
