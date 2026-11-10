@@ -26,6 +26,8 @@ export const PAT = {
   gardenLeaf: 16,
   // 夜にともる面（灯籠の火袋、行灯の紙）
   gardenGlow: 17,
+  // 畑（町はずれの田園）：面の座標 (u, v) = (畝の向きの角度[rad], 作物の番号)。畝や轍は世界の座標で描く
+  field: 18,
 } as const;
 
 // 庭の模様（石・地面・葉・灯籠）なら、上の面にも「庭の石や木」の模様をつける（窓の模様などは上の面にはつけない）
@@ -112,6 +114,26 @@ export class MeshBuilder {
     const i1 = this.vtx(...b, nx, ny, nz, color, u0 + uw, v0, pat);
     const i2 = this.vtx(...c, nx, ny, nz, color, u0 + uw, v0 + vh, pat);
     const i3 = this.vtx(...d, nx, ny, nz, color, u0, v0 + vh, pat);
+    this.idx.push(i0, i1, i2, i0, i2, i3);
+  }
+
+  // 4頂点の面（反時計回り）。頂点ごとの色（地面の色のむらをなめらかにつなぐ）。素材は mat、面の座標はすべての頂点で (u, v)
+  quadC(
+    a: [number, number, number], b: [number, number, number], c: [number, number, number], d: [number, number, number],
+    ca: THREE.Color, cb: THREE.Color, cc: THREE.Color, cd: THREE.Color, mat: number, pat = 0, u = 0, v = 0,
+  ) {
+    const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const e2 = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
+    let nx = e1[1] * e2[2] - e1[2] * e2[1];
+    let ny = e1[2] * e2[0] - e1[0] * e2[2];
+    let nz = e1[0] * e2[1] - e1[1] * e2[0];
+    const l = Math.hypot(nx, ny, nz) || 1;
+    nx /= l; ny /= l; nz /= l;
+    this.curMat = mat;
+    const i0 = this.vtx(...a, nx, ny, nz, ca, u, v, pat);
+    const i1 = this.vtx(...b, nx, ny, nz, cb, u, v, pat);
+    const i2 = this.vtx(...c, nx, ny, nz, cc, u, v, pat);
+    const i3 = this.vtx(...d, nx, ny, nz, cd, u, v, pat);
     this.idx.push(i0, i1, i2, i0, i2, i3);
   }
 

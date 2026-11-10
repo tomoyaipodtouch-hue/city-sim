@@ -11,6 +11,7 @@ import { PropsLayer } from './propsLayer';
 import { BuildingLayer } from './buildingLayer';
 import { TreeLayer } from './treeLayer';
 import { QuayLayer, waterfrontMask } from './quayLayer';
+import { OutskirtsLayer } from './outskirtsLayer';
 import { CarLayer } from './carLayer';
 import { PreviewLayer } from './previewLayer';
 import { CameraRig, pickGround } from './cameraRig';
@@ -50,6 +51,7 @@ export class CityRenderer {
   buildings = new BuildingLayer();
   trees = new TreeLayer();
   quays = new QuayLayer(); // 埋め立て地の岸壁
+  outskirts = new OutskirtsLayer(); // 町はずれの田園（畑、生け垣、農家、農道、風車）
   cars = new CarLayer();
   preview = new PreviewLayer();
   sun: THREE.DirectionalLight;
@@ -111,7 +113,7 @@ export class CityRenderer {
     this.sun.shadow.bias = -0.0002;
     this.sun.shadow.normalBias = 0.3;
     this.scene.add(this.sun, this.sun.target);
-    this.scene.add(this.roads.group, this.roadBridges.mesh, this.rails.group, this.props.group, this.buildings.group, this.quays.group, this.trees.group, this.cars.group, this.preview.mesh, this.preview.line);
+    this.scene.add(this.roads.group, this.roadBridges.mesh, this.rails.group, this.props.group, this.buildings.group, this.quays.group, this.outskirts.group, this.trees.group, this.cars.group, this.preview.mesh, this.preview.line);
     this.resize();
     window.addEventListener('resize', () => this.resize());
     requestAnimationFrame(this.loop);
@@ -170,6 +172,10 @@ export class CityRenderer {
     this.quays = new QuayLayer();
     this.scene.add(this.quays.group);
     this.lastQuayKey = -1;
+    this.scene.remove(this.outskirts.group);
+    this.outskirts = new OutskirtsLayer();
+    this.outskirts.group.visible = !this.underground;
+    this.scene.add(this.outskirts.group);
   }
 
   setGrid(g: Grid, heightsChanged: boolean) {
@@ -231,6 +237,7 @@ export class CityRenderer {
     // 道路の橋の構造物（橋脚・塔・ケーブルなど）も、路面と同じように薄くする
     fade(this.roadBridges.mesh.material, on ? 0.35 : 1);
     this.trees.group.visible = !on;
+    this.outskirts.group.visible = !on;
     this.kick();
   }
 
@@ -324,8 +331,10 @@ export class CityRenderer {
       this.cars.setStations(g, this.buildingList);
       this.stationsMesh.rebuild(g, this.buildingList);
     }
+    // 町はずれの田園：マスが変わったとき、変わった区画だけ作り直す
+    if (heights || this.dirty.grid) if (this.outskirts.rebuild(g, heights)) this.dirty.trees = true;
     // 大通りの中央分離帯のケヤキは、道路の層が分離帯の形から決めた位置に植える
-    if (this.dirty.trees) this.trees.rebuild(g, this.buildings.allTrees().concat(this.quays.allTrees()), this.roads.medianTrees);
+    if (this.dirty.trees) this.trees.rebuild(g, this.buildings.allTrees().concat(this.quays.allTrees(), this.outskirts.allTrees()), this.roads.medianTrees);
     if (this.dirty.overlay) {
       buildOverlay(this.terrain.overlayData, g, this.maps, this.dataView);
       this.terrain.commitOverlay();
@@ -390,6 +399,7 @@ export class CityRenderer {
     }
     this.cars.group.visible = carsMoving;
     this.props.update(mdt);
+    this.outskirts.update(dt);
     this.updateDayNight(dt);
     this.updateShadow();
     // 遠くほど空の色に溶け込む（ズームに合わせて霧の距離を変える）

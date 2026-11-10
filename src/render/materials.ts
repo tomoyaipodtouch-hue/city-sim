@@ -368,6 +368,41 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
               diffuseColor.rgb *= 0.7 + 0.6 * n1.r;
               gRough = 0.95;
             }
+          } else if (pat > 17.5 && pat < 18.5) { // 畑：畝・轍・刈り跡（作物ごと）。遠くでは平均の色にする（ちらつかないように）
+            float crop = floor(uv.y + 0.5);
+            vec2 fd = vec2(cos(uv.x), sin(uv.x));
+            float s = dot(vWp.xz, fd);
+            float tr = dot(vWp.xz, vec2(-fd.y, fd.x));
+            vec4 nA = texture2D(uSurf, vWp.xz * (1.0 / 41.0) + 0.21);
+            vec4 nB = texture2D(uSurf, mat2(0.8, -0.6, 0.6, 0.8) * vWp.xz * (1.0 / 7.3) + 0.63);
+            float fs = max(fwidth(s), 1e-4);
+            vec3 c = diffuseColor.rgb * (0.9 + 0.2 * nA.g) * (0.94 + 0.12 * nB.r);
+            if (crop < 1.5) { // 耕した畑：細かい畝
+              float a = 1.0 - smoothstep(0.15, 0.45, fs / 0.9);
+              float f = sin(s * 6.2832 / 0.9);
+              c *= 1.0 + a * (0.22 * f) + (nB.g - 0.5) * 0.25;
+            } else if (crop < 2.5) { // トウモロコシ：緑の列と、すき間の土
+              float a = 1.0 - smoothstep(0.15, 0.45, fs / 1.4);
+              float row = smoothstep(0.25, 0.6, abs(fract(s / 1.4) - 0.5) * 2.0);
+              c = mix(c, mix(c, vec3(0.16, 0.13, 0.08), row * 0.55), a);
+              c *= 0.92 + 0.16 * nB.g;
+            } else if (crop < 4.5) { // 小麦・菜の花：作業の轍（24m ごと）と、風のむら
+              float a = 1.0 - smoothstep(0.1, 0.5, fs / 0.6);
+              float q = abs(fract(s / 24.0) - 0.5) * 24.0;
+              float track = (1.0 - smoothstep(0.15, 0.4, abs(q - 0.9))) * a;
+              c *= 0.95 + 0.1 * nA.a;
+              c = mix(c, c * (crop < 3.5 ? vec3(0.8, 0.85, 0.7) : vec3(0.62, 0.7, 0.4)), track);
+            } else if (crop < 5.5) { // 牧草地：刈ったあとの縞
+              float a = 1.0 - smoothstep(0.3, 1.2, fs / 6.0);
+              c *= 1.0 + a * 0.07 * sign(fract(s / 12.0) - 0.5);
+            } else { // 刈り取ったあとの畑：麦わらの列（明るい）と刈り株
+              float a = 1.0 - smoothstep(0.15, 0.5, fs / 1.5);
+              float sw = 1.0 - smoothstep(0.3, 0.7, abs(fract(s / 7.0) - 0.5) * 7.0);
+              c = mix(c, c * 1.18 + vec3(0.03, 0.025, 0.0), sw * a);
+              c *= 1.0 + a * 0.06 * sin(tr * 6.2832 / 0.35 + s);
+            }
+            diffuseColor.rgb = c;
+            gRough = 0.95;
           } else { // 搬入口
             float f = mod(uv.x, 6.0);
             float door = step(1.0, f) * step(f, 5.0) * step(uv.y, 4.2);
