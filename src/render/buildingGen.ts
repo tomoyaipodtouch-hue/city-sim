@@ -197,7 +197,7 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     case 'water_plant': waterPlant(mb, f, tf); break;
     case 'desal': desalPlant(mb, f, tf); break;
     case 'recycling': recycling(mb, f, rng, tf); break;
-    case 'cemetery': cemetery(mb, f, rng, tf, cemeteryStage(b)); break;
+    case 'cemetery': cemetery(mb, f, rng, tf, cemeteryStage(b), pond); break;
     case 'crematorium': crematorium(mb, f, rng, tf, pond); break;
     case 'mayor_house': mansion(mb, f, rng, tf); break;
     case 'city_hall': cityHall(mb, f, tf); break;
@@ -3111,204 +3111,230 @@ function recycling(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
 }
 
 
-// ---------------- 霊園（公園墓地）----------------
+// ---------------- 霊園（森と芝生の墓地）----------------
 // 埋葬の進み具合の段階（0..4）。buildingLayer の区画の鍵も同じ式を使う（段階が変わったら作り直す）
 export function cemeteryStage(b: Building) {
   const cap = CIVIC.cemetery?.capacity || 1;
   const fill = Math.max(0, Math.min(1, (b.occ || 0) / cap));
-  return Math.round(fill * 4);
+  const dbg = (globalThis as { __cemStage?: number }).__cemStage; // TEMP-DEBUG
+  return dbg !== undefined ? dbg : Math.round(fill * 4);
 }
-// 段階ごとの、墓石の立っている区画の割合
-const CEM_FILL = [0.06, 0.3, 0.55, 0.8, 1];
-const GRANITE = [0x8f9192, 0xa3a4a2, 0x7d8082, 0x2f3033, 0x3a3b3e, 0x2a2b2d, 0xb1aba3, 0x6b6e70].map(C);
-const FLOWER = [0xd8443c, 0xf0c63a, 0xf3f1ea, 0xc85a9c, 0xe9853a].map(C);
+// 段階ごとの、お墓の埋まっている割合
+const CEM_FILL = [0.05, 0.3, 0.55, 0.8, 1];
 
-// 芝生と木の多い公園墓地。道路側の入口から、ゆるく曲がった園路が奥の合葬墓（樹木葬の丘）へ続く。
-// 入口の左に管理事務所（白い箱、木のルーバー、ガラス）、右に屋根のある休憩所と駐車場。
-// 墓所は生垣で区切った区画に、背中合わせの 2 列で並ぶ（和型の墓石：外柵・台石・竿石、ときどき洋型）。
-// stage が上がるほど入口に近い区画から墓石が増える。まだ空いている区画は、外柵と玉砂利だけか、芝生の区画
-function cemetery(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, stage: number) {
+// 森と芝生の墓地（ストックホルムの森の墓地と、アメリカのメモリアルパークを合わせたもの）。
+// 門から真っすぐな並木道が、開けた芝生の丘に立つ大きな御影石の十字架へ続く。
+// 右側はなだらかな芝生のメモリアルパーク：芝生と同じ高さの平らな墓碑（ブロンズと灰色）がゆるく曲がった列に並び、
+// 曲がった車道、小さな白い礼拝堂、丸い噴水の池がある。
+// 奥は松の森：木々の間に低い墓石が点々と立つ。左手前には芝生の小山（瞑想の丘）と、頂上を囲む木の輪。
+// stage が上がるほど、芝生の墓碑は前の列から順に、森の墓石は決まった順に増える
+function cemetery(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, stage: number, pond?: PondBuilder) {
   const hw = f.W / 2, hd = f.D / 2;
-  const lawn = C(0x74a04e), lawnPlot = C(0x84ad5a), pave = C(0xd6d1c7), path2 = C(0xbcb5a6), gravel = C(0xccc8bf);
-  const granite = C(0x8e8f8f), hedge = C(0x3d6831), wood = C(0xb5875a), white = C(0xf3f3f0), white2 = C(0xe2e4e5);
-  const glass = C(0x7d9fb6), dark = C(0x2c2f32), warm = C(0xffd9a0);
-  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.06, lawn);
-  const flat = (x0: number, z0: number, x1: number, z1: number, y: number, col: THREE.Color) => mb.ground(x0, z0, x1, z1, y, col);
-
-  // ---- 園路：入口から奥の合葬墓の広場へ、ゆるい S 字 ----
-  const gateZ = hd - 0.4, monZ = -hd + 10, monR = 8;
-  const pz1 = monZ + monR - 0.5;
-  const pathX = (z: number) => 3.0 * Math.sin((2 * Math.PI * (gateZ - z)) / (gateZ - pz1));
-  const ribbon = (half: number, y: number, col: THREE.Color) => {
-    const n = 40;
+  const lawn = C(0x79a653), forest = C(0x5d7440), gravel = C(0xd2cbbb), stone = C(0x9b9993), stoneL = C(0xb9b6ae);
+  const white = C(0xf4f3ee), slate = C(0x4b5056), dark = C(0x2e3134), warm = C(0xffdba2), asph = C(0x55585b);
+  const frac = CEM_FILL[Math.max(0, Math.min(4, stage))];
+  const R = () => rng.next();
+  // 上向きの面（向きを自動でそろえる）
+  const qUp = (a: [number, number, number], b: [number, number, number], c: [number, number, number], d: [number, number, number], col: THREE.Color, pat = 0) => {
+    const ny = (b[2] - a[2]) * (d[0] - a[0]) - (b[0] - a[0]) * (d[2] - a[2]);
+    if (ny >= 0) mb.quad(a, b, c, d, col, pat); else mb.quad(d, c, b, a, col, pat);
+  };
+  // なだらかな芝生の丘（すそが地面になめらかにつながる）。y = H * (1 + cos(πr/R)) / 2
+  const hillY = (r: number, Rr: number, H: number) => (r >= Rr ? 0 : (H * (1 + Math.cos((Math.PI * r) / Rr))) / 2);
+  const hill = (hx: number, hz: number, Rr: number, H: number, col: THREE.Color) => {
+    const seg = 40, rings = 10;
     mb.matOverride = MAT.ground;
-    for (let k = 0; k < n; k++) {
-      const za = gateZ - ((gateZ - pz1) * k) / n, zb = gateZ - ((gateZ - pz1) * (k + 1)) / n;
-      const xa = pathX(za), xb = pathX(zb);
-      mb.quad([xa - half, y, za], [xa + half, y, za], [xb + half, y, zb], [xb - half, y, zb], col);
+    for (let k = 0; k < rings; k++) {
+      const r0 = (Rr * k) / rings, r1 = (Rr * (k + 1)) / rings;
+      const y0 = 0.05 + hillY(r0, Rr, H), y1 = 0.05 + hillY(r1, Rr, H);
+      const sl = (r: number) => (H * Math.PI * Math.sin((Math.PI * r) / Rr)) / (2 * Rr); // 下り坂の傾き
+      const N = (a: number, r: number): [number, number, number] => { const g = sl(r), l = Math.hypot(g, 1); return [(Math.cos(a) * g) / l, 1 / l, (Math.sin(a) * g) / l]; };
+      for (let i = 0; i < seg; i++) {
+        const a0 = (i / seg) * Math.PI * 2, a1 = ((i + 1) / seg) * Math.PI * 2;
+        const P = (a: number, r: number, y: number): [number, number, number] => [hx + Math.cos(a) * r, y, hz + Math.sin(a) * r];
+        mb.quadN(P(a1, r0, y0), P(a0, r0, y0), P(a0, r1, y1), P(a1, r1, y1), N(a1, r0), N(a0, r0), N(a0, r1), N(a1, r1), col);
+      }
     }
     mb.matOverride = null;
   };
+  const lamp = (x: number, z: number) => {
+    mb.box(x - 0.06, 0, z - 0.06, x + 0.06, 2.4, z + 0.06, dark);
+    mb.box(x - 0.14, 2.4, z - 0.14, x + 0.14, 2.7, z + 0.14, warm, PAT.glow, dark);
+  };
 
-  // ---- 墓所の区画（4 列 × 6 段、各段は背中合わせの 2 列）----
-  const colsX: [number, number][] = [[-hw + 2.4, -18.4], [-17.0, -6.6], [6.6, 17.0], [18.4, hw - 2.4]];
-  const rowTop = 17.4, rowD = 6.2, gap = 2.0, rows = 6;
-  interface Lot { x: number; z: number; s: number; w: number; key: number; kind: number; col: THREE.Color; h: number; fl: THREE.Color }
-  const lots: Lot[] = [];
-  const rowZ: [number, number][] = [];
-  for (let r = 0; r < rows; r++) rowZ.push([rowTop - r * (rowD + gap) - rowD, rowTop - r * (rowD + gap)]);
-  // 区画の間の砂利の通路（横）と、列の間の通路（縦）
-  for (let r = 0; r < rows; r++) {
-    const zg = rowZ[r][0];
-    flat(-hw + 1.6, zg - gap + 0.1, hw - 1.6, zg - 0.1, 0.075, path2);
-  }
-  flat(-hw + 1.6, rowTop + 0.1, hw - 1.6, rowTop + 1.9, 0.075, path2);
-  for (const x of [-17.7, 17.7]) flat(x - 0.6, rowZ[rows - 1][0] - 1.5, x + 0.6, rowTop + 1.9, 0.078, path2);
-  for (const [cx0, cx1] of colsX) {
-    const lx0 = cx0 + 0.6, lx1 = cx1 - 0.6;
-    const n = Math.max(1, Math.floor((lx1 - lx0) / 2.2)), lw = (lx1 - lx0) / n;
-    for (let r = 0; r < rows; r++) {
-      const [z0, z1] = rowZ[r], zm = (z0 + z1) / 2;
-      let any = false;
-      for (const s of [1, -1]) for (let i = 0; i < n; i++) {
-        const x = lx0 + (i + 0.5) * lw, z = zm + s * (rowD / 4);
-        if (Math.hypot(x, z - monZ) < monR + 2.6) continue;
-        if (Math.abs(x - pathX(z)) - lw / 2 < 2.4) continue;
-        any = true;
-        const black = rng.next() < 0.45;
-        lots.push({
-          x, z, s, w: lw,
-          key: Math.hypot(x * 1.15, z - gateZ) + rng.next() * 7,
-          kind: rng.next() < 0.22 ? 1 : 0,
-          col: GRANITE[black ? 3 + rng.int(3) : rng.pick([0, 1, 2, 6, 7])].clone().multiplyScalar(0.94 + rng.next() * 0.1),
-          h: 0.9 + rng.next() * 0.35,
-          fl: rng.pick(FLOWER),
-        });
-      }
-      if (!any) continue;
-      // 区画の両端の生垣（刈り込んだ低い木）
-      for (const x of [cx0 + 0.05, cx1 - 0.5]) mb.box(x, 0, z0 + 0.15, x + 0.45, 0.75, z1 - 0.15, hedge, PAT.gardenLeaf, hedge);
-      // 区画の中央の背中合わせの境目（低い縁石）
-      mb.box(lx0, 0, zm - 0.06, lx1, 0.22, zm + 0.06, granite);
-    }
-  }
-  lots.sort((a, b) => a.key - b.key);
-  const nFull = Math.round(lots.length * CEM_FILL[Math.max(0, Math.min(4, stage))]);
-  const nPrep = Math.min(lots.length, nFull + Math.round(lots.length * 0.16));
-  lots.forEach((L, k) => {
-    const x0 = L.x - L.w / 2 + 0.14, x1 = L.x + L.w / 2 - 0.14;
-    const za = L.z - rowD / 4 + 0.12, zb = L.z + rowD / 4 - 0.12;
-    if (k >= nPrep) {
-      // まだ整えていない区画：芝生の四角
-      flat(x0 + 0.1, za + 0.1, x1 - 0.1, zb - 0.1, 0.07, lawnPlot);
-      return;
-    }
-    // 外柵（低い御影石の縁）と、中の玉砂利
-    mb.box(x0, 0, za, x1, k < nFull ? 0.3 : 0.2, zb, k < nFull ? L.col.clone().lerp(granite, 0.5) : granite, PAT.none, gravel);
-    if (k >= nFull) return;
-    const c = L.col, s = L.s;
-    const zs = L.z - s * 0.55; // 墓石は区画の奥（通路と反対側）
-    const bx = (xa: number, ya: number, dza: number, xb: number, yb: number, dzb: number, col: THREE.Color, top?: THREE.Color) =>
-      mb.box(L.x + xa, ya, zs + Math.min(dza, dzb), L.x + xb, yb, zs + Math.max(dza, dzb), col, PAT.none, top);
-    bx(-0.66, 0.3, -0.5, 0.66, 0.52, 0.5, c); // 芝台
-    bx(-0.48, 0.52, -0.36, 0.48, 0.74, 0.36, c); // 上台
-    if (L.kind === 0) bx(-0.27, 0.74, -0.21, 0.27, 0.74 + L.h, 0.21, c); // 竿石（和型）
-    else bx(-0.56, 0.74, -0.14, 0.56, 1.36, 0.14, c); // 洋型
-    // 花立て（花の色）と香炉
-    const zf = s * 0.78;
-    for (const x of [-0.5, 0.5]) bx(x - 0.08, 0.3, zf - 0.08, x + 0.08, 0.72, zf + 0.08, c, L.fl);
-    bx(-0.2, 0.3, zf - 0.14, 0.2, 0.5, zf + 0.14, c);
-  });
+  // ---- 地面：手前と右は芝生、奥は森の地面 ----
+  const wz = -hd * 0.34; // 森の始まり（これより奥が森）
+  mb.ground(-hw + 0.2, wz, hw - 0.2, hd - 0.2, 0.06, lawn);
+  mb.groundGrad(-hw + 0.2, -hd + 0.2, hw - 0.2, wz, 0.06, forest, forest.clone().multiplyScalar(0.92), lawn, lawn.clone().lerp(forest, 0.5));
 
-  // 園路（区画の通路の上に描く）と、園路の灯り（夜にほのかに光る）
-  ribbon(1.8, 0.095, pave);
-  ribbon(1.95, 0.085, C(0xb9b3a7));
-  for (let k = 1; k < 6; k++) {
-    const z = gateZ - ((gateZ - pz1) * k) / 6, sx = k % 2 ? 1 : -1, x = pathX(z) + sx * 2.3;
-    mb.box(x - 0.07, 0, z - 0.07, x + 0.07, 2.6, z + 0.07, dark);
-    mb.box(x - 0.16, 2.6, z - 0.16, x + 0.16, 2.95, z + 0.16, warm, PAT.glow, dark);
-  }
+  // ---- 低い石の塀と門 ----
+  const gw = 2.2; // 並木道の幅の半分
+  const dx0 = hw * 0.16, dx1 = dx0 + 4.5; // 車道の入口
+  for (const [a, b] of [[-hw + 0.4, -gw - 0.6], [gw + 0.6, dx0 - 0.3], [dx1 + 0.3, hw - 0.4]] as [number, number][]) mb.box(a, 0, hd - 1.0, b, 0.8, hd - 0.5, stone, PAT.none, stoneL);
+  mb.box(-hw + 0.4, 0, -hd + 0.4, hw - 0.4, 0.8, -hd + 0.9, stone, PAT.none, stoneL);
+  for (const sx of [-1, 1]) mb.box(sx < 0 ? -hw + 0.4 : hw - 0.9, 0, -hd + 0.9, sx < 0 ? -hw + 0.9 : hw - 0.4, 0.8, hd - 1.0, stone, PAT.none, stoneL);
+  for (const sx of [-1, 1]) mb.box(sx * (gw + 0.6) - 0.45, 0, hd - 1.2, sx * (gw + 0.6) + 0.45, 2.0, hd - 0.3, stoneL);
 
-  // ---- 水場（蛇口と手桶の棚）と、園路ぞいの木 ----
-  for (let r = 0; r < rows; r++) {
-    const zg = rowZ[r][0] - gap / 2, sd = r % 2 ? 1 : -1, x = pathX(zg) + sd * 3.4;
-    if (r < rows - 1 || Math.hypot(x, zg - monZ) > monR + 1) {
-      mb.box(x - 0.45, 0, zg - 0.35, x + 0.45, 0.8, zg + 0.35, C(0x9fa09f), PAT.none, C(0x3b4146));
-      mb.box(x - 0.05, 0.8, zg - 0.25, x + 0.05, 1.2, zg - 0.15, C(0xc8ccd0));
-      mb.box(x + sd * 0.6, 0, zg - 0.3, x + sd * 1.8, 0.95, zg + 0.3, wood);
-      for (let i = 0; i < 3; i++) mb.cylinder(x + sd * (0.8 + i * 0.4), zg, 0.95, 1.25, 0.15, 8, i === 1 ? C(0xc8573e) : wood, C(0x5a4632));
-    }
-    if (r > 0) tf(pathX(zg) - sd * 3.6, zg, 0.75 + 0.15 * rng.next(), 0, 0, undefined, 3);
+  // ---- 並木道（門から十字架の丘へ）----
+  const cx = 0, cz = wz + 6; // 十字架の丘の中心
+  const moundR = 11, moundH = 1.6;
+  const az1 = cz + moundR;
+  mb.ground(-gw, az1, gw, hd - 0.3, 0.09, gravel);
+  for (let z = hd - 4; z > az1 + 1; z -= 5) {
+    for (const sx of [-1, 1]) tf(sx * (gw + 1.8), z, 0.85, 0, 0, 0x5f8434, 2);
   }
+  for (let z = hd - 6.5; z > az1 + 2; z -= 10) for (const sx of [-1, 1]) lamp(sx * (gw + 0.5), z);
+  // ベンチ
+  for (const z of [hd * 0.35, hd * 0.05]) mb.box(gw + 0.6, 0, z - 1, gw + 1.1, 0.45, z + 1, C(0x8a8780));
 
-  // ---- 奥：合葬墓（芝生の丘、てっぺんにシンボルツリー）と石の広場 ----
+  // ---- 十字架の丘：芝生のなだらかな丘、頂上に大きな御影石の十字架 ----
+  hill(cx, cz, moundR, moundH, lawn);
+  // 丘へ登る砂利の道（並木道の続き）
+  for (let k = 0; k < 6; k++) {
+    const ra = moundR - (k * (moundR - 1.4)) / 6, rb = moundR - ((k + 1) * (moundR - 1.4)) / 6;
+    qUp([-1.4, 0.09 + hillY(ra, moundR, moundH), cz + ra], [1.4, 0.09 + hillY(ra, moundR, moundH), cz + ra], [1.4, 0.09 + hillY(rb, moundR, moundH), cz + rb], [-1.4, 0.09 + hillY(rb, moundR, moundH), cz + rb], gravel);
+  }
+  const ct = moundH + 0.02, ch = 9;
+  mb.box(cx - 0.9, ct, cz - 0.9, cx + 0.9, ct + 0.35, cz + 0.9, stone); // 台座
+  mb.box(cx - 0.4, ct + 0.35, cz - 0.4, cx + 0.4, ct + ch, cz + 0.4, stoneL);
+  mb.box(cx - 2.4, ct + ch - 3.3, cz - 0.4, cx + 2.4, ct + ch - 2.5, cz + 0.4, stoneL);
+
+  // ---- 瞑想の丘（左手前）：芝生の小山と、頂上の木の輪 ----
+  const gx = -hw * 0.56, gz = hd * 0.36, gR = 9, gH = 2.6;
+  hill(gx, gz, gR, gH, lawn);
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI * 2, r = 3.3;
+    tf(gx + Math.cos(a) * r, gz + Math.sin(a) * r, 0.75, 0, hillY(r, gR, gH), 0x8fa64a, 2);
+  }
+  // 並木道から丘への細い道
+  mb.ground(gx + gR - 0.5, gz - 0.7, -gw, gz + 0.7, 0.085, gravel);
+
+  // ---- 右：メモリアルパーク（車道、礼拝堂、噴水、平らな墓碑の列）----
+  // 車道：入口から芝生の左のふちを奥へ、噴水の手前で右に曲がって礼拝堂へ
+  const chx = hw * 0.69, chz0 = wz + 1.5, chz1 = chz0 + 9; // 礼拝堂（正面は +z）
+  const fx = chx, fz = chz1 + 8; // 噴水
+  const bez = (t: number): [number, number] => {
+    const P = [[(dx0 + dx1) / 2, hd - 0.3], [(dx0 + dx1) / 2 + 1, chz1 + 4], [dx1 + 3, chz1 + 2.2], [chx - 2.5, chz1 + 2.2]];
+    const u = 1 - t;
+    return [
+      u * u * u * P[0][0] + 3 * u * u * t * P[1][0] + 3 * u * t * t * P[2][0] + t * t * t * P[3][0],
+      u * u * u * P[0][1] + 3 * u * u * t * P[1][1] + 3 * u * t * t * P[2][1] + t * t * t * P[3][1],
+    ];
+  };
+  const drive: [number, number][] = [];
+  for (let k = 0; k <= 24; k++) drive.push(bez(k / 24));
+  const dw = 2.2;
   mb.matOverride = MAT.ground;
-  mb.cylinder(0, monZ, 0.0, 0.1, monR, 48, pave, pave);
+  for (let k = 0; k < 24; k++) {
+    const [ax, az] = drive[k], [bx, bz] = drive[k + 1];
+    const tx = bx - ax, tz = bz - az, l = Math.hypot(tx, tz) || 1, nx = -tz / l * dw, nz = tx / l * dw;
+    qUp([ax - nx, 0.095, az - nz], [ax + nx, 0.095, az + nz], [bx + nx, 0.095, bz + nz], [bx - nx, 0.095, bz - nz], asph);
+  }
   mb.matOverride = null;
-  mb.cylinder(0, monZ, 0.1, 0.6, 5.4, 48, C(0xa9a8a4), C(0xa9a8a4));
+  const nearDrive = (x: number, z: number, m: number) => drive.some(([px, pz]) => Math.hypot(px - x, pz - z) < dw + m);
+  for (let k = 4; k < 24; k += 7) { const [x, z] = drive[k]; lamp(x - dw - 0.6, z); }
+  // 礼拝堂の前の小さな車寄せ
+  mb.ground(chx - 6, chz1, chx + 4, chz1 + 3.6, 0.096, asph);
+  parkedCar(mb, chx + 2.5, chz1 + 0.2, chz1 + 4.6, rng);
+
+  // 礼拝堂：白い壁、黒っぽいスレートの切妻屋根（棟は前後方向）、前に尖塔
+  const cw = 3.6, cwx0 = chx - cw, cwx1 = chx + cw, eave = 4.8, ridge = 8.2;
+  mb.box(cwx0, 0, chz0, cwx1, eave, chz1, white, PAT.none, white);
+  const ov = 0.4;
+  qUp([cwx0 - ov, eave - 0.3, chz1 + ov], [chx, ridge, chz1 + ov], [chx, ridge, chz0 - ov], [cwx0 - ov, eave - 0.3, chz0 - ov], slate);
+  qUp([chx, ridge, chz1 + ov], [cwx1 + ov, eave - 0.3, chz1 + ov], [cwx1 + ov, eave - 0.3, chz0 - ov], [chx, ridge, chz0 - ov], slate);
+  mb.tri([cwx0, eave, chz1], [cwx1, eave, chz1], [chx, ridge - 0.25, chz1], white);
+  mb.tri([cwx1, eave, chz0], [cwx0, eave, chz0], [chx, ridge - 0.25, chz0], white);
+  // 側面の縦長の窓（夜は光る）と正面の扉
+  for (let z = chz0 + 1.6; z < chz1 - 1; z += 2.2) for (const x of [cwx0 - 0.04, cwx1 - 0.02]) mb.box(x, 1.2, z - 0.35, x + 0.06, 3.8, z + 0.35, C(0xe8c98a), PAT.glow, C(0xe8c98a));
+  // 尖塔（入口の上）
+  const tz0 = chz1 - 0.2, tz1 = chz1 + 2.2;
+  mb.box(chx - 1.2, 0, tz0, chx + 1.2, 9.5, tz1, white, PAT.none, white);
+  mb.box(chx - 0.6, 0, tz1 - 0.02, chx + 0.6, 2.6, tz1 + 0.04, C(0x4a3a2c)); // 扉
+  mb.box(chx - 0.35, 6.6, tz1 - 0.02, chx + 0.35, 8.2, tz1 + 0.04, C(0xe8c98a), PAT.glow, C(0xe8c98a));
+  const tc = (tz0 + tz1) / 2;
+  mb.prism([[chx - 1.3, tc - 1.3], [chx + 1.3, tc - 1.3], [chx + 1.3, tc + 1.3], [chx - 1.3, tc + 1.3]], 9.5, 14.5, slate, PAT.none, slate,
+    [[chx - 0.04, tc - 0.04], [chx + 0.04, tc - 0.04], [chx + 0.04, tc + 0.04], [chx - 0.04, tc + 0.04]]);
+
+  // 噴水：丸い池（石の縁）と真ん中の噴水
+  const pr = 4.2;
   mb.matOverride = MAT.ground;
-  mb.dome(0, monZ, 0.6, 5.2, 1.5, C(0x6f9b4a), 40, 8);
+  mb.cylinder(fx, fz, 0.0, 0.1, pr + 2.6, 40, gravel, gravel);
   mb.matOverride = null;
-  tf(0, monZ, 1.35, 0, 2.0, 0x5f8434, 3);
-  // 黒御影の碑と献花台
-  mb.box(-1.0, 0.1, monZ + 5.6, 1.0, 0.35, monZ + 6.4, granite);
-  mb.box(-1.8, 0.1, monZ + 6.6, 1.8, 0.4, monZ + 7.0, granite);
-  mb.box(-1.6, 0.4, monZ + 6.7, 1.6, 2.1, monZ + 6.9, C(0x1f2022));
-  mb.box(-1.1, 0.1, monZ + 7.3, 1.1, 0.85, monZ + 7.7, C(0x4a4c4f), PAT.none, C(0x9ea0a2));
-  // 広場のベンチと、うしろの林
-  for (const a of [0.35, 0.65]) {
-    const bxp = Math.cos(a * Math.PI) * (monR - 0.9), bzp = monZ + Math.sin(a * Math.PI) * (monR - 0.9);
-    mb.box(bxp - 0.9, 0, bzp - 0.25, bxp + 0.9, 0.45, bzp + 0.25, wood);
+  mb.cylinder(fx, fz, 0.0, 0.1, pr, 32, C(0x3c4448), C(0x3c4448));
+  mb.cylinder(fx, fz, 0.0, 0.5, pr + 0.45, 40, stoneL);
+  for (let i = 0; i < 40; i++) {
+    const a0 = (i / 40) * Math.PI * 2, a1 = ((i + 1) / 40) * Math.PI * 2;
+    const P = (a: number, r: number): [number, number, number] => [fx + Math.cos(a) * r, 0.5, fz + Math.sin(a) * r];
+    qUp(P(a0, pr), P(a1, pr), P(a1, pr + 0.45), P(a0, pr + 0.45), stoneL);
   }
-  for (let i = 0; i < 9; i++) {
-    const a = Math.PI * (1.08 + (i / 8) * 0.84);
-    tf(Math.cos(a) * (monR + 1.4), monZ + Math.sin(a) * (monR + 1.4), 0.8 + 0.3 * rng.next(), i % 3 === 1 ? 1 : 0);
+  if (pond) pond.addLocal(fx - pr - 0.5, fz - pr - 0.5, fx + pr + 0.5, fz + pr + 0.5, 0.38, (x, z) => LAKE_T + 0.012 + (pr - Math.hypot(x - fx, z - fz)) * 0.5, (x, y, z) => mb.world(x, y, z), 0.6);
+  else mb.cylinder(fx, fz, 0.1, 0.38, pr, 32, PALETTE.water, PALETTE.water);
+  mb.cylinder(fx, fz, 0.1, 0.9, 0.8, 16, stoneL, stoneL);
+  mb.cylinder(fx, fz, 0.9, 1.7, 0.22, 10, stoneL);
+  mb.cylinder(fx, fz, 1.7, 1.85, 0.75, 16, stoneL, C(0x7fa7bf));
+  mb.cylinder(fx, fz, 1.85, 2.9, 0.07, 6, C(0xeef4f6), C(0xeef4f6), 0.03);
+  if (pond) { const w = mb.world(fx, 0.6, fz); pond.addLight(w[0], w[1], w[2], -5, 0.9, 0.85, 0.7); }
+
+  // 平らな墓碑：芝生とほぼ同じ高さ、ゆるく曲がった列。前の列から順に埋まる
+  interface Mk { x: number; z: number; col: THREE.Color }
+  const marks: Mk[] = [];
+  const mx0 = dx1 + 3.5, mx1 = hw - 2;
+  const curve = (x: number) => 1.1 * Math.sin((x - mx0) / 6);
+  for (let z = hd - 3.5; z > wz + 1; z -= 2.1)
+    for (let x = mx0; x <= mx1; x += 1.5) {
+      const zz = z + curve(x);
+      if (Math.hypot(x - fx, zz - fz) < pr + 3.4) continue;
+      if (x > cwx0 - 3 && zz < chz1 + 5) continue;
+      if (nearDrive(x, zz, 1.5)) continue;
+      const bronze = R() < 0.55;
+      marks.push({ x, z: zz, col: (bronze ? C(0x7d6238) : C(0x85888a)).multiplyScalar(0.92 + R() * 0.14) });
+    }
+  const nM = Math.round(marks.length * frac);
+  for (let k = 0; k < nM; k++) {
+    const m = marks[k];
+    mb.box(m.x - 0.42, 0.03, m.z - 0.26, m.x + 0.42, 0.11, m.z + 0.26, C(0xa8a59d), PAT.none, C(0xb3b0a8)); // 縁の石
+    mb.box(m.x - 0.34, 0.11, m.z - 0.19, m.x + 0.34, 0.13, m.z + 0.19, m.col);
   }
+  // メモリアルパークの木（まばらな広葉樹）
+  for (const [x, z] of [[mx0 + 2, hd - 2.5], [hw - 3, hd * 0.55], [mx0 + 9, hd * 0.2], [hw - 2.5, fz + 1]] as [number, number][]) tf(x, z, 0.9, 0, 0, undefined, 3);
 
-  // ---- まわりの生垣と木（横と奥）----
-  mb.box(-hw + 0.5, 0, -hd + 0.5, hw - 0.5, 1.2, -hd + 1.4, hedge, PAT.gardenLeaf, hedge);
-  for (const sx of [-1, 1]) mb.box(sx < 0 ? -hw + 0.5 : hw - 1.4, 0, -hd + 1.4, sx < 0 ? -hw + 1.4 : hw - 0.5, 1.2, hd - 1.6, hedge, PAT.gardenLeaf, hedge);
-  for (let z = -hd + 2; z < hd - 13; z += 5.5) for (const sx of [-1, 1]) tf(sx * (hw - 1), z + rng.next() * 1.5, 0.75 + 0.3 * rng.next(), rng.next() < 0.55 ? 1 : 0);
-  for (let x = -hw + 3; x < hw - 2; x += 5) if (Math.abs(x) > monR + 3) tf(x + rng.next(), -hd + 1, 0.8 + 0.3 * rng.next(), rng.next() < 0.6 ? 1 : 0);
-
-  // ---- 手前：入口の広場、門柱、低い石の塀 ----
-  flat(-8, rowTop + 1.9, 8, hd - 0.3, 0.09, pave);
-  const wallC = C(0xb7b4ad);
-  for (const [a, b2] of [[-hw + 0.5, -4.6], [4.6, 21.2], [29.6, hw - 0.5]] as [number, number][]) mb.box(a, 0, hd - 1.4, b2, 0.9, hd - 0.8, wallC, PAT.none, C(0xc9c6bf));
-  for (const sx of [-1, 1]) {
-    mb.box(sx * 4.6 - 0.4, 0, hd - 1.6, sx * 4.6 + 0.4, 2.3, hd - 0.6, C(0x6c6f72));
-    mb.box(sx * 4.6 - 0.3, 2.3, hd - 1.45, sx * 4.6 + 0.3, 2.42, hd - 0.75, warm, PAT.glow, warm);
+  // ---- 奥：松の森と、木々の間の低い墓石 ----
+  const pathZ = -hd * 0.72;
+  const inClear = (x: number, z: number, m: number) =>
+    Math.abs(z - pathZ) < 0.8 + m * 0.5 || Math.hypot(x - cx, z - cz) < moundR + m || (Math.abs(x) < gw + 1 && z > cz) || (x > cwx0 - 3 && x < cwx1 + 3 && z > chz0 - 3);
+  const pines: [number, number][] = [];
+  for (let z = -hd + 2.5; z < wz + 3; z += 5.4)
+    for (let x = -hw + 2.5; x < hw - 2; x += 5.2) {
+      const px = x + (R() - 0.5) * 2.4, pz = z + (R() - 0.5) * 2.4;
+      if (inClear(px, pz, 1.5)) continue;
+      pines.push([px, pz]);
+      tf(px, pz, 0.95 + R() * 0.35, R() < 0.88 ? 1 : 0);
+    }
+  // 左の森（瞑想の丘のうしろ、手前まで少し）
+  for (let z = wz + 4; z < hd * 0.1; z += 5) for (let x = -hw + 2.5; x < -hw * 0.28; x += 5) {
+    const px = x + (R() - 0.5) * 2, pz = z + (R() - 0.5) * 2;
+    if (Math.hypot(px - gx, pz - gz) < gR + 1.5 || inClear(px, pz, 1.5)) continue;
+    pines.push([px, pz]);
+    tf(px, pz, 0.9 + R() * 0.3, 1);
   }
-  mb.box(-5.0, 0.9, hd - 0.58, -4.2, 2.0, hd - 0.55, C(0xd9d6cc)); // 表札
-
-  // 管理事務所：白い薄い屋根、木のルーバー、ガラス
-  const ox0 = -hw + 2.5, ox1 = -14.5, oz0 = rowTop + 3.4, oz1 = hd - 3.2;
-  mb.box(ox0 - 0.3, 0, oz0 - 0.3, ox1 + 0.3, 0.3, oz1 + 0.3, white2);
-  mb.box(ox0, 0.3, oz0, ox0 + 5.5, 3.6, oz1, white, PAT.none, white2);
-  mb.box(ox0 + 5.5, 0.3, oz0 + 0.4, ox1, 3.6, oz1 - 0.4, glass, PAT.fullglass, white2);
-  for (let x = ox0 + 5.9; x < ox1 - 0.2; x += 0.5) if (x < ox1 - 4.6 || x > ox1 - 2.0) mb.box(x, 0.3, oz1 - 0.15, x + 0.12, 3.6, oz1 + 0.05, wood);
-  mb.box(ox0 - 0.9, 3.6, oz0 - 0.8, ox1 + 1.2, 3.95, oz1 + 1.4, white, PAT.none, C(0xe9eaea));
-  mb.box(ox0 + 0.8, 1.7, oz1, ox0 + 4.6, 2.3, oz1 + 0.06, C(0x3b3d40));
-  tf(ox0 + 2, rowTop + 2.6, 0.55);
-  tf(ox1 - 1, rowTop + 2.6, 0.6, 0, 0, undefined, 2);
-
-  // 休憩所：細い柱と白い薄い屋根、木のベンチと背の板
-  const rx0 = 8.6, rx1 = 18.6, rz0 = rowTop + 4.2, rz1 = hd - 3.6;
-  flat(rx0 - 0.5, rz0 - 0.5, rx1 + 0.5, rz1 + 0.8, 0.1, C(0xcbc6bc));
-  for (const x of [rx0 + 0.3, rx1 - 0.3]) for (const z of [rz0 + 0.3, rz1 - 0.3]) mb.box(x - 0.08, 0, z - 0.08, x + 0.08, 3.0, z + 0.08, dark);
-  mb.box(rx0 - 0.6, 3.0, rz0 - 0.6, rx1 + 0.6, 3.25, rz1 + 0.9, white, PAT.none, C(0xe9eaea));
-  mb.box(rx0 + 0.6, 0, rz0 + 0.2, rx1 - 0.6, 2.2, rz0 + 0.45, wood);
-  mb.box(rx0 + 1.0, 0, rz0 + 1.3, rx1 - 1.0, 0.45, rz0 + 1.9, wood);
-  mb.box(rx0 + 1.0, 0, rz1 - 1.6, rx0 + 4.0, 0.45, rz1 - 1.0, wood);
-  mb.box(rx0 + 0.2, 2.95, rz1 + 0.6, rx1 - 0.2, 3.0, rz1 + 0.8, warm, PAT.glow, warm);
-
-  // 駐車場（入口の右）
-  const cx0 = 21.6, cx1 = hw - 1.4, cz0 = rowTop + 2.2;
-  flat(cx0, cz0, cx1, hd - 0.3, 0.09, C(0x4a4d51));
-  for (let x = cx0 + 0.3; x < cx1; x += 2.6) flat(x, cz0 + 0.4, x + 0.12, cz0 + 5.2, 0.1, PALETTE.white);
-  parkedCar(mb, cx0 + 1.6, cz0 + 0.4, cz0 + 5.2, rng);
-  if (stage > 1) parkedCar(mb, cx0 + 6.8, cz0 + 0.4, cz0 + 5.2, rng);
-  tf(cx0 - 0.6, hd - 2.4, 0.7);
+  interface St { x: number; z: number; key: number; h: number; w: number; col: THREE.Color }
+  const stones: St[] = [];
+  for (let z = -hd + 2.2; z < wz + 2; z += 2.6)
+    for (let x = -hw + 2.2; x < hw - 2; x += 3.0) {
+      const sx = x + (R() - 0.5) * 1.2, sz = z + (R() - 0.5) * 0.6;
+      const key = R(), h = 0.7 + R() * 0.3, w = 0.6 + R() * 0.25, g = 0.72 + R() * 0.12;
+      if (inClear(sx, sz, 1.2) || pines.some(([px, pz]) => Math.hypot(px - sx, pz - sz) < 1.1)) continue;
+      stones.push({ x: sx, z: sz, key: key + Math.max(0, -sz) * 0.02, h, w, col: new THREE.Color(g, g, g * 0.98) });
+    }
+  stones.sort((a, b) => a.key - b.key);
+  const nS = Math.round(stones.length * frac);
+  for (let k = 0; k < nS; k++) {
+    const s = stones[k];
+    mb.box(s.x - s.w / 2, 0, s.z - 0.11, s.x + s.w / 2, s.h, s.z + 0.11, s.col);
+  }
+  // 森の中の細い砂利道（十字架の丘のうしろを横切る）
+  mb.ground(-hw + 1.5, pathZ - 0.8, hw - 1.5, pathZ + 0.8, 0.075, C(0xb8b09c));
 }
 
 // ---------------- 斎場（火葬場）----------------
