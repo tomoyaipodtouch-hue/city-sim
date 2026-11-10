@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { Grid } from '../sim/grid';
 import { BState, type Building } from '../sim/world';
 import { MeshBuilder } from './builder';
-import { generateBuilding, setupLot, TreeSpot, farmFields, FxSpot } from './buildingGen';
+import { generateBuilding, setupLot, TreeSpot, farmFields, FxSpot, cemeteryStage } from './buildingGen';
 import { forcedLogi } from './logiRegistry';
 import { createBuildingMaterial } from './materials';
 import { PondBuilder, createPondMaterial, createGlowMaterial, createFallMaterial } from './parkPond';
@@ -159,6 +159,7 @@ export class BuildingLayer {
         if (p) key += `p${p};`;
         if (cp) key += `j${cp.seed}.${cp.den}.${cp.L ? 1 : 0}${cp.R ? 1 : 0}${cp.lead ? 1 : 0}.${Math.round((cbase.get(cp.seed) ?? 0) * 10)};`;
         if (b.type === 'IA') key += `f${farmEmpty(g, b).length};`;
+        if (b.type === 'cemetery') key += `g${cemeteryStage(b)};`;
         if (cparkIds.has(b.id)) {
           let m = 0;
           for (let x = b.x; x < b.x + b.w; x++) m = m * 4 + (isCpark(x, b.y - 1) ? 1 : 0) + (isCpark(x, b.y + b.h) ? 2 : 0);
