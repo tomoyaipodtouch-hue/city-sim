@@ -16,6 +16,7 @@ import { MeshBuilder, PAT } from './builder';
 import { MAT } from './textures';
 import { createBuildingMaterial } from './materials';
 import type { TreeSpot } from './buildingGen';
+import { farmstead, ruralHouse } from './outskirtsHouses';
 
 const CHUNK = 16;
 export const OUT_MAXD = 14; // 飾るのは、開発されたマスからこのマス数まで
@@ -644,27 +645,8 @@ export class OutskirtsLayer {
       }
       mb.setTransform(0, 0, 0, 0);
     };
-    // 家（切妻屋根）：中心 (lx, lz)、幅 w（棟の向き）、奥行き d、軒の高さ eave、屋根の高さ rise。frame は敷地の向きと中心
-    const house = (fa: number, fx: number, fz: number, lx: number, lz: number, e: number, w: number, d: number, base: number, eave: number, rise: number, wall: THREE.Color, roof: THREE.Color, wallPat: number, wallMat: number | null, chimney: boolean) => {
-      const cs = Math.cos(fa), sn = Math.sin(fa);
-      mb.setTransform(fa + e, fx + lx * cs - lz * sn, 0, fz + lx * sn + lz * cs);
-      mb.matOverride = MAT.concrete;
-      mb.box(-w / 2, base - 1.2, -d / 2, w / 2, base + 0.4, d / 2, COL.plinth);
-      mb.matOverride = wallMat;
-      mb.box(-w / 2 + 0.05, base + 0.4, -d / 2 + 0.05, w / 2 - 0.05, base + eave, d / 2 - 0.05, wall, wallPat);
-      mb.matOverride = null;
-      mb.gableX(-w / 2, -d / 2, w / 2, d / 2, base + eave, rise, roof, wall, 0.45);
-      if (chimney) {
-        mb.matOverride = MAT.brick;
-        const cx = w / 2 - 1.6;
-        mb.box(cx - 0.4, base + eave, -0.9, cx + 0.4, base + eave + rise + 1.1, -0.1, COL.chimney);
-      }
-      mb.matOverride = null;
-      mb.setTransform(0, 0, 0, 0);
-    };
     // 敷地の座標（正面 = +z）から世界の座標へ
     const frameAng = (f: number) => [-Math.PI / 2, 0, Math.PI / 2, Math.PI][f];
-    const toW = (fa: number, fx: number, fz: number, lx: number, lz: number): [number, number] => [fx + lx * Math.cos(fa) - lz * Math.sin(fa), fz + lx * Math.sin(fa) + lz * Math.cos(fa)];
 
     for (let y = Y0; y < Y1; y++)
       for (let x = X0; x < X1; x++) {
@@ -807,112 +789,20 @@ export class OutskirtsLayer {
             rotors.push(r);
           }
         } else if (k === OK.house) {
-          // ---- 一軒家 ----
+          // ---- 一軒家（outskirtsHouses：地方ごとの形と、たくさんの組み合わせ） ----
           cellTop(x, y, LIFT, [COL.lawn, COL.lawn, COL.lawn, COL.lawn], MAT.ground);
-          const f = P.face[i], fa = frameAng(f);
-          const base = g.cellH(x, y);
-          const w = 8.5 + H(200) * 2, d = 7 + H(201) * 1.4;
-          const two = H(202) < 0.45;
-          const wall = COL.walls[Math.floor(H(203) * COL.walls.length)], roof = COL.roofs[Math.floor(H(204) * COL.roofs.length)];
-          const ox = (H(205) - 0.5) * 2;
-          house(fa, cxw, czw, ox, -0.6, 0, w, d, base, two ? 5.6 : 3.2, d * (two ? 0.5 : 0.62), wall, roof, PAT.house, null, H(206) < 0.7);
-          // 玄関から生け垣の入口までの砂利の小道
-          {
-            const sx = Math.max(-1.5, Math.min(1.5, ox));
-            const [ax, az] = toW(fa, cxw, czw, sx, d / 2 - 0.6), [bx, bz] = toW(fa, cxw, czw, sx, 7.6);
-            const L = 7.6 - (d / 2 - 0.6), ux = (bx - ax) / L, uz = (bz - az) / L;
-            strip(ax, az, ux, uz, 0, L, -0.7, 0.7, LIFT + 0.08, COL.gravel, COL.gravel, MAT.gravel);
-          }
-          // 庭の生け垣（横と裏。正面は低く、入口をあける）
-          {
-            mb.setTransform(fa, cxw, 0, czw);
-            const hc = COL.hedge[Math.floor(H(209) * 4)];
-            const lowBox = (x0: number, z0: number, x1: number, z1: number, ht: number) => {
-              const b2 = base;
-              mb.matOverride = MAT.none;
-              mb.box(x0, b2 - 0.6, z0, x1, b2 + ht, z1, hc, PAT.gardenLeaf);
-            };
-            lowBox(-7.6, -7.6, -6.6, 7.6, 1.6);
-            lowBox(6.6, -7.6, 7.6, 7.6, 1.6);
-            lowBox(-6.6, -7.6, 6.6, -6.6, 1.8);
-            lowBox(-6.6, 6.8, -2.5, 7.6, 1.0);
-            lowBox(2.5, 6.8, 6.6, 7.6, 1.0);
-            mb.matOverride = null;
-            mb.setTransform(0, 0, 0, 0);
-          }
-          // 庭の木
-          const nt = 1 + (H(210) < 0.4 ? 1 : 0);
-          for (let t = 0; t < nt; t++) {
-            const [tx, tz] = t ? toW(fa, cxw, czw, (ox > 0 ? -1 : 1) * 4.8, -5.6) : toW(fa, cxw, czw, (H(211) < 0.5 ? -1 : 1) * (4.6 + H(212) * 0.8), 5.4);
-            trees.push({ x: tx, y: gy(tx, tz), z: tz, s: 0.6 + H(213 + t) * 0.35, kind: H(215 + t) < 0.2 ? 1 : 0 });
-          }
+          const fa = frameAng(P.face[i]);
+          const base = g.cellH(x, y), lo = g.cellMinH(x, y);
+          for (const t of ruralHouse(mb, { fa, cx: cxw, cz: czw, base, lo, seed: hash2(x, y, 300), gy: (wx, wz) => g.groundAt(wx, wz) })) trees.push(t);
         } else if (k === OK.farm) {
-          // ---- 農家（2×2 マス） ----
+          // ---- 農家（2×2 マス、地方ごとの 5 種類） ----
           const fx = (x + 1) * CELL, fz = (y + 1) * CELL;
           for (let yy = y; yy <= y + 1; yy++) for (let xx = x; xx <= x + 1; xx++) if (g.inb(xx, yy)) cellTop(xx, yy, LIFT, [COL.lawn, COL.lawn, COL.lawn, COL.lawn], MAT.ground);
           let lo = 1e9, hi = -1e9;
           for (let yy = y; yy <= y + 1; yy++) for (let xx = x; xx <= x + 1; xx++) { lo = Math.min(lo, g.cellMinH(xx, yy)); hi = Math.max(hi, g.cellMaxH(xx, yy)); }
           const base = (lo + hi) / 2 + 0.1;
           const fa = frameAng(P.face[i]);
-          mb.setTransform(fa, fx, 0, fz);
-          // 砂利の庭
-          mb.matOverride = MAT.gravel;
-          mb.box(-12, lo - 0.3, -5, 3, base + 0.06, 7, COL.yard);
-          mb.box(-2.5, lo - 0.3, 7, 2.5, base + 0.04, 16, COL.yard);
-          mb.matOverride = null;
-          mb.setTransform(0, 0, 0, 0);
-          // 母屋（2階建て、急な屋根）
-          const wall = COL.walls[Math.floor(H(220) * COL.walls.length)], roof = COL.roofs[Math.floor(H(221) * COL.roofs.length)];
-          house(fa, fx, fz, -7, -10, 0, 13, 8, base, 5.8, 5.2, wall, roof, PAT.house, null, true);
-          // 納屋（大きく、ゆるい屋根。棟は奥行きの向き）
-          const bw = COL.barnWalls[Math.floor(H(222) * COL.barnWalls.length)], br = COL.barnRoofs[Math.floor(H(223) * COL.barnRoofs.length)];
-          const wood = bw === COL.barnWalls[0] || bw === COL.barnWalls[3];
-          house(fa, fx, fz, 8.5, -3, Math.PI / 2, 22, 12, base, 6.2, 4.2, bw, br, PAT.none, wood ? MAT.siding : null, false);
-          {
-            // 納屋の大きな戸（庭の側）
-            const [dx, dz] = toW(fa, fx, fz, 2.42, -3);
-            mb.setTransform(fa, dx, 0, dz);
-            mb.matOverride = MAT.siding;
-            mb.box(-0.12, base + 0.4, -2.6, 0.12, base + 4.8, 2.6, COL.door);
-            mb.matOverride = null;
-            mb.setTransform(0, 0, 0, 0);
-          }
-          // サイロ（ときどき）
-          if (H(224) < 0.45) {
-            const [sx, sz] = toW(fa, fx, fz, 12, 11.5);
-            mb.matOverride = MAT.metal;
-            mb.cylinder(sx, sz, base - 0.5, base + 11, 2.5, 14, COL.silo);
-            mb.cylinder(sx, sz, base + 11, base + 12.6, 2.5, 14, COL.silo, undefined, 0.3);
-            mb.matOverride = null;
-          } else {
-            // 小さな物置
-            house(fa, fx, fz, 11, 12, 0, 6, 4, base, 2.6, 1.3, COL.shed, br, PAT.none, MAT.siding, false);
-          }
-          // まわりの生け垣（正面の入口はあける）
-          {
-            const hc = COL.hedge[Math.floor(H(225) * 4)];
-            mb.setTransform(fa, fx, 0, fz);
-            mb.matOverride = MAT.none;
-            const hb = (x0: number, z0: number, x1: number, z1: number) => mb.box(x0, lo - 0.4, z0, x1, base + 2.0, z1, hc, PAT.gardenLeaf);
-            hb(-16, -16, 16, -14.8);
-            hb(-16, -14.8, -14.8, 16);
-            hb(14.8, -14.8, 16, 16);
-            hb(-14.8, 14.8, -3, 16);
-            hb(3, 14.8, 14.8, 16);
-            mb.matOverride = null;
-            mb.setTransform(0, 0, 0, 0);
-          }
-          // 果樹園（リンゴの木）と、母屋のそばの大きな木
-          for (let r = 0; r < 2; r++)
-            for (let c = 0; c < 3; c++) {
-              if (H(230 + r * 3 + c) < 0.15) continue;
-              const [tx, tz] = toW(fa, fx, fz, -13 + c * 4.2 + (H(240 + c) - 0.5), 9.5 + r * 4 + (H(245 + r) - 0.5) * 0.6);
-              trees.push({ x: tx, y: gy(tx, tz), z: tz, s: 0.42 + H(250 + r * 3 + c) * 0.12, kind: 0, shape: 0, col: 0x5f7f34 });
-            }
-          for (let t = 0; t < 2; t++) {
-            const [tx, tz] = toW(fa, fx, fz, t ? -14.5 : 1.5, t ? -3 : -14.2);
-            trees.push({ x: tx, y: gy(tx, tz), z: tz, s: 1.2 + H(260 + t) * 0.4, kind: 0, shape: 3 });
-          }
+          for (const t of farmstead(mb, { fa, cx: fx, cz: fz, base, lo, seed: hash2(x, y, 301), gy: (wx, wz) => g.groundAt(wx, wz) })) trees.push(t);
         }
 
         // ---- 農道（行き止まりの道の先）：草の帯の上に砂利の轍。先へ行くほど細く、草にうもれる ----

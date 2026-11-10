@@ -29,6 +29,7 @@ type Col = THREE.Color;
 const C = (h: number) => new THREE.Color(h);
 const PI = Math.PI;
 const LIFT = 0.12; // 呼ぶ側の芝生の浮かせる高さ
+const THATCH = MAT.plaster; // 茅葺き（細かいざらつき）
 
 // ---------------- 地方（広い範囲で同じ型がまとまる） ----------------
 // ゆがめた格子の点のうち、いちばん近い点の型（ボロノイ）。1つの地方は 400〜600m くらい
@@ -188,22 +189,22 @@ interface WinS {
 }
 // 窓：中心 a、下の高さ y0、幅 w、高さ h
 function win(k: Kit, W: Wall, a: number, y0: number, w: number, h: number, s: WinS) {
-  const fw = 0.09, d = 0.07;
-  if (s.surround) wbox(k, W, a - w / 2 - 0.26, a + w / 2 + 0.26, y0 - 0.22, y0 + h + 0.26, 0, 0.03, s.surround, MAT.plaster, 2);
+  const fw = 0.11, d = 0.07;
+  if (s.surround) wbox(k, W, a - w / 2 - 0.26, a + w / 2 + 0.26, y0 - 0.22, y0 + h + 0.26, 0, 0.03, s.surround, MAT.plaster, 7);
   wbox(k, W, a - w / 2 - fw, a + w / 2 + fw, y0 - fw, y0 + h + fw, 0, d, s.frame, MAT.none, 2);
   glass(k, W, a - w / 2, a + w / 2, y0, y0 + h, d + 0.005);
-  const bw = 0.05, bd = d + 0.02;
+  const bw = 0.055, bd = d + 0.02;
   k.m(MAT.none);
   if (s.bars === 1 || s.bars === 2 || s.bars === 3) k.mb.quad(wp(W, a - bw, y0, bd), wp(W, a + bw, y0, bd), wp(W, a + bw, y0 + h, bd), wp(W, a - bw, y0 + h, bd), s.frame);
   if (s.bars === 1) { const yb = y0 + h * 0.68; k.mb.quad(wp(W, a - w / 2, yb - bw, bd), wp(W, a + w / 2, yb - bw, bd), wp(W, a + w / 2, yb + bw, bd), wp(W, a - w / 2, yb + bw, bd), s.frame); }
   if (s.bars === 3)
     for (const f of [0.34, 0.67]) { const yb = y0 + h * f; k.mb.quad(wp(W, a - w / 2, yb - 0.025, bd), wp(W, a + w / 2, yb - 0.025, bd), wp(W, a + w / 2, yb + 0.025, bd), wp(W, a - w / 2, yb + 0.025, bd), s.frame); }
-  if (s.sill) wbox(k, W, a - w / 2 - 0.16, a + w / 2 + 0.16, y0 - 0.16, y0 - 0.05, 0, 0.17, s.sill, MAT.concrete, 2);
-  if (s.box) wbox(k, W, a - w / 2, a + w / 2, y0 - 0.38, y0 - 0.12, 0.1, 0.36, s.box, MAT.none, 2, PAT.gardenLeaf);
+  if (s.sill) wbox(k, W, a - w / 2 - 0.16, a + w / 2 + 0.16, y0 - 0.16, y0 - 0.05, 0, 0.17, s.sill, MAT.concrete, 6);
+  if (s.box) wbox(k, W, a - w / 2, a + w / 2, y0 - 0.38, y0 - 0.12, 0.1, 0.36, s.box, MAT.none, 6, PAT.gardenLeaf);
   if (s.shut) {
     const sw = w / 2 + 0.02;
-    wbox(k, W, a - w / 2 - fw - sw, a - w / 2 - fw - 0.02, y0 - 0.02, y0 + h + 0.04, 0.02, 0.07, s.shut, MAT.siding, 2);
-    wbox(k, W, a + w / 2 + fw + 0.02, a + w / 2 + fw + sw, y0 - 0.02, y0 + h + 0.04, 0.02, 0.07, s.shut, MAT.siding, 2);
+    wbox(k, W, a - w / 2 - fw - sw, a - w / 2 - fw - 0.02, y0 - 0.02, y0 + h + 0.04, 0.02, 0.07, s.shut, MAT.siding, 3);
+    wbox(k, W, a + w / 2 + fw + 0.02, a + w / 2 + fw + sw, y0 - 0.02, y0 + h + 0.04, 0.02, 0.07, s.shut, MAT.siding, 3);
   }
 }
 // 玄関の戸：中心 a、幅 w、高さ h、床の高さ y0
@@ -237,14 +238,20 @@ function roof(k: Kit, x0: number, z0: number, x1: number, z1: number, y: number,
   const bE0: V3 = [x1 + e1.o, ye, z0e], bE1: V3 = [x0 - e0.o, ye, z0e];
   const bC1: V3 = [x0 - e0.o, e0.yc, zm - e0.hz], bC0: V3 = [x1 + e1.o, e1.yc, zm - e1.hz];
   k.m(o.roofMat ?? MAT.shingle);
+  // 4つの点の面。同じ点が重なるときは三角形にする（法線がつぶれないように）
+  const q4 = (a: V3, b: V3, c: V3, d: V3) => {
+    const P = [a, b, c, d].filter((p, i, A) => { const q = A[(i + 3) % 4]; return Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]) + Math.abs(p[2] - q[2]) > 1e-4; });
+    if (P.length === 4) mb.quad(P[0], P[1], P[2], P[3], rc);
+    else if (P.length === 3) mb.tri(P[0], P[1], P[2], rc);
+  };
   const both = e0.hip && !e0.gable && e1.hip && !e1.gable;
   if (!both) {
-    mb.quad(T(E0), T(E1), T(C1), T(C0), rc);
-    mb.quad(T(bE0), T(bE1), T(bC1), T(bC0), rc);
+    q4(T(E0), T(E1), T(C1), T(C0));
+    q4(T(bE0), T(bE1), T(bC1), T(bC0));
   }
   if (e0.hip || e1.hip) {
-    mb.quad(T(C0), T(C1), T(R1), T(R0), rc);
-    mb.quad(T(bC0), T(bC1), T(R0), T(R1), rc);
+    q4(T(C0), T(C1), T(R1), T(R0));
+    q4(T(bC0), T(bC1), T(R0), T(R1));
   }
   if (e1.hip) mb.tri(T(C1), T(bC0), T(R1), rc);
   if (e0.hip) mb.tri(T(bC1), T(C0), T(R0), rc);
@@ -324,7 +331,10 @@ function chimney(k: Kit, x: number, z: number, w: number, d: number, y0: number,
 function dormer(k: Kit, R: RoofI, dx: number, dw: number, dh: number, zf: number, roofCol: Col, wallCol: Col, wallMat: number | null, ws: WinS, shed = false) {
   const yb = Math.min(roofY(R, zf), roofY(R, R.z1)) - (zf >= R.z1 - 0.01 ? 0.7 : 0.05);
   const yd = yb + dh;
-  const zb = Math.max(R.zm + 0.3, R.z1 - (yd + 0.4 - R.y - R.t) / R.kk);
+  // 屋根窓の棟は、母屋の屋根の斜面にぶつかるところまで（屋根から突き抜けないように）
+  const rd = Math.min(dw * 0.55, R.yt + R.t - yd - 0.15);
+  if (rd < 0.3) return;
+  const zb = Math.max(R.zm + 0.2, R.z1 - (yd + (shed ? 0.4 : rd + 0.05) - R.y - R.t) / R.kk);
   if (zb >= zf - 0.5) return;
   box(k, dx - dw / 2, yb - 0.6, zb, dx + dw / 2, yd, zf, wallCol, wallMat, { skip: 2 | 16 });
   win(k, sides(dx - dw / 2, zb, dx + dw / 2, zf)[0], 0, yb + 0.3, dw - 0.55, Math.max(0.6, dh - 0.55), { ...ws, shut: null, box: null, surround: null, sill: null });
@@ -339,7 +349,7 @@ function dormer(k: Kit, R: RoofI, dx: number, dw: number, dh: number, zf: number
   }
   const mid = (zb + zf) / 2, L = zf - zb;
   k.push(dx, mid, PI / 2);
-  roof(k, -L / 2 - 0.3, -dw / 2, L / 2, dw / 2, yd, dw * 0.55, roofCol, wallCol, { ov: 0.18, ovG: 0.12, t: 0.12, wallMat });
+  roof(k, -L / 2, -dw / 2, L / 2, dw / 2, yd, rd, roofCol, wallCol, { ov: 0.18, ovG: 0.12, t: 0.12, wallMat, gable0: false });
   k.pop();
 }
 
@@ -476,6 +486,25 @@ function woodpile(k: Kit, x0: number, z0: number, x1: number, h: number, ang = 0
   k.pop();
 }
 
+// 片流れの小屋（前が開いている。荷車や機械の置き場）。中心 x, z、+z が前
+function lean(k: Kit, x: number, z: number, ang: number, w: number, d: number, h: number, roofC: Col, wood: Col) {
+  k.push(x, z, ang);
+  const [fl, lo] = floorAt(k, -w / 2, -d / 2, w / 2, d / 2, 0.05);
+  box(k, -w / 2, lo - 0.3, -d / 2, w / 2, fl + h + 0.6, -d / 2 + 0.15, wood, MAT.siding, { top: null, vert: true });
+  for (const sx of [-1, 1]) box(k, sx * w / 2 - 0.08, lo - 0.3, -d / 2, sx * w / 2 + 0.08, fl + h + 0.4, d / 2 - 0.2, wood, MAT.siding, { top: null, vert: true, skip: sx > 0 ? 8 : 4 });
+  for (const px of [-w / 2 + 0.1, 0, w / 2 - 0.1]) box(k, px - 0.1, lo - 0.3, d / 2 - 0.3, px + 0.1, fl + h, d / 2 - 0.1, wood, MAT.none);
+  k.m(MAT.shingle);
+  k.mb.quad([-w / 2 - 0.3, fl + h, d / 2 + 0.4], [w / 2 + 0.3, fl + h, d / 2 + 0.4], [w / 2 + 0.3, fl + h + 0.8, -d / 2 - 0.3], [-w / 2 - 0.3, fl + h + 0.8, -d / 2 - 0.3], roofC);
+  k.m(MAT.none);
+  k.mb.quad([-w / 2 - 0.3, fl + h - 0.15, d / 2 + 0.4], [w / 2 + 0.3, fl + h - 0.15, d / 2 + 0.4], [w / 2 + 0.3, fl + h, d / 2 + 0.4], [-w / 2 - 0.3, fl + h, d / 2 + 0.4], wood);
+  k.mb.quad([w / 2 + 0.3, fl + h - 0.15, d / 2 + 0.4], [-w / 2 - 0.3, fl + h - 0.15, d / 2 + 0.4], [-w / 2 - 0.3, fl + h + 0.65, -d / 2 - 0.3], [w / 2 + 0.3, fl + h + 0.65, -d / 2 - 0.3], C(0x4a3c30));
+  // 中の荷車
+  box(k, -1.6, fl + 0.45, -0.9, 1.4, fl + 0.95, 0.9, C(0x6a5038), MAT.siding);
+  cylX(k, -1.25, -1.1, fl + 0.5, 0, 0.5, C(0x3a3028), 8, true);
+  cylX(k, 1.1, 1.25, fl + 0.5, 0, 0.5, C(0x3a3028), 8, true);
+  k.pop();
+}
+
 // 生け垣（いまの座標系で x0..x1、z0..z1 の箱。地面に合わせる）
 const HEDGE = [0x3f5f2a, 0x4a6b2e, 0x52702f, 0x3a5628].map(C);
 function hedge(k: Kit, x0: number, z0: number, x1: number, z1: number, h: number, col: Col) {
@@ -538,8 +567,8 @@ function flowerBed(k: Kit, x0: number, x1: number, z0: number, z1: number) {
   const n = Math.max(2, Math.round((x1 - x0) / 0.9));
   for (let i = 0; i < n; i++) {
     const a = x0 + ((x1 - x0) * i) / n, b = a + (x1 - x0) / n, g = k.gh((a + b) / 2, (z0 + z1) / 2);
-    const col = i % 3 === 1 ? HEDGE[1] : k.r.pick(FLOWERS);
-    box(k, a, g - 0.1, z0, b, g + 0.28 + k.r.next() * 0.25, z1, col, MAT.none, { pat: PAT.gardenLeaf, skip: 2 });
+    const col = i % 3 === 1 ? HEDGE[2] : k.r.pick(FLOWERS);
+    box(k, a, g - 0.1, z0, b, g + 0.22 + k.r.next() * 0.22, z1, HEDGE[(i + 1) % 4], MAT.none, { pat: PAT.gardenLeaf, skip: 2, top: col });
   }
 }
 // 小さな切妻の物置（中心 x, z、向き ang）
@@ -790,16 +819,15 @@ function buildHouse(k: Kit, S: HS) {
   let D = S.floors === 1 ? r.range(7.6, 9.0) : r.range(7.0, 8.4); // 奥行き
   if (S.style === 'alpine') { L = r.range(9.5, 11); D = r.range(8.5, 9.6); }
   if (S.gableToRoad) L = Math.min(L, 9.6);
-  const ex = S.gableToRoad ? D : L, ez = S.gableToRoad ? L : D; // 敷地の x・z の大きさ
+  // 敷地の x の向きに収まるように縮める（車庫の分をあける）
   const maxX = hasG ? 14.4 - 3.9 : 14.4;
-  const sx = Math.min(1, maxX / ex);
+  const sx = Math.min(1, maxX / (S.gableToRoad ? D : L));
   if (S.gableToRoad) D *= sx; else L *= sx;
   const EX = S.gableToRoad ? D : L, EZ = S.gableToRoad ? L : D;
   const hx = hasG ? -g * (3.9 / 2) + r.range(-0.3, 0.3) : r.range(-0.7, 0.7);
   const zF = Math.min(r.range(1.0, 2.6), 7.0 - EZ + 2.6 + 0.4);
   const hz = Math.max(-7.1 + EZ / 2, zF - EZ / 2);
   const rot = S.gableToRoad ? PI / 2 : 0;
-  void ex; void ez;
 
   // ---- 地面のもの（小道・車寄せ）を先に ----
   const front = hz + EZ / 2; // 敷地の z（正面の壁）
@@ -825,7 +853,28 @@ function buildHouse(k: Kit, S: HS) {
   const fi = S.gableToRoad ? 1 : 0, bi = (fi + 2) % 4;
   // 車庫の側の面
   const gi = S.gableToRoad ? (g > 0 ? 2 : 0) : (g > 0 ? 1 : 3);
-  if (S.upper) {
+  // 近代的な2階建ての平屋根：2階は別の箱（片側へ張り出す、ちがう外壁）
+  const split = S.roofKind === 'flat' && S.floors === 2;
+  let UV: [number, number, number, number] = [x0, z0, x1, z1];
+  let UC = S.wall, UM = S.wallMat, UVert = S.vert;
+  if (split) {
+    const Lu = L * r.range(0.62, 0.8);
+    let over = r.range(0.6, 1.5);
+    const edge = (u: number) => Math.abs(hx + u) + Lu / 2;
+    let ux = -g * ((L - Lu) / 2 + over);
+    while (edge(ux) > 7.2 && over > 0) { over -= 0.2; ux = -g * ((L - Lu) / 2 + over); }
+    UV = [ux - Lu / 2, z0 + r.range(0, 0.8), ux + Lu / 2, z1 + r.range(0, 0.9)];
+    const light = S.wall.getHex() === 0xf3f3f1 || S.wall.getHex() === 0xd9d4ca;
+    const pick = r.next();
+    if (light) { UC = pick < 0.6 ? C(0xa57b52) : C(0x2e3033); UM = MAT.siding; UVert = true; }
+    else { UC = C(0xf3f3f1); UM = MAT.plaster; UVert = false; }
+    body(k, x0, z0, x1, z1, fl, fl + 3.0, S.wall, S.wallMat, S.plinth, S.vert, lo);
+    box(k, x0 - 0.12, fl + 3.0, z0 - 0.12, x1 + 0.12, fl + 3.3, z1 + 0.12, C(0xe8e8e4), MAT.plaster, { top: C(0x8a8c8e) });
+    box(k, UV[0], fl + 3.3, UV[1], UV[2], top, UV[3], UC, UM, { top: null, vert: UVert, vb: fl + 2 });
+    // 張り出した下の面（軒裏）
+    k.m(MAT.none);
+    k.mb.quad([UV[0], fl + 3.3, UV[1]], [UV[2], fl + 3.3, UV[1]], [UV[2], fl + 3.3, UV[3]], [UV[0], fl + 3.3, UV[3]], C(0x3a3d40));
+  } else if (S.upper) {
     body(k, x0, z0, x1, z1, fl, fl + 2.95, S.wall, S.wallMat, S.plinth, S.vert, lo);
     box(k, x0 - 0.04, fl + 2.95, z0 - 0.04, x1 + 0.04, top, z1 + 0.04, S.upper.col, S.upper.mat, { top: null, vert: S.upper.vert, vb: fl - 3 });
   } else body(k, x0, z0, x1, z1, fl, top, S.wall, S.wallMat, S.plinth, S.vert, lo);
@@ -867,8 +916,18 @@ function buildHouse(k: Kit, S: HS) {
       }
     }
   } else if (rk === 'flat') {
-    box(k, x0 - 0.15, top, z0 - 0.15, x1 + 0.15, top + 0.45, z1 + 0.15, S.roof === S.wall ? S.wall : C(0xe8e8e4), MAT.plaster, { top: C(0x7d7f80) });
-    box(k, x0 - 0.2, top + 0.45, z0 - 0.2, x1 + 0.2, top + 0.52, z1 + 0.2, C(0x6e7174), MAT.metal);
+    if (!split) {
+      // 平屋：片側だけ少し高い、木（または濃い色）の箱
+      const wl = L * r.range(0.3, 0.42), side = g;
+      const ax0 = side > 0 ? x1 - wl : x0, ax1 = side > 0 ? x1 : x0 + wl;
+      const acc = S.wall.getHex() === 0xa57b52 ? C(0x2e3033) : C(0xa57b52);
+      box(k, ax0 - 0.05, top - 0.2, z0 - 0.35, ax1 + 0.05, top + 0.9, z1 + 0.35, acc, MAT.siding, { top: C(0x7d7f80), vert: true, vb: top - 3 });
+      box(k, ax0 + (side > 0 ? 0.3 : 0.05), fl + 0.3, z1, ax1 - (side > 0 ? 0.05 : 0.3), top - 0.2, z1 + 0.35, acc, MAT.siding, { top: null, vert: true, skip: 2 });
+      glass(k, sides(ax0, z0, ax1, z1 + 0.35)[0], -wl / 2 + 0.5, wl / 2 - 0.5, fl + 0.5, top - 0.5, 0.01);
+    }
+    const [ax, az, bx2, bz] = UV;
+    box(k, ax - 0.25, top, az - 0.25, bx2 + 0.25, top + 0.35, bz + 0.25, C(0xe8e8e4), MAT.plaster, { top: C(0x7d7f80) });
+    box(k, ax - 0.25, top + 0.35, az - 0.25, bx2 + 0.25, top + 0.42, bz + 0.25, C(0x6e7174), MAT.metal);
   } else {
     // 片流れ：後ろが高く、前が低い
     const yH = top + D * 0.22, yL = top + 0.2;
@@ -886,14 +945,8 @@ function buildHouse(k: Kit, S: HS) {
   }
 
   // ---- 窓と戸 ----
-  const doorA = (() => {
-    // 正面の壁の座標で、戸の位置
-    const [dlx] = [doorX - hx];
-    if (S.gableToRoad) return -dlx; // 面 1 の a は -z（= 敷地の -x ではなく…）下で直す
-    return dlx;
-  })();
-  // 面 1（+x）の a は local の -z。敷地では、rot = π/2 のとき local +x → 敷地 +z、local -z → 敷地 +x … a = 敷地の x - hx
-  const dA = S.gableToRoad ? doorX - hx : doorA;
+  // 正面の壁の座標での戸の位置。妻入り（rot = π/2）でも、面 1 の a の向き（local の -z）は敷地の +x になる
+  const dA = doorX - hx;
   const gf = fl + 0.3; // 1階の床の上
   const rows: [number, number][] = [[gf + 0.6 + (S.big ? -0.45 : 0.3), S.big ? 2.15 : S.winH]];
   if (S.floors === 2) rows.push([gf + 2.9 + 0.75, S.big ? 1.6 : S.winH]);
@@ -907,6 +960,7 @@ function buildHouse(k: Kit, S: HS) {
     for (let row = 0; row < rows.length; row++) {
       const [y0, h] = rows[row];
       if (i === gi && hasG && row === 0) continue;
+      if (split && row === 1) continue;
       for (let j = 0; j < n; j++) {
         let a = -len / 2 + (len * (j + 0.5)) / n;
         if (S.big && n === 1) a = (r.next() - 0.5) * (len - ww - 1.6);
@@ -933,8 +987,26 @@ function buildHouse(k: Kit, S: HS) {
       }
     }
   }
+  if (split) {
+    // 2階の箱：長い横長の窓と、大きな窓
+    const US = sides(UV[0], UV[1], UV[2], UV[3]);
+    const y2 = fl + 3.3 + 0.75;
+    for (let i = 0; i < 4; i++) {
+      const Wu = US[i];
+      if (i === 0 || i === 2) {
+        const wl = Wu.len * r.range(0.45, 0.7);
+        win(k, Wu, (r.next() - 0.5) * (Wu.len - wl - 0.8), y2 - 0.25, wl, 1.3, S.ws);
+      } else if (r.next() < 0.7) win(k, Wu, (r.next() - 0.5) * (Wu.len - 2.6), y2 - 0.55, 1.4, 1.9, S.ws);
+    }
+  }
   // 玄関
   const FW = W[fi];
+  if (S.style === 'modern' && !split) {
+    // 玄関のまわりの木の板（アクセント）
+    const wood = S.wall.getHex() === 0xa57b52 ? C(0x2e3033) : C(0xa57b52);
+    const aL = Math.max(-FW.len / 2 + 0.1, dA - 1.1), aR = Math.min(FW.len / 2 - 0.1, dA + r.range(1.3, 2.4));
+    wbox(k, FW, aL, aR, gf - 0.05, Math.min(top - 0.05, gf + (S.floors === 2 ? 5.3 : 2.75)), 0, 0.05, wood, MAT.siding, 2);
+  }
   door(k, FW, dA, gf, 1.05, 2.15, S.doorC, S.ws.frame === ANTH ? ANTH : S.trim ?? WHITE);
   {
     // 玄関の段
@@ -1022,8 +1094,8 @@ function buildHouse(k: Kit, S: HS) {
     k.m(MAT.none);
     const yy = top + 0.5;
     for (let row = 0; row < 2; row++) {
-      const za = z0 + 1.2 + row * 2.2, zb = za + 1.5;
-      const x0p = x0 + 1.0, x1p = x1 - 1.0;
+      const za = UV[1] + 1.2 + row * 2.2, zb = za + 1.5;
+      const x0p = UV[0] + 1.0, x1p = UV[2] - 1.0;
       k.mb.quad([x0p, yy + 0.2, zb], [x1p, yy + 0.2, zb], [x1p, yy + 0.75, za], [x0p, yy + 0.75, za], PANEL);
       k.mb.quad([x0p, yy, za], [x1p, yy, za], [x1p, yy + 0.75, za], [x0p, yy + 0.75, za], C(0x8a8d90));
     }
@@ -1035,7 +1107,10 @@ function buildHouse(k: Kit, S: HS) {
     const yb = fl + 3.15;
     wbox(k, BW, -BW.len / 2 - 0.2, BW.len / 2 + 0.2, yb - 0.2, yb, 0, 1.3, S.upper?.col ?? WOODF, MAT.siding, 0);
     wbox(k, BW, -BW.len / 2 - 0.2, BW.len / 2 + 0.2, yb, yb + 1.0, 1.22, 1.3, S.upper?.col ?? WOODF, MAT.siding, 0);
-    if (S.ws.box) wbox(k, BW, -BW.len / 2, BW.len / 2, yb + 0.95, yb + 1.2, 1.12, 1.42, S.ws.box, MAT.none, 0, PAT.gardenLeaf);
+    if (S.ws.box) {
+      const nb = Math.max(2, Math.floor(BW.len / 2.2));
+      for (let i = 0; i < nb; i++) { const a = -BW.len / 2 + (BW.len * (i + 0.5)) / nb; wbox(k, BW, a - 0.55, a + 0.55, yb + 0.98, yb + 1.18, 1.14, 1.4, i % 2 ? HEDGE[2] : S.ws.box, MAT.none, 0, PAT.gardenLeaf); }
+    }
   }
 
   // ---- 温室（裏） ----
@@ -1054,7 +1129,8 @@ function buildHouse(k: Kit, S: HS) {
       for (let j = 0; j <= nb; j++) { const aa = -Wc.len / 2 + (Wc.len * j) / nb; wbox(k, Wc, aa - 0.04, aa + 0.04, yb, yt, 0, 0.05, WHITE, MAT.none, 3); }
     }
     k.m(MAT.none);
-    k.mb.quad([-cw / 2 - 0.1, yt, cd / 2 + 0.1], [cw / 2 + 0.1, yt, cd / 2 + 0.1], [cw / 2 + 0.1, yt + 0.9, -cd / 2], [-cw / 2 - 0.1, yt + 0.9, -cd / 2], C(0x8fa4ae), PAT.house, 1.2, 1.2, 1.2, 3.95);
+    k.mb.quad([-cw / 2 - 0.1, yt, cd / 2 + 0.1], [cw / 2 + 0.1, yt, cd / 2 + 0.1], [cw / 2 + 0.1, yt + 0.9, -cd / 2], [-cw / 2 - 0.1, yt + 0.9, -cd / 2], C(0x55656e));
+    for (let j = 0; j <= 4; j++) { const xx = -cw / 2 - 0.1 + ((cw + 0.2) * j) / 4; k.mb.quad([xx - 0.04, yt + 0.02, cd / 2 + 0.1], [xx + 0.04, yt + 0.02, cd / 2 + 0.1], [xx + 0.04, yt + 0.92, -cd / 2], [xx - 0.04, yt + 0.92, -cd / 2], WHITE); }
     k.pop();
   }
 
@@ -1293,7 +1369,7 @@ function longere(k: Kit) {
   const quoin = rendered ? C(0xb8ad98) : stone.clone().lerp(C(0xe0d8c8), 0.45);
   const rkind = r.next();
   const roofC = rkind < 0.6 ? C(r.pick([0x454b52, 0x3e444b])) : rkind < 0.8 ? C(0x7c6a4c) : C(0x9a5236);
-  const roofM = rkind >= 0.6 && rkind < 0.8 ? MAT.ground : MAT.shingle; // 茅葺き
+  const roofM = rkind >= 0.6 && rkind < 0.8 ? THATCH : MAT.shingle; // 茅葺き
   const frame = C(r.pick([0xf0eee8, 0x7d97a6, 0x6a8a7a, 0x8a5a3a, 0xc8c2b4]));
   const wood = C(r.pick([0x5d4632, 0x3f5a46, 0x6a2c26, 0x4a5a6a]));
   const ws: WinS = { frame, bars: 3, shut: r.next() < 0.5 ? frame.clone().multiplyScalar(0.85) : null, sill: null, surround: rendered ? null : quoin };
@@ -1322,7 +1398,7 @@ function longere(k: Kit) {
     // 角の石
     for (const cx of [a, b]) for (const cz of [z0, z1]) box(k, cx - 0.32, fl, cz - 0.32, cx + 0.32, fl + eh - 0.05, cz + 0.32, quoin, wmat, { top: null });
     const c0 = s === 0 && flip > 0 ? (r.next() < 0.3 ? 0.65 : 1) : 1;
-    roof(k, a, z0, b, z1, fl + eh, rise, roofC, wall, { ov: 0.35, ovG: 0.15, wallMat: wmat, roofMat: roofM, fascia: roofC, soffit: C(0x5a4a3a), c0: flip > 0 ? c0 : 1, c1: flip < 0 && s === 0 ? c0 : 1 });
+    roof(k, a, z0, b, z1, fl + eh, rise, roofC, wall, { ov: 0.35, ovG: 0.15, wallMat: wmat, roofMat: roofM, t: roofM === THATCH ? 0.45 : 0.2, fascia: roofC, soffit: C(0x5a4a3a), c0: flip > 0 ? c0 : 1, c1: flip < 0 && s === 0 ? c0 : 1 });
     const F = sides(a, z0, b, z1)[0], B = sides(a, z0, b, z1)[2];
     const len = b - a;
     if (kind === 'house') {
@@ -1382,9 +1458,12 @@ function longere(k: Kit) {
   // 小さな離れ（パン焼き小屋）
   shed(k, flip * 10.8, 9.5, flip > 0 ? -PI / 2 : PI / 2, 3.6, 3.0, wall, roofC, wood, 2.3, wmat);
   // 果樹園（シードル用のリンゴ）
-  orchard(k, flip > 0 ? -14 : 4.5, 4.5, flip > 0 ? -4.5 : 14, 14.5, 3.6);
-  if (r.next() < 0.7) tractor(k, flip * 6.5, -1.5, r.range(-0.6, 0.6) + PI / 2);
-  if (r.next() < 0.6) for (let i = 0; i < 3; i++) bale(k, flip * (11.5 - i * 1.3), 1.8, PI / 2, BALE.straw);
+  orchard(k, flip > 0 ? -14.5 : 4.2, 4.2, flip > 0 ? -4.2 : 14.5, 14.6, 3.0);
+  // 荷車の小屋（片流れ、前が開いている）
+  lean(k, flip * 12.6, -1.2, flip > 0 ? -PI / 2 : PI / 2, 6.5, 3.6, 3.0, roofC, C(0x5d4632));
+  if (r.next() < 0.75) tractor(k, flip * 6.0, -1.0, r.range(-0.6, 0.6) + PI / 2);
+  for (let i = 0; i < 3; i++) bale(k, flip * (8.8 - i * 1.3), 3.0, PI / 2, BALE.straw);
+  if (r.next() < 0.5) bale(k, flip * 8.15, 3.0, PI / 2, BALE.straw, 1.4);
   k.tree(-flip * 12.5, -3.2, r.range(1.2, 1.5), 0, 3);
 }
 
@@ -1392,7 +1471,7 @@ function longere(k: Kit) {
 function stolp(k: Kit) {
   const r = k.r;
   const brick = C(r.pick([0x8a4430, 0x7a3e2e, 0x9b5338, 0x6e3a2c]));
-  const thatch = r.next() < 0.55;
+  const thatch = r.next() < 0.7;
   const roofC = thatch ? C(0x7a6748) : C(r.pick([0x34373a, 0x8a4430]));
   const skirt = C(r.pick([0x8a4430, 0x34373a]));
   const green = C(r.pick([0x2f5a3e, 0x2f4a3a, 0x3a5a4a]));
@@ -1412,7 +1491,7 @@ function stolp(k: Kit) {
   // 下の帯（瓦のすそ）と、上の茅葺き
   if (thatch) {
     const yb = eave + 1.6, ins = 1.6 / 1.32;
-    roof(k, -h + ins, -h + ins, h - ins, h - ins, yb, rise - 1.6, roofC, brick, { ov: 0, c0: 0, c1: 0, t: 0.35, roofMat: MAT.ground, fascia: roofC });
+    roof(k, -h + ins, -h + ins, h - ins, h - ins, yb, rise - 1.6, roofC, brick, { ov: 0, c0: 0, c1: 0, t: 0.35, roofMat: THATCH, fascia: roofC });
     k.m(MAT.shingle);
     const o = 0.55, ye = eave - o * 1.32;
     const L4: V3[] = [[-h - o, ye, h + o], [h + o, ye, h + o], [h + o, ye, -h - o], [-h - o, ye, -h - o]];
@@ -1435,8 +1514,7 @@ function stolp(k: Kit) {
   const [ffl, flo] = floorAt(k, -fd / 2, -fw / 2, fd / 2, fw / 2, 0.3);
   const fe = ffl + 3.6;
   body(k, -fd / 2 - 0.5, -fw / 2, fd / 2, fw / 2, ffl, fe, brick, MAT.brick, brick.clone().multiplyScalar(0.7), false, flo);
-  const FR = roof(k, -fd / 2 - 0.5, -fw / 2, fd / 2, fw / 2, fe, (fw / 2) * 1.15, thatch ? skirt : roofC, brick, { ov: 0.3, ovG: 0.25, fascia: WHITE, soffit: WHITE, wallMat: MAT.brick });
-  void FR;
+  roof(k, -fd / 2 - 0.5, -fw / 2, fd / 2, fw / 2, fe, (fw / 2) * 1.15, thatch ? skirt : roofC, brick, { ov: 0.3, ovG: 0.25, fascia: WHITE, soffit: WHITE, wallMat: MAT.brick });
   const FS = sides(-fd / 2 - 0.5, -fw / 2, fd / 2, fw / 2);
   winRow(k, FS[1], [-fw * 0.28, fw * 0.28], ffl + 1.2, 1.15, 1.6, ws);
   door(k, FS[1], 0, ffl + 0.3, 1.0, 2.2, green, WHITE);
@@ -1456,8 +1534,8 @@ function stolp(k: Kit) {
   {
     const g = k.gh(0, 0), s = 2.3, ph = 7.5, roofY = g + r.range(4.4, 6.2);
     for (const [px, pz] of [[-s, -s], [s, -s], [-s, s], [s, s]]) box(k, px - 0.12, g - 0.3, pz - 0.12, px + 0.12, g + ph, pz + 0.12, C(0x5d4a38), MAT.none);
-    box(k, -s + 0.15, g - 0.2, -s + 0.15, s - 0.15, roofY - 0.6, s - 0.15, C(0xb59a5e), MAT.ground, { pat: 0 });
-    roof(k, -s - 0.2, -s - 0.2, s + 0.2, s + 0.2, roofY, 1.8, thatch ? roofC : C(0x6a5a40), C(0x5d4a38), { ov: 0.3, c0: 0, c1: 0, t: 0.15, roofMat: thatch ? MAT.ground : MAT.shingle });
+    box(k, -s + 0.15, g - 0.2, -s + 0.15, s - 0.15, roofY - 0.6, s - 0.15, C(0xb59a5e), THATCH);
+    roof(k, -s - 0.2, -s - 0.2, s + 0.2, s + 0.2, roofY, 1.8, thatch ? roofC : C(0x6a5a40), C(0x5d4a38), { ov: 0.3, c0: 0, c1: 0, t: 0.15, roofMat: thatch ? THATCH : MAT.shingle });
   }
   k.at(0, 0, 0);
   // まわり：高い生け垣とポプラ
@@ -1480,9 +1558,9 @@ function hallenhaus(k: Kit) {
   const brick = C(r.pick([0x8e4a36, 0x9b5338, 0x7a3e2e, 0xa0563a]));
   const oak = C(r.pick([0x3b2a20, 0x2e2622, 0x4a3426]));
   const rk = r.next();
-  const thatch = rk < 0.45;
+  const thatch = rk < 0.55;
   const roofC = thatch ? C(0x6e5e42) : rk < 0.85 ? C(0x9b4a32) : C(0x3e4044);
-  const roofM = thatch ? MAT.ground : MAT.shingle;
+  const roofM = thatch ? THATCH : MAT.shingle;
   const doorC = C(r.pick([0x2f5a3e, 0x6b4a32, 0x7a2a25, 0x3a4a5a]));
   const ws: WinS = { frame: WHITE, bars: 3, shut: null, sill: null };
   const flip = r.next() < 0.5 ? 1 : -1;
@@ -1497,7 +1575,7 @@ function hallenhaus(k: Kit) {
   const [fl, lo] = floorAt(k, x0, z0, x1, z1, 0.25);
   const eave = fl + 2.5, rise = hw * 1.22;
   body(k, x0, z0, x1, z1, fl - 0.25, eave, brick, MAT.brick, C(0x6e6a64), false, lo);
-  roof(k, x0, z0, x1, z1, eave, rise, roofC, brick, { ov: 0.6, ovG: 0.35, c0: r.next() < 0.6 ? 0.55 : 1, c1: 1, roofMat: roofM, fascia: oak, soffit: oak, wallMat: MAT.brick });
+  roof(k, x0, z0, x1, z1, eave, rise, roofC, brick, { ov: 0.6, ovG: 0.35, c0: r.next() < 0.6 ? 0.55 : 1, c1: 1, roofMat: roofM, fascia: thatch ? roofC : oak, soffit: oak, wallMat: MAT.brick, t: thatch ? 0.5 : 0.2 });
   const S = sides(x0, z0, x1, z1);
   // 正面の妻（+x）：木組み、大きな戸（グローテ・ドェール）
   const G = S[1];
@@ -1560,10 +1638,10 @@ function hallenhaus(k: Kit) {
   lowWall(k, -15.6, 15.2, hx - 3.4, 15.7, 0.85, stoneC, MAT.gravel, C(0x7a7266));
   lowWall(k, hx + 3.4, 15.2, 15.6, 15.7, 0.85, stoneC, MAT.gravel, C(0x7a7266));
   // オークの大木
-  k.tree(hx + flip * 9.5, 13, r.range(1.6, 1.9), 0, 3, 0x4f7034);
-  k.tree(hx - flip * 9.8, 6, r.range(1.5, 1.8), 0, 3, 0x557a2c);
-  k.tree(-flip * 13.8, -14.2, r.range(1.5, 1.8), 0, 0, 0x4f7034);
-  if (r.next() < 0.6) k.tree(flip * 14, 14, r.range(1.3, 1.6), 0, 3);
+  k.tree(-flip * 14.6, 1, r.range(1.5, 1.8), 0, 3, 0x4f7034);
+  k.tree(-flip * 13.8, -12.5, r.range(1.5, 1.8), 0, 0, 0x557a2c);
+  k.tree(flip * 14.2, 14.2, r.range(1.3, 1.6), 0, 3, 0x4f7034);
+  if (r.next() < 0.6) k.tree(flip * 7, -14.4, r.range(1.2, 1.5), 0, 3);
   hedge(k, -15.8, -15.8, 15.8, -15.0, 1.8, HEDGE[r.int(4)]);
   // 庭の機械とロール
   tractor(k, flip * 7.5, 4.5, r.range(-0.5, 0.5) + (flip > 0 ? 0 : PI));
@@ -1590,8 +1668,6 @@ function vierseithof(k: Kit) {
   const pitch = r.range(0.95, 1.1);
   // 正面の棟（住まい、2階建て、門）
   const frontH = 5.6, backH = r.range(5.8, 6.6), sideH = r.range(3.4, 3.9);
-  const ridgeOf = (h: number) => fl + h + (dW / 2) * pitch;
-  void ridgeOf;
   // 前（z = E-dW..E）と後ろ（-E..-E+dW）：寄棟の両端
   for (const [zc, h, kind] of [[E - dW / 2, frontH, 'front'], [-E + dW / 2, backH, 'back']] as const) {
     k.at(0, zc, 0);
@@ -1731,23 +1807,13 @@ function nordicFarm(k: Kit) {
       wbox(k, S[i], -1.0, 1.0, top + 0.5, top + 2.3, 0, 0.05, white, MAT.none, 2);
       wbox(k, S[i], -0.85, 0.85, top + 0.5, top + 2.2, 0.05, 0.08, red, MAT.siding, 2);
     }
-    // 裏の土の坂（ロフトへの橋）
-    {
-      const g0 = k.gh(0, -D / 2 - 5), yT = top + 0.6;
-      k.m(MAT.ground);
-      const grass = C(0x6a8a42);
-      k.mb.quad([-2, g0 - 0.2, -D / 2 - 5.5], [2, g0 - 0.2, -D / 2 - 5.5], [2, yT, -D / 2], [-2, yT, -D / 2], grass);
-      k.m(MAT.gravel);
-      for (const s of [-1, 1]) {
-        const xx = s * 2;
-        const pts: V3[] = s > 0 ? [[xx, g0 - 0.5, -D / 2 - 5.5], [xx, g0 - 0.5, -D / 2], [xx, yT, -D / 2], [xx, g0 - 0.2, -D / 2 - 5.5]] : [[xx, g0 - 0.5, -D / 2], [xx, g0 - 0.5, -D / 2 - 5.5], [xx, g0 - 0.2, -D / 2 - 5.5], [xx, yT, -D / 2]];
-        k.mb.quad(pts[0], pts[1], pts[2], pts[3], C(0x8f877a));
-      }
-      wbox(k, S[2], -1.6, 1.6, yT, yT + 2.6, 0, 0.06, red, MAT.siding, 2);
-      wbox(k, S[2], -1.75, 1.75, yT + 2.6, yT + 2.75, 0, 0.06, white, MAT.none, 0);
-    }
+    // 裏の高いところの干し草の戸
+    wbox(k, S[2], -1.6, 1.6, top - 0.4, top + 2.0, 0, 0.05, white, MAT.none, 2);
+    wbox(k, S[2], -1.45, 1.45, top - 0.4, top + 1.9, 0.05, 0.08, red, MAT.siding, 2);
+    winRow(k, S[2], [-7, -3.5, 3.5, 7], fl + 1.8, 0.9, 0.7, { ...ws, bars: 1 });
   }
   // 離れの小屋（倉、薪小屋）
+  k.at(0, 0, 0);
   shed(k, flip * 10.8, 7.5, flip > 0 ? -PI / 2 : PI / 2, 4.2, 3.4, red, roofC, white, 2.4);
   {
     // 高床の倉（ストールブー）
@@ -1759,19 +1825,21 @@ function nordicFarm(k: Kit) {
     roof(k, -1.6, -1.4, 1.6, 1.4, g + 3.0, 1.4, C(0x2b2d30), red, { ov: 0.35, ovG: 0.3, t: 0.15, fascia: white, wallMat: MAT.siding });
   }
   // 薪の山
-  woodpile(k, flip > 0 ? -14 : 9, -2, 5, 1.3);
+  k.at(0, 0, 0);
+  woodpile(k, flip > 0 ? -14.5 : 9.5, -3.5, 5, 1.3);
   // 丸太の斜めの柵（ゲーデスゴード）：正面
   {
     k.at(0, 0, 0);
     const z = 15.4, x0 = -15.5, x1 = 15.5, gap0 = flip * -6 - 2, gap1 = flip * -6 + 2;
-    const pole = C(0x8a8478);
+    const pole = C(0x6e6558);
     k.m(MAT.none);
     for (let x = x0; x < x1; x += 0.55) {
       if (x > gap0 && x < gap1) continue;
       const g = k.gh(x, z);
       const a: V3 = [x, g - 0.1, z - 0.05], b: V3 = [x + 1.0, g + 1.15, z + 0.05];
-      k.mb.quad([a[0], a[1], z + 0.06], [a[0] + 0.12, a[1], z + 0.06], [b[0] + 0.12, b[1], z + 0.06], [b[0], b[1], z + 0.06], pole);
-      k.mb.quad([a[0] + 0.12, a[1], z - 0.06], [a[0], a[1], z - 0.06], [b[0], b[1], z - 0.06], [b[0] + 0.12, b[1], z - 0.06], pole);
+      k.mb.quad([a[0], a[1], z + 0.06], [a[0] + 0.17, a[1], z + 0.06], [b[0] + 0.17, b[1], z + 0.06], [b[0], b[1], z + 0.06], pole);
+      k.mb.quad([a[0] + 0.17, a[1], z - 0.06], [a[0], a[1], z - 0.06], [b[0], b[1], z - 0.06], [b[0] + 0.17, b[1], z - 0.06], pole);
+      k.mb.quad([b[0], b[1], z + 0.06], [b[0] + 0.17, b[1], z + 0.06], [b[0] + 0.17, b[1], z - 0.06], [b[0], b[1], z - 0.06], pole);
     }
     for (let x = x0; x < x1; x += 2.2) {
       if (x > gap0 - 1 && x < gap1) continue;
@@ -1787,6 +1855,15 @@ function nordicFarm(k: Kit) {
     k.mb.cylinder(px, pz, g - 0.2, g + 10, 0.07, 6, white, white, 0.04);
     k.mb.quad([px, g + 9.85, pz], [px + 3.2, g + 9.55, pz + 0.3], [px + 3.2, g + 9.47, pz + 0.3], [px, g + 9.45, pz], C(0x1f4e9a));
     k.mb.quad([px + 3.2, g + 9.55, pz + 0.3], [px, g + 9.85, pz], [px, g + 9.45, pz], [px + 3.2, g + 9.47, pz + 0.3], C(0x1f4e9a));
+  }
+  // 家庭菜園とリンゴの木（母屋の横）
+  {
+    const gx0 = flip > 0 ? 1.5 : -8.5;
+    for (let i = 0; i < 4; i++) {
+      const zz = 9.2 + i * 1.3, g = k.gh(gx0 + 3.5, zz);
+      box(k, gx0, g - 0.1, zz - 0.4, gx0 + 7, g + 0.25, zz + 0.4, C(0x6a5440), MAT.none, { top: i % 2 ? C(0x5a7a34) : C(0x4a6a2e), pat: i % 2 ? PAT.gardenLeaf : 0 });
+    }
+    for (let i = 0; i < 3; i++) k.tree(flip * 13.6, 9.5 + i * 2.6, r.range(0.45, 0.55), 0, 0, ORCH);
   }
   // シラカバとトウヒ
   for (let i = 0; i < 3; i++) k.tree(-flip * (3 + i * 3.5), 14.2, r.range(0.8, 1.05), 0, 1, 0x7a9a48);
