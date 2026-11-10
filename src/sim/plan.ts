@@ -2066,6 +2066,22 @@ export function snapAvenue(g: Grid, x0: number, y0: number, x1: number, y1: numb
     sx += ox;
     sy += oy;
   }
+  // マップの端の1マス手前で終わる端（つなぎ先がなく、縦か横にまっすぐ外へ向かう）は、マップの端までのばす（隣の都市へ続く）
+  const toEdge = (P: Pt, out: number): Pt => {
+    if (isDiag(out)) return P;
+    const q: Pt = [P[0] + DX[out], P[1] + DY[out]];
+    const onEdge = (v: number, dv: number) => (dv > 0 ? v === g.n : dv < 0 ? v === 0 : true);
+    return onEdge(q[0], DX[out]) && onEdge(q[1], DY[out]) ? q : P;
+  };
+  const same = (a: Pt[], b: Pt[]) => a.length === b.length && a.every((p, k) => k === 0 || segDir(a[k - 1], p) === segDir(b[k - 1], b[k]));
+  if (!e) {
+    const q = toEdge([ex, ey], d1);
+    if (same(avenuePolyline(sx, sy, q[0], q[1]), avenuePolyline(sx, sy, ex, ey))) [ex, ey] = q;
+  }
+  if (!s) {
+    const q = toEdge([sx, sy], opp(d0));
+    if (same(avenuePolyline(q[0], q[1], ex, ey), avenuePolyline(sx, sy, ex, ey))) [sx, sy] = q;
+  }
   return { x0: sx, y0: sy, x1: ex, y1: ey, start: s, end: e };
 }
 
@@ -2196,8 +2212,12 @@ export function planAvenue(g: Grid, x0: number, y0: number, x1: number, y1: numb
   };
   const startFree = !sn.start || sn.start.kind === 'road';
   const endFree = !sn.end || sn.end.kind === 'road';
-  if (startFree && !continues(bwd[bwd.length - 1])) uturns.push([bwd[bwd.length - 1], fwd[0]]);
-  if (endFree && !continues(fwd[fwd.length - 1])) uturns.push([fwd[fwd.length - 1], bwd[0]]);
+  // マップの端で外へ向いている端は、隣の都市へ続くので折り返さない（両方の車線の端のマスの先が、マップの外）
+  const offMap = (c: number, d: number | undefined) => d !== undefined && d >= 0 && nb(g, c, d) < 0;
+  const startOut = offMap(fwd[0], fd.length ? opp(fd[0]) : undefined) && offMap(bwd[bwd.length - 1], bd[bd.length - 1]);
+  const endOut = offMap(fwd[fwd.length - 1], fd[fd.length - 1]) && offMap(bwd[0], bd.length ? opp(bd[0]) : undefined);
+  if (startFree && !startOut && !continues(bwd[bwd.length - 1])) uturns.push([bwd[bwd.length - 1], fwd[0]]);
+  if (endFree && !endOut && !continues(fwd[fwd.length - 1])) uturns.push([fwd[fwd.length - 1], bwd[0]]);
   // 橋（2本の車線で1枚）
   const pairDeck = avenueDecks(g, segs, sA, eA);
   for (const c of [...fwd, ...bwd])
@@ -2212,6 +2232,13 @@ export function planAvenue(g: Grid, x0: number, y0: number, x1: number, y1: numb
   const unlinks: [number, number][] = [];
   if (se) unlinks.push([se.X, se.Y]);
   if (ee) unlinks.push([ee.X, ee.Y]);
+  // マップの端の端に、前に作った折り返しが残っていれば外す（古い保存データなど）
+  const hasFlow = (a: number, b: number) => {
+    const d = dirOf((b % n) - (a % n), ((b / n) | 0) - ((a / n) | 0));
+    return d >= 0 && g.road[a] === RoadType.Avenue && g.road[b] === RoadType.Avenue && (g.flow[a] & (1 << d)) !== 0;
+  };
+  if (startOut && hasFlow(bwd[bwd.length - 1], fwd[0])) unlinks.push([bwd[bwd.length - 1], fwd[0]]);
+  if (endOut && hasFlow(fwd[fwd.length - 1], bwd[0])) unlinks.push([fwd[fwd.length - 1], bwd[0]]);
   const plan = finishRoadPlan(g, { cells: fwd, dirs: fd }, lanes, type, bad, reasons, uturns, pairDeck, { centre, unlinks });
   plan.bridgeCells = Math.ceil(plan.bridgeCells / 2); // 橋の長さ（2本の車線で1枚）
   plan.startKind = sn.start?.kind;
@@ -2275,6 +2302,7 @@ function avenueUnchanged(g: Grid, plan: RoadPlan) {
     return false;
   };
   if (plan.uturns.some(([a, b]) => !flows(a, b) && !toRoad(a))) return false;
+  if ((plan.unlinks ?? []).some(([a, b]) => flows(a, b))) return false;
   if ((plan.sideJoins ?? []).some(([s, c, f]) => !flows(s, c) || !flows(c, s) || !flows(c, f) || !flows(f, c))) return false;
   return !linkAvenueEnds(g, plan.lanes.flatMap((l) => [l.cells[0], l.cells[l.cells.length - 1]]), true);
 }

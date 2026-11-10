@@ -507,6 +507,13 @@ export class RoadLayer {
       for (let d = 0; d < 8; d++) if (m & (1 << d) && !skip.has(d)) dirs.push(d);
       return { skip, taper, openEnd, dirs };
     };
+    // マップの端の行き止まり：腕がまっすぐな1本だけで、その反対側がマップの外。隣の都市へ続くものとして、
+    // 転回場や端の壁を描かずに、マップの端までまっすぐのばす。そのときの外向き（でなければ -1）
+    const offMapEnd = (c: number, dirs: number[]) => {
+      if (dirs.length !== 1 || isDiag(dirs[0])) return -1;
+      const d = opp(dirs[0]);
+      return g.inb((c % n) + DX[d], ((c / n) | 0) + DY[d]) ? -1 : d;
+    };
     const armCache = new Map<number, ReturnType<typeof armsOf>>();
     const arms0 = (i: number) => {
       let a = armCache.get(i);
@@ -698,6 +705,8 @@ export class RoadLayer {
       }
       if (A.dirs.length !== 1 || isDiag(A.dirs[0]) || A.openEnd >= 0) continue;
       const back = A.dirs[0];
+      // マップの端で外へ向いている端は、隣の都市へ続くので転回場にしない（マスごとに、マップの端までまっすぐ描く）
+      if (offMapEnd(i, A.dirs)) continue;
       for (const sd of [(back + 2) & 7, (back + 6) & 7]) {
         const j = nb(i, sd);
         if (j < 0 || g.road[j] !== AV || !groundCell(j) || capOf[j] >= 0 || clusterOf[j] >= 0) continue;
@@ -2374,6 +2383,15 @@ export class RoadLayer {
           d, ux: DX[d] / len, uz: DY[d] / len, L: (CELL * len) / 2, ang: Math.atan2(DY[d], DX[d]),
           w: wa, wm: keepW ? wa : (wa + wn) / 2, sw, swm: own ? sw : (sw + swn) / 2, eh, t, tn, ng, nn,
         });
+      }
+      // マップの端の行き止まり：マップの外へ、同じ道路が同じ高さで続くものとして腕を足す（切り口はマップの端）
+      if (!(info && (info.taper || info.openEnd >= 0))) {
+        const out = offMapEnd(i, arms.map((q) => q.d));
+        if (out >= 0) {
+          const a0 = arms[0];
+          arms.push({ ...a0, d: out, ux: DX[out], uz: DY[out], ang: Math.atan2(DY[out], DX[out]), eh: ch, tn: t, ng: true, nn: -1, wm: a0.w, swm: a0.sw });
+          arms.sort((p, q) => p.d - q.d);
+        }
       }
       // 腕の端の高さから、マスの坂の傾きを求める（最小二乗）。高速道路では、ランプへの腕は使わない
       {
