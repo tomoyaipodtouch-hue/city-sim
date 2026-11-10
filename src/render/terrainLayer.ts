@@ -1,7 +1,7 @@
 // 地形、水面、データ表示（オーバーレイ）
 import * as THREE from 'three';
 import { Grid } from '../sim/grid';
-import { CELL, WATER_LEVEL } from '../sim/constants';
+import { CELL, QUAY_BED, WATER_LEVEL } from '../sim/constants';
 import { hash2 } from '../sim/rng';
 import { createGroundMaterial } from './groundMaterial';
 import { AMB_IRR_GLSL, AMB_IRR_PARS, ambUniforms } from './materials';
@@ -9,6 +9,8 @@ import { AMB_IRR_GLSL, AMB_IRR_PARS, ambUniforms } from './materials';
 export class TerrainLayer {
   group = new THREE.Group();
   geom: THREE.BufferGeometry;
+  // オーバーレイ用（地形と同じ頂点。岸壁の前の縦の面は入れない）
+  private ovGeom: THREE.BufferGeometry;
   mesh: THREE.Mesh;
   overlay: THREE.Mesh;
   overlayTex: THREE.DataTexture;
@@ -95,7 +97,10 @@ export class TerrainLayer {
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -2,
     });
-    this.overlay = new THREE.Mesh(this.geom, this.overlayMat);
+    this.ovGeom = new THREE.BufferGeometry();
+    this.ovGeom.setAttribute('position', this.geom.getAttribute('position'));
+    this.ovGeom.setIndex(this.geom.getIndex());
+    this.overlay = new THREE.Mesh(this.ovGeom, this.overlayMat);
     this.overlay.renderOrder = 2;
     this.group.add(this.overlay);
 
@@ -172,10 +177,67 @@ export class TerrainLayer {
     this.group.add(outside);
   }
 
-  updateHeights(g: Grid) {
+  // skip：自分で岸壁を描く水辺の施設（港など）のマス。そこは岸壁として扱わない
+  updateHeights(g: Grid, skip?: Uint8Array) {
     const n = this.n, V = n + 1;
-    const pos = this.geom.getAttribute('position') as THREE.BufferAttribute;
-    const col = this.geom.getAttribute('color') as THREE.BufferAttribute;
+    // 岸壁（埋め立て地の、水に面した陸のマス）
+    const isQuay = (x: number, y: number) => x >= 0 && y >= 0 && x < n && y < n && g.quay[y * n + x] > 0 && !(skip && skip[y * n + x]) && !g.isWater(x, y);
+    const water = new Uint8Array(n * n);
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) water[y * n + x] = g.isWater(x, y) ? 1 : 0;
+    // 岸壁のマスにふれる頂点（qv）と、そのうち水のマスにもふれる頂点（qw = 岸壁のすぐ前）
+    const qv = new Uint8Array(V * V), qw = new Uint8Array(V * V);
+    let anyQuay = false;
+    for (let y = 0; y < n; y++)
+      for (let x = 0; x < n; x++) {
+        if (!isQuay(x, y)) continue;
+        anyQuay = true;
+        qv[y * V + x] = qv[y * V + x + 1] = qv[(y + 1) * V + x] = qv[(y + 1) * V + x + 1] = 1;
+      }
+    if (anyQuay)
+      for (let y = 0; y < n; y++)
+        for (let x = 0; x < n; x++) {
+          if (!water[y * n + x]) continue;
+          for (const v of [y * V + x, y * V + x + 1, (y + 1) * V + x, (y + 1) * V + x + 1]) if (qv[v]) qw[v] = 1;
+        }
+    // 岸壁の前の水のマス（岸壁にふれる頂点をもつ水のマス）は、自分だけの頂点で深い海底まで下げる（砂浜のような坂にしない）
+    const basin: number[] = [];
+    if (anyQuay)
+      for (let y = 0; y < n; y++)
+        for (let x = 0; x < n; x++)
+          if (water[y * n + x] && (qw[y * V + x] || qw[y * V + x + 1] || qw[(y + 1) * V + x] || qw[(y + 1) * V + x + 1])) basin.push(y * n + x);
+    const isBasin = new Uint8Array(n * n);
+    for (const i of basin) isBasin[i] = 1;
+    const bedH = (vx: number, vy: number) => { const v = vy * V + vx, h = g.heights[v]; return qw[v] ? Math.min(h, QUAY_BED) : h; };
+    // 岸壁でない陸と、下げた水のマスのあいだのすき間をふさぐ縦の面（岸壁のマスは岸壁の層が壁を描く）
+    const fill: number[] = []; // [ax, az, aTop, aBot, bx, az, bTop, bBot, 内向きの dx, dz]
+    for (const i of basin) {
+      const x = i % n, y = (i / n) | 0;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const qx = x + dx, qy = y + dy;
+        if (qx < 0 || qy < 0 || qx >= n || qy >= n) continue;
+        const j = qy * n + qx;
+        if (water[j] || isQuay(qx, qy)) continue;
+        // 辺の2つの頂点
+        const ax = dx === 1 ? x + 1 : x, ay = dy === 1 ? y + 1 : y;
+        const bx = dx === 0 ? ax + 1 : ax, by = dx === 0 ? ay : ay + 1;
+        const at = g.vh(ax, ay), ab = bedH(ax, ay), bt = g.vh(bx, by), bb = bedH(bx, by);
+        if (at - ab < 0.01 && bt - bb < 0.01) continue;
+        fill.push(ax, ay, at, ab, bx, by, bt, bb, -dx, -dy);
+      }
+    }
+    const NV = V * V + basin.length * 4 + (fill.length / 10) * 4;
+    let pos = this.geom.getAttribute('position') as THREE.BufferAttribute;
+    let col = this.geom.getAttribute('color') as THREE.BufferAttribute;
+    if (pos.count !== NV) {
+      const p = new Float32Array(NV * 3);
+      p.set((pos.array as Float32Array).subarray(0, V * V * 3));
+      pos = new THREE.BufferAttribute(p, 3);
+      col = new THREE.BufferAttribute(new Float32Array(NV * 3), 3);
+      this.geom.setAttribute('position', pos);
+      this.geom.setAttribute('color', col);
+      this.geom.deleteAttribute('normal');
+      this.ovGeom.setAttribute('position', pos);
+    }
     const c = new THREE.Color();
     const grassA = new THREE.Color(0x6d8f45), grassB = new THREE.Color(0x87a052), dry = new THREE.Color(0xa29a62);
     const sand = new THREE.Color(0xc9b98a), rock = new THREE.Color(0x8c8577), bed = new THREE.Color(0x5e6b55);
@@ -183,8 +245,9 @@ export class TerrainLayer {
       for (let x = 0; x < V; x++) {
         const vi = y * V + x;
         const h = g.heights[vi];
-        pos.setY(vi, h);
-        this.heightData[vi] = THREE.DataUtils.toHalfFloat(h);
+        pos.setXYZ(vi, x * CELL, h, y * CELL);
+        // 岸壁のすぐ前の水は深い（白い波の帯を出さない）
+        this.heightData[vi] = THREE.DataUtils.toHalfFloat(qw[vi] ? Math.min(h, QUAY_BED) : h);
         // 傾き
         const hx = g.heights[y * V + Math.min(n, x + 1)] - g.heights[y * V + Math.max(0, x - 1)];
         const hy = g.heights[Math.min(n, y + 1) * V + x] - g.heights[Math.max(0, y - 1) * V + x];
@@ -192,16 +255,63 @@ export class TerrainLayer {
         const nz = hash2(x, y, 7);
         c.copy(grassA).lerp(grassB, nz * 0.7);
         if (h > 40) c.lerp(dry, Math.min(1, (h - 40) / 40));
-        if (h < WATER_LEVEL + 2.2) c.lerp(sand, Math.min(1, (WATER_LEVEL + 2.2 - h) / 1.6));
-        if (h < WATER_LEVEL - 0.5) c.copy(bed);
-        if (slope > 0.35) c.lerp(rock, Math.min(1, (slope - 0.35) * 2.5));
+        // 岸壁の地面はふつうの地面の色（砂浜や岩の色にしない）
+        if (!qv[vi]) {
+          if (h < WATER_LEVEL + 2.2) c.lerp(sand, Math.min(1, (WATER_LEVEL + 2.2 - h) / 1.6));
+          if (h < WATER_LEVEL - 0.5) c.copy(bed);
+          if (slope > 0.35) c.lerp(rock, Math.min(1, (slope - 0.35) * 2.5));
+        }
         col.setXYZ(vi, c.r, c.g, c.b);
       }
+    // 三角形：ふつうのマスは共有の頂点、岸壁の前の水のマスは自分の頂点、最後にすき間をふさぐ面
+    const idx = new Uint32Array(n * n * 6 + (fill.length / 10) * 6);
+    let k = 0, nv = V * V;
+    for (let y = 0; y < n; y++)
+      for (let x = 0; x < n; x++) {
+        if (isBasin[y * n + x]) continue;
+        const a = y * V + x, b = a + 1, cc = a + V, d = cc + 1;
+        idx[k++] = a; idx[k++] = cc; idx[k++] = b;
+        idx[k++] = b; idx[k++] = cc; idx[k++] = d;
+      }
+    for (const i of basin) {
+      const x = i % n, y = (i / n) | 0;
+      const a = nv, b = nv + 1, cc = nv + 2, d = nv + 3;
+      for (const [q, vx, vy] of [[a, x, y], [b, x + 1, y], [cc, x, y + 1], [d, x + 1, y + 1]]) {
+        pos.setXYZ(q, vx * CELL, bedH(vx, vy), vy * CELL);
+        col.setXYZ(q, bed.r, bed.g, bed.b);
+      }
+      nv += 4;
+      idx[k++] = a; idx[k++] = cc; idx[k++] = b;
+      idx[k++] = b; idx[k++] = cc; idx[k++] = d;
+    }
+    const ovCount = k;
+    const wall = new THREE.Color(0x6f6a5f);
+    for (let f = 0; f < fill.length; f += 10) {
+      const [ax, ay, at, ab, bx, by, bt, bb, ix, iy] = fill.slice(f, f + 10);
+      const q = nv;
+      pos.setXYZ(q, ax * CELL, at, ay * CELL);
+      pos.setXYZ(q + 1, ax * CELL, ab, ay * CELL);
+      pos.setXYZ(q + 2, bx * CELL, bt, by * CELL);
+      pos.setXYZ(q + 3, bx * CELL, bb, by * CELL);
+      for (let m = 0; m < 4; m++) col.setXYZ(q + m, wall.r, wall.g, wall.b);
+      nv += 4;
+      // 面の向き：水のマスの側（ix, iy）を向くように
+      const ex = (bx - ax), ez = (by - ay);
+      // (a_top -> a_bot -> b_top) の法線の水平成分 = (ez, -ex) の向き
+      const flip = ez * ix - ex * iy < 0;
+      if (!flip) { idx[k++] = q; idx[k++] = q + 1; idx[k++] = q + 2; idx[k++] = q + 2; idx[k++] = q + 1; idx[k++] = q + 3; }
+      else { idx[k++] = q; idx[k++] = q + 2; idx[k++] = q + 1; idx[k++] = q + 2; idx[k++] = q + 3; idx[k++] = q + 1; }
+    }
+    const index = new THREE.BufferAttribute(idx, 1);
+    this.geom.setIndex(index);
+    this.ovGeom.setIndex(index);
+    this.ovGeom.setDrawRange(0, ovCount);
     pos.needsUpdate = true;
     col.needsUpdate = true;
     this.heightTex.needsUpdate = true;
     this.geom.computeVertexNormals();
     this.geom.computeBoundingSphere();
+    this.ovGeom.boundingSphere = this.geom.boundingSphere;
     this.buildSkirt(g);
   }
 

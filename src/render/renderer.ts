@@ -10,6 +10,7 @@ import { BridgeLayer } from './bridgeStyles';
 import { PropsLayer } from './propsLayer';
 import { BuildingLayer } from './buildingLayer';
 import { TreeLayer } from './treeLayer';
+import { QuayLayer, waterfrontMask } from './quayLayer';
 import { CarLayer } from './carLayer';
 import { PreviewLayer } from './previewLayer';
 import { CameraRig, pickGround } from './cameraRig';
@@ -48,6 +49,7 @@ export class CityRenderer {
   underground = false;
   buildings = new BuildingLayer();
   trees = new TreeLayer();
+  quays = new QuayLayer(); // 埋め立て地の岸壁
   cars = new CarLayer();
   preview = new PreviewLayer();
   sun: THREE.DirectionalLight;
@@ -109,7 +111,7 @@ export class CityRenderer {
     this.sun.shadow.bias = -0.0002;
     this.sun.shadow.normalBias = 0.3;
     this.scene.add(this.sun, this.sun.target);
-    this.scene.add(this.roads.group, this.roadBridges.mesh, this.rails.group, this.props.group, this.buildings.group, this.trees.group, this.cars.group, this.preview.mesh, this.preview.line);
+    this.scene.add(this.roads.group, this.roadBridges.mesh, this.rails.group, this.props.group, this.buildings.group, this.quays.group, this.trees.group, this.cars.group, this.preview.mesh, this.preview.line);
     this.resize();
     window.addEventListener('resize', () => this.resize());
     requestAnimationFrame(this.loop);
@@ -164,6 +166,10 @@ export class CityRenderer {
     this.scene.remove(this.buildings.group);
     this.buildings = new BuildingLayer();
     this.scene.add(this.buildings.group);
+    this.scene.remove(this.quays.group);
+    this.quays = new QuayLayer();
+    this.scene.add(this.quays.group);
+    this.lastQuayKey = -1;
   }
 
   setGrid(g: Grid, heightsChanged: boolean) {
@@ -221,6 +227,7 @@ export class CityRenderer {
     if (this.terrain) fade((this.terrain.mesh as THREE.Mesh).material, on ? 0.35 : 1);
     this.fadeBuildings();
     this.roads.group.traverse((o) => fade((o as THREE.Mesh).material, on ? 0.35 : 1));
+    fade(this.quays.material, on ? 0.35 : 1);
     // 道路の橋の構造物（橋脚・塔・ケーブルなど）も、路面と同じように薄くする
     fade(this.roadBridges.mesh.material, on ? 0.35 : 1);
     this.trees.group.visible = !on;
@@ -278,7 +285,15 @@ export class CityRenderer {
     const g = this.grid;
     if (!g || !this.terrain) return;
     const heights = this.dirty.heights;
-    if (heights) this.terrain.updateHeights(g);
+    // 岸壁：港などの水辺の施設は自分で岸壁を描くので、そのマスは除く。岸壁の印が変わったら地形も作り直す（岸壁の前の水を深くする）
+    if (heights || this.dirty.grid || this.dirty.buildings) {
+      const skip = waterfrontMask(g, this.buildingList);
+      let h = 2166136261;
+      for (let i = 0; i < g.quay.length; i++) if (g.quay[i]) h = Math.imul(h ^ (i * 4 + g.quay[i] + skip[i] * 3), 16777619);
+      if (heights || h !== this.lastQuayKey) this.terrain.updateHeights(g, skip);
+      this.lastQuayKey = h;
+      if (this.quays.rebuild(g, skip)) this.dirty.trees = true;
+    }
     if (this.dirty.grid) {
       // 建物が建つたびに grid は更新されるので、道路に関係する部分が変わったときだけ作り直す
       const key = this.roadKey(g);
@@ -310,7 +325,7 @@ export class CityRenderer {
       this.stationsMesh.rebuild(g, this.buildingList);
     }
     // 大通りの中央分離帯のケヤキは、道路の層が分離帯の形から決めた位置に植える
-    if (this.dirty.trees) this.trees.rebuild(g, this.buildings.allTrees(), this.roads.medianTrees);
+    if (this.dirty.trees) this.trees.rebuild(g, this.buildings.allTrees().concat(this.quays.allTrees()), this.roads.medianTrees);
     if (this.dirty.overlay) {
       buildOverlay(this.terrain.overlayData, g, this.maps, this.dataView);
       this.terrain.commitOverlay();
@@ -321,6 +336,7 @@ export class CityRenderer {
   }
 
   private lastRoadKey = -1;
+  private lastQuayKey = -1;
   private lastStationSig = '';
   // 高架鉄道の駅のホームがあるマス（敷地のある駅のまわりと、線路の上だけの駅）
   private stationCells(): Set<number> {
@@ -526,6 +542,7 @@ export class CityRenderer {
     shared.uTime.value = performance.now() / 1000;
     this.stationsMesh.lights.visible = shared.uNight.value > 0.3;
     this.buildings.setNight(shared.uNight.value);
+    this.quays.setNight(shared.uNight.value);
     // ガラスに映る空と太陽
     shared.uSunDir.value.copy(this.sunDir);
     shared.uSunCol.value.copy(sunCol).multiplyScalar(day);
