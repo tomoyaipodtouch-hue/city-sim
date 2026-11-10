@@ -791,3 +791,18 @@ describe('stage 4b governance', () => {
     expect(w.stats.advice.length).toBeGreaterThan(3);
   });
 });
+
+describe('diagonal power lines', () => {
+  it('carry power along a diagonal line', () => {
+    const w = new World(64);
+    for (let i = 0; i < w.g.heights.length; i++) w.g.heights[i] = 8;
+    w.sandbox = true;
+    expect(w.exec({ t: 'plop', id: 'coal', x: 5, y: 5 }).ok).toBe(true);
+    // 発電所の角から斜めに 20 マス
+    expect(w.exec({ t: 'pline', x0: 8, y0: 8, x1: 28, y1: 28 }).ok).toBe(true);
+    w.exec({ t: 'road', x0: 29, y0: 29, x1: 40, y1: 29, road: RoadType.Road });
+    w.exec({ t: 'zone', x0: 29, y0: 30, x1: 40, y1: 34, zone: ZoneType.R, den: 0 });
+    w.updatePower();
+    expect(w.maps.power[w.g.idx(35, 31)]).toBeGreaterThan(0);
+  });
+});

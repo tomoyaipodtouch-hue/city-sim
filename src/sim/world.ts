@@ -1300,11 +1300,13 @@ export class World {
         const i = queue.pop()!;
         cells.push(i);
         const x = i % n, y = (i / n) | 0;
-        for (let d = 0; d < 8; d += 2) {
+        for (let d = 0; d < 8; d++) {
           const nx = x + DX[d], ny = y + DY[d];
           if (!g.inb(nx, ny)) continue;
           const j = ny * n + nx;
           if (comp[j] >= 0 || !conductive(j)) continue;
+          // 斜めは送電線どうし、または送電線とその先の建物・ゾーン・道路だけ（斜めに引いた送電線も電気を通す）
+          if (d & 1 && !g.pline[i] && !g.pline[j]) continue;
           comp[j] = cid;
           queue.push(j);
         }
