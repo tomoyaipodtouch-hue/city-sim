@@ -66,6 +66,10 @@ export function waterfrontMask(g: Grid, list: Building[]): Uint8Array {
   const n = g.n, out = new Uint8Array(n * n);
   for (const b of list) {
     if (!b.civic || !CIVIC[b.type as CivicId]?.waterfront) continue;
+    // 岸壁の上に建てたときは、岸壁（壁・深い水・舗装の色）をそのまま残す
+    let onQuay = false;
+    for (let y = b.y; y < b.y + b.h && !onQuay; y++) for (let x = b.x; x < b.x + b.w; x++) if (g.inb(x, y) && g.quay[y * n + x]) { onQuay = true; break; }
+    if (onQuay) continue;
     for (let y = b.y; y < b.y + b.h; y++) for (let x = b.x; x < b.x + b.w; x++) if (g.inb(x, y)) out[y * n + x] = 1;
   }
   return out;
