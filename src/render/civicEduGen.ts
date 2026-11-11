@@ -14,7 +14,7 @@ type P2 = [number, number];
 const GLASS = C(0x4c6b86), GLASS_D = C(0x33465a), GLASS_L = C(0x86a9c0);
 const WHITE = C(0xf2f1ec), WHITE2 = C(0xdedcd5), ROOF = C(0xb7b4ac);
 const PAVE = C(0xc9c4b8), PAVE2 = C(0xb3ada1), YARD = C(0x9a978f), LAWN = C(0x7aa553), LAWN_D = C(0x6e9a4a);
-const LINE = C(0xf4f4f0), DARK = C(0x3a3d41), STEEL = C(0x8d939a), WATER = C(0x3b6c86);
+const LINE = C(0xf4f4f0), DARK = C(0x3a3d41), STEEL = C(0x8d939a);
 const PV = C(0x22324e);
 
 // ---- 面の部品 ----
@@ -39,20 +39,6 @@ function fin(mb: MeshBuilder, s: Side, t: number, w: number, dep: number, y0: nu
   const a0 = s.P(t - w / 2, 0), a1 = s.P(t - w / 2, dep), b0 = s.P(t + w / 2, 0), b1 = s.P(t + w / 2, dep);
   mb.quad([a0[0], y0, a0[1]], [a1[0], y0, a1[1]], [a1[0], y1, a1[1]], [a0[0], y1, a0[1]], side);
   mb.quad([b1[0], y0, b1[1]], [b0[0], y0, b0[1]], [b0[0], y1, b0[1]], [b1[0], y1, b1[1]], side);
-}
-// 面の上の自由な形（(t, y) の反時計回りの4点）
-function fpoly(mb: MeshBuilder, s: Side, pts: P2[], o: number, col: THREE.Color, pat = 0) {
-  const q = pts.map(([t, y]) => { const p = s.P(t, o); return [p[0], y, p[1]] as [number, number, number]; });
-  mb.quad(q[0], q[1], q[2], q[3], col, pat);
-}
-// 面の上の円（時計の文字盤など）
-function fdisc(mb: MeshBuilder, s: Side, t: number, y: number, r: number, o: number, col: THREE.Color, pat = 0, n = 18) {
-  const c = s.P(t, o);
-  for (let k = 0; k < n; k++) {
-    const a0 = (k / n) * Math.PI * 2, a1 = ((k + 1) / n) * Math.PI * 2;
-    const p0 = s.P(t + Math.cos(a0) * r, o), p1 = s.P(t + Math.cos(a1) * r, o);
-    mb.tri([c[0], y, c[1]], [p0[0], y + Math.sin(a0) * r, p0[1]], [p1[0], y + Math.sin(a1) * r, p1[1]], col, pat);
-  }
 }
 // 平らな屋根のスラブ（ふちの色と上の色）
 function slab(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, t: number, ov: number, edge: THREE.Color, top: THREE.Color) {
@@ -542,105 +528,80 @@ function collegeNordic(mb: MeshBuilder, f: LotFrame, tf: TF, rng: Rng) {
   bench(mb, 3, 13.5, 7, 14.1);
 }
 
-// ================= 市役所（4×3） =================
-// ヒルフェルスム市庁舎（デュドック）風：黄色いレンガの水平な箱を組み合わせ、細い時計塔、前に水盤。ガラスのロビーと広場
+// ================= 市役所（6×4。古いセーブの 4×3 も敷地の大きさから組み立てる） =================
+// 2つのガラスの四角い棟：背の高い行政棟と、低く横に広い議会棟（上にガラスの議場）。2階の高さのガラスの渡り廊下でつなぐ。前に広場
 export function townHall(mb: MeshBuilder, f: LotFrame, tf: TF) {
   mb.flatRoofMat = MAT.membrane;
-  const hw = f.W / 2, hd = f.D / 2;
-  const yb = C(0xd9bf85), cope = C(0xf1ede2), frame = C(0x2c3f5c), glassD = C(0x2f4257);
+  const hw = f.W / 2, hd = f.D / 2, big = f.W >= 80;
+  const gA = C(0x557a92), gB = C(0x7fa3b8), alu = C(0xd9dcdf), aluS = C(0xb9bec4);
   mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.07, LAWN);
-  // 黄色いレンガの箱：白い笠木と、窓の帯（区切った横長の窓）
-  const vol = (x0: number, z0: number, x1: number, z1: number, y0: number, h: number, ff: number) => {
-    matBox(mb, MAT.brick, x0, y0, z0, x1, h, z1, yb);
-    const floors = Math.round((h - y0) / ff);
-    for (const s of sides(x0, z0, x1, z1)) {
-      const n = Math.max(1, Math.round(s.L / 7));
-      const step = s.L / n;
-      for (let i = 0; i < floors; i++)
-        for (let k = 0; k < n; k++) {
-          const t0 = k * step + 0.9, t1 = (k + 1) * step - 0.9;
-          if (t1 - t0 < 1.5) continue;
-          const y = y0 + i * ff;
-          fq(mb, s, t0, t1, y + 1.0, y + ff - 0.8, 0.04, glassD, PAT.fullglass);
-          fq(mb, s, t0 - 0.12, t1 + 0.12, y + 0.86, y + 1.0, 0.06, cope);
-        }
-    }
-    slab(mb, x0, z0, x1, z1, h, 0.45, 0.35, cope, ROOF);
-  };
-  vol(-28, -20, 12, -4, 0, 12.6, 4.2); // 主棟（3階）
-  vol(-20, -16, 2, -6, 13.05, 17.25, 4.2); // 上に重ねた箱
-  vol(-28, -4, -8, 5, 0, 8.4, 4.2); // 左前の低い棟
-  vol(12, -20, 28, -3, 0, 8.4, 4.2); // 右の棟
-  vol(-27, -23.6, -12, -20, 0, 4.2, 4.2); // 奥の小さな箱
-  // デュドックらしい水平の張り出し（細い白いひさし）
-  mb.box(-29, 4.0, 5, -7, 4.25, 7.2, cope);
-  mb.box(-29, 8.4, -5, -27, 8.55, 6, cope);
-  mb.box(12, 8.85, -3, 29, 9.05, -1.2, cope);
-  // ガラスのロビー（主棟の前、白い薄い屋根が前へ張り出す）
-  const lx0 = -8, lx1 = 12, lz0 = -4, lz1 = 6, lH = 8.2;
-  mb.box(lx0, 0, lz0, lx1, lH, lz1, GLASS, PAT.fullglass, ROOF);
-  for (let x = lx0 + 2.5; x < lx1; x += 2.5) mb.box(x - 0.08, 0, lz1, x + 0.08, lH, lz1 + 0.18, C(0xe3e4e2));
-  slab(mb, lx0 - 1, lz0, lx1 + 1, lz1 + 4.5, lH, 0.45, 0, WHITE, ROOF);
-  mb.quad([lx0, lH - 0.01, lz1 + 0.2], [lx1, lH - 0.01, lz1 + 0.2], [lx1, lH - 0.01, lz1 + 4.2], [lx0, lH - 0.01, lz1 + 4.2], C(0xfff1d6), PAT.lit);
-  for (const x of [lx0 + 1, (lx0 + lx1) / 2, lx1 - 1]) mb.box(x - 0.12, 0, lz1 + 3.8, x + 0.12, lH, lz1 + 4.05, C(0xe3e4e2));
-  // 時計塔：細い四角の塔、縦の細い窓、上に時計と展望の柱、旗竿
-  const tx0 = 13, tx1 = 19, tz0 = -2.5, tz1 = 3.5, tH = 40;
-  matBox(mb, MAT.brick, tx0 - 0.6, 0, tz0 - 0.6, tx1 + 0.6, 9, tz1 + 0.6, yb);
-  slab(mb, tx0 - 0.6, tz0 - 0.6, tx1 + 0.6, tz1 + 0.6, 9, 0.3, 0.2, cope, cope);
-  matBox(mb, MAT.brick, tx0, 9, tz0, tx1, tH, tz1, yb);
-  const T = sides(tx0, tz0, tx1, tz1);
-  for (const s of T) {
-    fq(mb, s, 2.4, 3.6, 12, 34, 0.04, glassD, PAT.fullglass);
-    for (let y = 14; y < 34; y += 4) fq(mb, s, 2.3, 3.7, y, y + 0.18, 0.06, frame);
+  const sq = Math.max(13, f.D * 0.32);
+  const bz0 = -hd + 3, bz1 = hd - sq;
+  // ---- 行政棟（四角いガラスの塔）----
+  const aw = f.W * 0.32, ad = Math.min(aw, bz1 - bz0 - 4);
+  const ax0 = -hw + 4, ax1 = ax0 + aw, az1 = bz1, az0 = az1 - ad;
+  const n = big ? 11 : 8, g0 = 5.4, ff = 3.6, aH = g0 + (n - 1) * ff;
+  // 1階：奥まったガラスのロビーと柱
+  mb.box(ax0 + 1.2, 0, az0 + 1.2, ax1 - 1.2, g0, az1 - 1.2, gB, PAT.fullglass, ROOF);
+  for (const s of sides(ax0, az0, ax1, az1)) for (let t = 0.4; t < s.L; t += Math.max(4, s.L / Math.round(s.L / 6))) { const p = s.P(t, -0.4); mb.box(p[0] - 0.3, 0, p[1] - 0.3, p[0] + 0.3, g0, p[1] + 0.3, alu); }
+  mb.box(ax0, g0, az0, ax1, g0 + 0.6, az1, alu, PAT.none, alu);
+  // 上の階：カーテンウォールと、細い縦のアルミのひれ、2階ごとの細い床の帯
+  mb.box(ax0, g0 + 0.6, az0, ax1, aH, az1, gA, PAT.curtain, ROOF);
+  for (const s of sides(ax0, az0, ax1, az1)) for (let t = 1.5; t < s.L - 0.5; t += 3) fin(mb, s, t, 0.12, 0.35, g0 + 0.6, aH, alu, aluS);
+  for (let i = 2; i < n; i += 2) wrap(mb, ax0, az0, ax1, az1, g0 + 0.6 + (i - 1) * ff - 0.12, g0 + 0.6 + (i - 1) * ff + 0.12, alu, PAT.none, 0.38);
+  // 屋上：薄い張り出しのスラブ、奥まった機械室（ガラスのルーバー）
+  slab(mb, ax0, az0, ax1, az1, aH, 0.55, 0.5, WHITE, ROOF);
+  mb.box(ax0 + 4, aH + 0.55, az0 + 4, ax1 - 4, aH + 3.6, az1 - 6, C(0xcdd2d6), PAT.industrial, C(0xbfc5ca));
+  greenRoof(mb, ax0, az0, ax1, az1, aH + 0.55, false);
+  // ---- 議会棟：2階の基壇の上に、前へ張り出すガラスの議場 ----
+  const gap = Math.max(6, f.W * 0.09);
+  const cx0 = ax1 + gap, cx1 = hw - 4, cz0 = bz0 + 1, cz1 = bz1 - 3, cH = 8.4;
+  mb.box(cx0 + 1, 0, cz0 + 1, cx1 - 1, 4.2, cz1 - 1, gB, PAT.fullglass, ROOF);
+  for (const s of sides(cx0, cz0, cx1, cz1)) for (let t = 0.4; t < s.L; t += Math.max(4, s.L / Math.round(s.L / 6))) { const p = s.P(t, -0.4); mb.box(p[0] - 0.25, 0, p[1] - 0.25, p[0] + 0.25, 4.2, p[1] + 0.25, alu); }
+  mb.box(cx0, 4.2, cz0, cx1, cH, cz1, gA, PAT.curtain, ROOF);
+  slab(mb, cx0, cz0, cx1, cz1, 4.2, 0.45, 0.25, alu, alu);
+  // 議場（高さ 9m のガラスの箱、前は基壇より 3m 張り出す）と深い屋根
+  const hx0 = cx0 + 1.5, hx1 = cx1 - 1.5, hz0 = cz0 + 3, hz1 = bz1, hH = cH + 9;
+  slab(mb, hx0, hz0, hx1, hz1, cH, 0.5, 0, alu, alu);
+  mb.box(hx0, cH + 0.5, hz0, hx1, hH, hz1, gB, PAT.fullglass, ROOF);
+  for (const s of sides(hx0, hz0, hx1, hz1)) for (let t = 1.2; t < s.L - 0.5; t += 2.4) fin(mb, s, t, 0.1, 0.25, cH + 0.5, hH, alu, aluS);
+  slab(mb, hx0, hz0, hx1, hz1, hH, 0.7, 2.0, WHITE, ROOF);
+  greenRoof(mb, hx0, hz0, hx1, hz1, hH + 0.7);
+  // 張り出しの下の明かりと、前の細い柱
+  mb.quad([hx0, cH - 0.01, cz1], [hx1, cH - 0.01, cz1], [hx1, cH - 0.01, hz1], [hx0, cH - 0.01, hz1], C(0xfff1d6), PAT.lit);
+  for (let x = hx0 + 1; x < hx1; x += (hx1 - hx0 - 2) / 3) mb.box(x - 0.15, 0, hz1 - 0.6, x + 0.15, cH, hz1 - 0.3, alu);
+  // ---- ガラスの渡り廊下（2階の高さ）----
+  const bzA = Math.max(az0, cz0) + 4, bzB = bzA + 5, by0 = 9.2, by1 = 12.6;
+  mb.box(ax1, by0 - 0.5, bzA, cx0, by0, bzB, alu, PAT.none, alu);
+  mb.box(ax1, by0, bzA + 0.1, cx0, by1, bzB - 0.1, gB, PAT.fullglass, ROOF);
+  mb.box(ax1, by1, bzA, cx0, by1 + 0.45, bzB, WHITE, PAT.none, WHITE2);
+  // 1階の通り抜け（2棟の間の舗装）
+  mb.ground(ax1, bz0, cx0, hd - 0.4, 0.09, PAVE2);
+  // ---- 広場 ----
+  mb.ground(-hw + 1, bz1, hw - 1, hd - 0.4, 0.09, PAVE);
+  for (let x = -hw + 5; x < hw - 1; x += 5) mb.ground(x - 0.05, bz1, x + 0.05, hd - 0.4, 0.095, PAVE2);
+  mb.ground(-hw + 1, bz1 + sq * 0.42, hw - 1, bz1 + sq * 0.42 + 0.12, 0.095, PAVE2);
+  // 並木の植え込み（前のふち）とベンチ
+  const nt = Math.max(3, Math.round((f.W - 8) / 11));
+  for (let k = 0; k < nt; k++) {
+    const x = -hw + 4 + ((k + 0.5) * (f.W - 8)) / nt, z = hd - 4.2;
+    if (Math.abs(x - (ax1 + cx0) / 2) < 4) continue;
+    mb.box(x - 2.2, 0, z - 1.6, x + 2.2, 0.45, z + 1.6, C(0xc2bdb2), PAT.none, LAWN_D);
+    tf(x, z, 0.85, 0);
+    bench(mb, x - 1.8, z - 2.6, x + 1.8, z - 2.0);
   }
-  // 時計の部分（白い帯の上）
-  slab(mb, tx0, tz0, tx1, tz1, tH, 0.3, 0.25, cope, cope);
-  matBox(mb, MAT.brick, tx0 + 0.3, tH + 0.3, tz0 + 0.3, tx1 - 0.3, tH + 5.6, tz1 - 0.3, yb);
-  const T2 = sides(tx0 + 0.3, tz0 + 0.3, tx1 - 0.3, tz1 - 0.3);
-  for (const s of T2) {
-    const c = s.L / 2, cy = tH + 3;
-    fdisc(mb, s, c, cy, 2.0, 0.05, frame);
-    fdisc(mb, s, c, cy, 1.75, 0.08, C(0xf5efdc), PAT.lit);
-    // 針（10時10分）
-    const hand = (a: number, len: number, w: number) => {
-      const ca = Math.cos(a), sa = Math.sin(a), nx = -sa * w, ny = ca * w;
-      fpoly(mb, s, [[c + nx, cy + ny], [c - nx, cy - ny], [c + ca * len - nx, cy + sa * len - ny], [c + ca * len + nx, cy + sa * len + ny]], 0.1, DARK);
-    };
-    hand(Math.PI * 0.5 + 0.52, 1.5, 0.07);
-    hand(Math.PI * 0.5 - 1.05, 1.1, 0.1);
+  // 行政棟の前の旗竿（3本）と街灯
+  const fz = az1 + 3.5, fx = (ax0 + ax1) / 2;
+  [C(0x1f4fa0), C(0xc8102e), C(0xf2c200)].forEach((col, k) => {
+    const x = fx - 3 + k * 3;
+    mb.box(x - 0.07, 0, fz, x + 0.07, 11, fz + 0.14, C(0xe8e8e8));
+    mb.box(x + 0.07, 9.4, fz + 0.05, x + 1.9, 10.8, fz + 0.09, col);
+  });
+  for (let x = -hw + 8; x < hw - 4; x += 14) lamp(mb, x, bz1 + sq * 0.55);
+  // 奥：芝と木、職員の駐車場
+  if (az0 - bz0 > 9) {
+    mb.ground(ax0, bz0, ax1, az0 - 2, 0.09, C(0x55585c));
+    for (let x = ax0 + 1.5; x < ax1 - 1; x += 2.6) mb.ground(x, bz0 + 0.5, x + 0.12, bz0 + 5, 0.1, LINE);
   }
-  // 展望の柱（四隅）と薄い屋根、頂部の小さな箱と旗竿
-  slab(mb, tx0, tz0, tx1, tz1, tH + 5.6, 0.3, 0.25, cope, cope);
-  for (const [x, z] of [[tx0, tz0], [tx1 - 0.8, tz0], [tx0, tz1 - 0.8], [tx1 - 0.8, tz1 - 0.8]]) matBox(mb, MAT.brick, x, tH + 5.9, z, x + 0.8, tH + 9.4, z + 0.8, yb);
-  mb.box(tx0 + 1.4, tH + 5.9, tz0 + 1.4, tx1 - 1.4, tH + 8.6, tz1 - 1.4, glassD, PAT.fullglass, frame);
-  slab(mb, tx0, tz0, tx1, tz1, tH + 9.4, 0.35, 0.3, cope, ROOF);
-  matBox(mb, MAT.brick, tx0 + 1.6, tH + 9.75, tz0 + 1.6, tx1 - 1.6, tH + 11.2, tz1 - 1.6, yb);
-  mb.box(tx0 + 1.4, tH + 11.2, tz0 + 1.4, tx1 - 1.4, tH + 11.45, tz1 - 1.4, cope);
-  const cx = (tx0 + tx1) / 2, cz = (tz0 + tz1) / 2;
-  mb.box(cx - 0.06, tH + 11.45, cz - 0.06, cx + 0.06, tH + 16, cz + 0.06, C(0xe8e8e8));
-  mb.box(cx + 0.06, tH + 14.6, cz - 0.02, cx + 2.2, tH + 15.9, cz + 0.02, C(0xc8102e));
-  // 水盤（細い石のふち）
-  const px0 = -27, px1 = -6, pz0 = 9.5, pz1 = 19.5;
-  mb.ground(px0 - 1.5, pz0 - 1.5, px1 + 1.5, pz1 + 1.5, 0.09, PAVE);
-  mb.box(px0, 0, pz0, px1, 0.4, pz0 + 0.35, cope); mb.box(px0, 0, pz1 - 0.35, px1, 0.4, pz1, cope);
-  mb.box(px0, 0, pz0, px0 + 0.35, 0.4, pz1, cope); mb.box(px1 - 0.35, 0, pz0, px1, 0.4, pz1, cope);
-  mb.ground(px0 + 0.35, pz0 + 0.35, px1 - 0.35, pz1 - 0.35, 0.28, WATER);
-  // 前の芝（水盤の左右）と、ロビー前の広場
-  mb.ground(-hw + 1, 7, -6, 8, 0.1, PAVE2);
-  mb.ground(-6, 7, hw - 1, hd - 0.4, 0.09, PAVE);
-  for (let x = -5; x < hw - 1; x += 4) mb.ground(x - 0.05, 7, x + 0.05, hd - 0.4, 0.095, PAVE2);
-  mb.ground(-6, lz1, lx1 + 1, 7, 0.09, PAVE);
-  mb.ground(lx1 + 1, -1, 30, 7, 0.09, PAVE);
-  // 広場の並木と旗竿、ベンチ、街灯
-  for (const x of [16, 23, 29]) for (const z of [11, 18]) tf(x, z, 0.85, 0);
-  for (const [k, x] of [[0, -3], [1, 0], [2, 3]] as [number, number][]) {
-    mb.box(x - 0.07, 0, 18.4, x + 0.07, 10, 18.54, C(0xe8e8e8));
-    mb.box(x + 0.07, 8.4, 18.45, x + 1.9, 9.8, 18.49, [C(0x1f4fa0), C(0xc8102e), C(0xf2c200)][k]);
-  }
-  for (const x of [8, 20]) bench(mb, x, 14.5, x + 4, 15.1);
-  for (const x of [-25, -15, -8]) lamp(mb, x, 21.5);
-  for (const x of [10, 26]) lamp(mb, x, 21.5);
-  // 奥と横の木
-  tf(-hw + 2, -hd + 2, 1.0); tf(hw - 2, -hd + 2, 0.95); tf(-hw + 1.8, 0, 0.9, 1); tf(hw - 1.8, 4, 0.9);
-  tf(-hw + 1.8, 20, 0.9); tf(-hw + 1.8, 13, 0.85);
+  tf(-hw + 2, -hd + 2, 1.0); tf(hw - 2, -hd + 2, 0.95); tf(-hw + 1.8, bz1 - 6, 0.9, 1); tf(hw - 1.8, bz1 - 8, 0.9);
 }

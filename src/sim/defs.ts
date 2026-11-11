@@ -281,7 +281,7 @@ export const CIVIC: Record<CivicId, CivicDef> = {
   incinerator_l: { id: 'incinerator_l', name: '大型焼却場（クリーンセンター）', w: 4, h: 6, rotate: true, cost: 42000, upkeep: 720, service: 'incinerator', capacity: 22000, pollution: 8, power: 600, desc: '月 22,000 のゴミを処理し、ごみ発電で電気も少し作る。排ガス処理で汚染は少なめ' },
   incinerator: { id: 'incinerator', name: '焼却場', w: 3, h: 3, cost: 9000, upkeep: 260, service: 'incinerator', capacity: 9000, pollution: 14, desc: '月 9,000 のゴミを処理する。大気汚染がある' },
   mayor_house: { id: 'mayor_house', name: '市長公邸', w: 2, h: 2, cost: 1000, upkeep: 20, park: 0.15, reward: true, desc: '記念施設。周りの地価が上がり、市長評価が上がる' },
-  city_hall: { id: 'city_hall', name: '市役所', w: 4, h: 3, cost: 12000, upkeep: 120, park: 0.2, reward: true, desc: '記念施設。周りの地価が上がり、市長評価が上がる' },
+  city_hall: { id: 'city_hall', name: '市役所', w: 6, h: 4, cost: 12000, upkeep: 120, park: 0.2, reward: true, desc: '記念施設。周りの地価が上がり、市長評価が上がる' },
   statue: { id: 'statue', name: '市長の銅像', w: 1, h: 1, cost: 500, upkeep: 5, park: 0.1, reward: true, desc: '記念施設。市長評価が上がる' },
   museum: { id: 'museum', name: '博物館', w: 3, h: 3, cost: 15000, upkeep: 200, park: 0.25, reward: true, desc: '記念施設。周りの地価と、大人の教育水準が上がる' },
   future_stadium: { id: 'future_stadium', name: '近未来スタジアム', w: 8, h: 8, cost: 60000, upkeep: 500, park: 0.12, reward: true, desc: '記念施設。白い曲面の大きなスタジアム。商業の需要が上がり、市長評価が上がる' },
