@@ -160,7 +160,7 @@ describe('junction refusals', () => {
 });
 
 // ---- 車の道すじ（carLayer と同じ形）：ジャンクションのランプの曲線と、ふつうのマスの道すじがつながっているか ----
-import { findJctChains, jAt, jctSegs, jKey } from '../src/render/jctCurve';
+import { findJctChains, jAt, jctSegs, jKey, jHalf } from '../src/render/jctCurve';
 import { CELL, DX as DXc, DY as DYc } from '../src/sim/constants';
 import { ROADS as RD } from '../src/sim/defs';
 import { isUrbanHighway as isUH } from '../src/sim/traffic';
@@ -288,5 +288,44 @@ describe('junction ramp ends meet a carriageway', () => {
         const info = [...anchors].map((v) => { const c = v % N, m = v >= N ? g.conn1[c] : g.conn[c]; return `${c % n},${(c / n) | 0}/L${v >= N ? 1 : 0}: conn=${m.toString(2)} chains=${chains.filter((C) => C.main0?.node === v || C.main1?.node === v).length}`; });
         expect(ends.length, 'one Y-split cell at the end of the branch: ' + info.join(' | ')).toBeGreaterThanOrEqual(1);
       }
+    });
+});
+
+// ---- Y字の分かれ目：本線が2本のランプに分かれる・2本から始まるところで、2本のランプの路面が重ならない ----
+describe('junction Y-splits do not stack decks', () => {
+  const cases: [string, number, number, boolean, boolean][] = [];
+  for (const [ln, ta, tb] of LEVELS) for (const [gn, da, db] of GEOMS) cases.push([`tee ${ln}, ${gn}`, ta, tb, da, db]);
+  for (const [name, ta, tb, da, db] of cases)
+    it(name, { timeout: 60000 }, () => {
+      const { w } = build('t', ta, tb, da, db, 'tee');
+      const g = w.g;
+      const chains = findJctChains(g, 0);
+      const ends = new Map<number, { C: (typeof chains)[number]; start: boolean }[]>();
+      for (const C of chains) {
+        if (C.dead0 && C.main0) (ends.get(C.main0.node) ?? ends.set(C.main0.node, []).get(C.main0.node)!).push({ C, start: true });
+        if (C.dead1 && C.main1) (ends.get(C.main1.node) ?? ends.set(C.main1.node, []).get(C.main1.node)!).push({ C, start: false });
+      }
+      let pairs = 0;
+      for (const list of ends.values()) {
+        if (list.length !== 2) continue;
+        pairs++;
+        const [a, b] = list;
+        const sOf = (e: (typeof list)[number], k: number) => (e.start ? e.C.bound[0] + k : e.C.bound[e.C.bound.length - 1] - k);
+        let worst = Infinity;
+        for (let k = 0; k <= 40; k += 1) {
+          const sa = sOf(a, k), sb = sOf(b, k);
+          const p = jAt(a.C, sa), q = jAt(b.C, sb);
+          // 曲線に直交する向きの、2本の中心の間の距離（路面の縁どうしのすきま）
+          const d = Math.abs((q.x - p.x) * -p.tz + (q.z - p.z) * p.tx);
+          worst = Math.min(worst, d - jHalf(a.C, sa) - jHalf(b.C, sb));
+        }
+        expect(worst, 'two ramp decks overlap at the Y-split').toBeGreaterThan(-0.6);
+        // 分かれ目の端では、2本合わせて本線の幅（すきまなし）
+        const p0 = jAt(a.C, sOf(a, 0)), q0 = jAt(b.C, sOf(b, 0));
+        const span = Math.hypot(p0.x - q0.x, p0.z - q0.z) + jHalf(a.C, sOf(a, 0)) + jHalf(b.C, sOf(b, 0));
+        const half = (a.start ? a.C.main0 : a.C.main1)!.half;
+        expect(Math.abs(span - 2 * half), 'ramps together span the branch deck at the split').toBeLessThan(0.8);
+      }
+      if (ta !== G1 && tb !== G1) expect(pairs).toBeGreaterThanOrEqual(1);
     });
 });

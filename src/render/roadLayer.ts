@@ -15,7 +15,7 @@ import { Grid } from '../sim/grid';
 import { CELL, DX, DY, dirOf, isDiag, opp } from '../sim/constants';
 import { ROADS, RoadType, isHighway, isUrbanElevated } from '../sim/defs';
 import type { TreeSpot } from './buildingGen';
-import { findJctChains, JChain, jAt, JPt, JR_HALF, mainLocal, JMain } from './jctCurve';
+import { findJctChains, JChain, jAt, jHalf, JPt, JR_HALF, mainLocal, JMain } from './jctCurve';
 import { findORamps, orAt, orEdges, orGroundH, orHalf, orHwH, orO, OR_HALF, OR_LANE, ORPt } from './oramp';
 import { findURamps, URamp, UR_END, UR_HALF, urampAt, urampS, urGore, urHw, urStart, UPt } from './uramp';
 
@@ -3206,26 +3206,31 @@ export class RoadLayer {
       for (const C of jchains) {
         if (C.fork0 >= 0 && C.draw0 === C.bound[0]) (groups.get('f' + C.fork0) ?? groups.set('f' + C.fork0, []).get('f' + C.fork0)!).push(C);
         if (C.join1 >= 0 && C.draw1 === C.bound[C.bound.length - 1]) (groups.get('j' + C.join1) ?? groups.set('j' + C.join1, []).get('j' + C.join1)!).push(C);
+        // Y字の分かれ目（本線がここで2本のランプに分かれる・2本から始まる）
+        if (C.dead0 && C.main0) (groups.get('d' + C.main0.node) ?? groups.set('d' + C.main0.node, []).get('d' + C.main0.node)!).push(C);
+        if (C.dead1 && C.main1) (groups.get('d' + C.main1.node) ?? groups.set('d' + C.main1.node, []).get('d' + C.main1.node)!).push(C);
       }
       const qa: JPt = { x: 0, z: 0, h: 0, tx: 1, tz: 0 }, qb: JPt = { x: 0, z: 0, h: 0, tx: 1, tz: 0 };
       for (const [key, list] of groups) {
         if (list.length !== 2) continue;
-        const fork = key[0] === 'f';
         const [A, B] = list;
-        const sOf = (C: JChain, k: number) => (fork ? C.bound[0] + k : C.bound[C.bound.length - 1] - k);
+        // それぞれの曲線の、分かれ目の側の端から k の点（始まりの端か、終わりの端か）
+        const node = Number(key.slice(1));
+        const atStart = (C: JChain) => (key[0] === 'f' ? true : key[0] === 'j' ? false : C.main0?.node === node && C.dead0);
+        const sOf = (C: JChain, k: number) => (atStart(C) ? C.bound[0] + k : C.bound[C.bound.length - 1] - k);
         let kG = 0;
         for (let k = 0; k < CELL * 4; k += 0.5) {
           jAt(A, sOf(A, k), qa);
           jAt(B, sOf(B, k), qb);
           kG = k;
-          if (Math.hypot(qa.x - qb.x, qa.z - qb.z) > 2 * JR_HALF + 1.2) break;
+          if (Math.hypot(qa.x - qb.x, qa.z - qb.z) > jHalf(A, sOf(A, k)) + jHalf(B, sOf(B, k)) + 1.2) break;
         }
         for (const [C, O] of [[A, B], [B, A]] as const) {
           jAt(C, sOf(C, kG * 0.5), qa);
           jAt(O, sOf(O, kG * 0.5), qb);
           // 進む向きの右（-tz, tx）に、もう1本があるか
           const right = (qb.x - qa.x) * -qa.tz + (qb.z - qa.z) * qa.tx > 0;
-          const s0 = fork ? C.bound[0] : sOf(C, kG), s1 = fork ? sOf(C, kG) : C.bound[C.bound.length - 1];
+          const s0 = atStart(C) ? C.bound[0] : sOf(C, kG), s1 = atStart(C) ? sOf(C, kG) : C.bound[C.bound.length - 1];
           (gore.get(C) ?? gore.set(C, []).get(C)!).push({ side: right ? 1 : 0, s0, s1 });
         }
       }
@@ -3238,7 +3243,8 @@ export class RoadLayer {
         const pts: RP[] = [];
         for (let k = 0; k <= m; k++) {
           jAt(C, d0 + ((d1 - d0) * k) / m, q);
-          pts.push({ x: q.x, z: q.z, h: q.h, hw: JR_HALF, sw: 0, t: RoadType.Ramp });
+          const sv = d0 + ((d1 - d0) * k) / m;
+          pts.push({ x: q.x, z: q.z, h: q.h, hw: jHalf(C, sv), sw: 0, t: RoadType.Ramp });
         }
         // 欄干を切る範囲（pts の長さに合わせる）
         const cut: Cut[] = [];
