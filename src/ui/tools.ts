@@ -495,7 +495,7 @@ export class ToolController {
     if (!cmd) return;
     const res = await this.game.exec(cmd);
     if (res.ok) {
-      if (cmd.t === 'road' || cmd.t === 'pline' || cmd.t === 'ramp' || cmd.t === 'uramp' || cmd.t === 'oramp' || cmd.t === 'diamond' || cmd.t === 'clover' || cmd.t === 'jct' || cmd.t === 'transit') sfx.road();
+      if (cmd.t === 'road' || cmd.t === 'pline' || cmd.t === 'ramp' || cmd.t === 'uramp' || cmd.t === 'diamond' || cmd.t === 'clover' || cmd.t === 'jct' || cmd.t === 'transit') sfx.road();
       else if (cmd.t === 'busstop' || cmd.t === 'estop') sfx.plop();
       else if (cmd.t === 'zone') sfx.zone();
       else if (cmd.t === 'bulldoze' || cmd.t === 'terrain') sfx.bulldoze();

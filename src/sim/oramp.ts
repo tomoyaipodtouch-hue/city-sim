@@ -327,11 +327,13 @@ export function orampOptions(g: Grid, x: number, y: number): { overlap: boolean;
       got.push({ key: `${keyBase}:${median === undefined ? 'd' : median ? 'm' : 'e'}`, label: base, mode, fx, fy, median, plan });
     }
     if (got.length > 1) {
-      // 既定（undefined）と同じものを除いて、道の端・道の真ん中を書き添える
-      const fixed = got.filter((o) => o.median !== undefined);
-      for (const o of fixed) o.label = `${base}（${SIDE_NAME(!!o.median)}）`;
-      options.push(...(fixed.length ? fixed : got));
-    } else options.push(...got);
+      // 降りる位置が違うものが2つ以上あるときは、位置を書き添える
+      for (const o of got) {
+        const ms = new Set(o.plan.ramps.map((r) => r.median));
+        if (ms.size === 1) o.label = `${base}（${SIDE_NAME([...ms][0])}）`;
+      }
+    }
+    options.push(...got);
   };
   add('出入口セット', 'set', 'set', x + 0.5, y + 0.5, () => true);
   const a0 = [0, 1, 2, 3].find((d) => (g.conn1[T] & bit(d)) && (g.conn1[T] & bit(d + 4)));

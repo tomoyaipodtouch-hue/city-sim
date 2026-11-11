@@ -339,3 +339,55 @@ describe('overlay ramp: drawn shape', () => {
     }
   });
 });
+
+describe('overlay ramp: options in the info tool', () => {
+  it('lists only placeable options, and each one places exactly its plan', async () => {
+    const { orampOptions } = await import('../src/sim/oramp');
+    for (const [under, hw] of [[RoadType.Avenue, E], [RoadType.Road, E], [RoadType.OneWay, E1], [RoadType.Avenue, E1], [RoadType.OneWay, E]] as const) {
+      const w0 = scene(under, hw);
+      const res = orampOptions(w0.g, T, Y);
+      expect(res.overlap).toBe(true);
+      expect(res.options.length).toBeGreaterThan(0);
+      expect(res.options.some((o) => o.mode === 'set')).toBe(true);
+      expect(new Set(res.options.map((o) => o.label)).size).toBe(res.options.length);
+      for (const o of res.options) {
+        expect(o.plan.ok, o.label).toBe(true);
+        const w = scene(under, hw);
+        const r = w.exec({ t: 'oramp', mode: o.mode, x: T, y: Y, fx: o.fx, fy: o.fy, median: o.median });
+        expect(r.ok, `${o.label}: ${r.msg}`).toBe(true);
+        const got = listORamps(w.g).map((q) => `${q.start}:${q.a}:${q.entry}:${q.median}`).sort();
+        expect(got).toEqual(o.plan.ramps.map((q) => `${q.start}:${q.a}:${q.entry}:${q.median}`).sort());
+        for (const q of listORamps(w.g)) checkRamp(w, q);
+      }
+      // 一方通行の本線の上なら、道の端と道の真ん中の両方を選べる
+      if (hw === E1) expect(res.options.filter((o) => o.mode === 'set').map((o) => o.label).sort()).toEqual(['出入口セット（道の端）', '出入口セット（道の真ん中）'].sort());
+      // 片側1車線の本線の下の一方通行：反対向きの出口・入口は出さない
+      if (hw === E && under === RoadType.OneWay) expect(res.options.every((o) => !o.label.startsWith('西行き'))).toBe(true);
+    }
+  });
+
+  it('two-way highway over an avenue offers each direction once, with the side fixed', async () => {
+    const { orampOptions } = await import('../src/sim/oramp');
+    const w = scene(RoadType.Avenue, E);
+    const labels = orampOptions(w.g, T, Y).options.map((o) => o.label);
+    expect(labels).toEqual(['出入口セット', '東行き：出口だけ', '東行き：入口だけ', '西行き：出口だけ', '西行き：入口だけ']);
+  });
+
+  it('shows nothing off the overlap, and a reason when nothing fits', async () => {
+    const { orampOptions } = await import('../src/sim/oramp');
+    const w = scene(RoadType.Road, E);
+    expect(orampOptions(w.g, T, Y + 3)).toEqual({ overlap: false, options: [], reason: '' });
+    w.exec({ t: 'road', x0: T + 1, y0: Y - 6, x1: T + 1, y1: Y + 6, road: RoadType.Road });
+    const res = orampOptions(w.g, T, Y);
+    expect(res.overlap).toBe(true);
+    expect(res.options.length).toBe(0);
+    expect(res.reason).toMatch(/交差点/);
+  });
+
+  it('the road menu no longer has overlay ramp tools', async () => {
+    const mod = 'node:fs'; // 型の定義なしで読む
+    const fs = (await import(/* @vite-ignore */ mod)) as { readFileSync: (u: URL, e: string) => string };
+    const src = fs.readFileSync(new URL('../src/ui/tools.ts', import.meta.url), 'utf8');
+    expect(src).not.toMatch(/oramp|重ねランプ/);
+  });
+});

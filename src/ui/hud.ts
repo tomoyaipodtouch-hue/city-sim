@@ -15,7 +15,8 @@ import { BRIDGE_STYLES } from '../render/bridgeStyles';
 import { platformCells, BULLDOZE_LAYERS, BULLDOZE_LAYER_NAMES } from '../sim/plan';
 import type { BulldozeLayer } from '../sim/plan';
 import { junctionGroup } from '../sim/traffic';
-import { decodeORamp, DIR_NAMES, orampAnchor, orampsAt, orampSlots, ORampSpec, sideReason } from '../sim/oramp';
+import { decodeORamp, DIR_NAMES, editORampDir, orampAnchor, orampHw, orampOptions, orampsAt, orampSlots, ORampOption, ORampSpec, sideReason } from '../sim/oramp';
+import type { PreviewArrow } from '../render/previewLayer';
 import { OrientMode, toApp } from './orient';
 
 const ICONS: Record<string, string> = {
@@ -528,7 +529,7 @@ export class Hud {
     }
     rows.push(['場所', `${c.x}, ${c.y}`]);
     this.info.innerHTML = `<h4><span>${title}</span><button class="x">✕</button></h4><table>${rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('')}</table>`;
-    this.info.querySelector<HTMLElement>('.x')!.onclick = () => this.info.classList.add('hidden');
+    this.info.querySelector<HTMLElement>('.x')!.onclick = () => { this.info.classList.add('hidden'); this.clearORPreview(); };
     // 公共サービスの施設ごとの予算
     if (this.facilityId && bid === this.facilityId) {
       const b = this.game.buildings.get(bid)!;
@@ -585,6 +586,13 @@ export class Hud {
       this.junctionOpen = true;
       this.info.append(this.orampPanel(ors[0]));
     }
+    // 高架の都市高速が一般道の真上を通るマス：置ける重ねランプだけを並べて、ここから作る
+    this.clearORPreview();
+    const orOpt = orampOptions(g, c.x, c.y);
+    if (orOpt.overlap && (orOpt.options.length || orOpt.reason)) {
+      this.junctionOpen = true;
+      this.info.append(this.orampCreatePanel(c.x, c.y, orOpt.options, orOpt.reason));
+    }
     if (g.road[i] && !isHighway(g.road[i]) && g.road[i] !== 7) {
       let deg = 0;
       for (let d = 0; d < 8; d++) if (g.conn[i] & (1 << d)) deg++;
@@ -597,6 +605,70 @@ export class Hud {
 
   private junctionOpen = false;
   private facilityId = 0;
+
+  // 重ねランプのプレビュー（地図の上に、置くマスを緑で、走る向きを矢印で）
+  private orPreview = false;
+  private showORPreview(o: ORampOption | null) {
+    const g = this.game.grid;
+    if (!g || !o) { this.clearORPreview(); return; }
+    const pv = this.r.preview;
+    const arrows: PreviewArrow[] = [];
+    for (const r of o.plan.ramps) {
+      const hw = orampHw(g, r);
+      for (const k of [1, 2, 3]) if (hw[k] >= 0) arrows.push({ cell: hw[k], dir: r.a });
+    }
+    pv.setTiles(g, o.plan.cells, () => 0x5cc46a);
+    pv.setPath(g, []);
+    pv.setArrows(g, arrows, 0x1f6fe0);
+    this.orPreview = true;
+    this.r.kick();
+  }
+  private clearORPreview() {
+    if (!this.orPreview) return;
+    this.orPreview = false;
+    this.r.preview.clear();
+    this.r.kick();
+  }
+
+  // 重ねランプを作る：置けるものだけを並べる。選ぶと地図で見せ、「作る」で置く
+  private orampCreatePanel(x: number, y: number, options: ORampOption[], reason: string): HTMLElement {
+    const box = el('div', 'jpanel');
+    box.append(el('h5', '', '重ねランプを作る'));
+    if (!options.length) {
+      box.append(el('p', 'muted', `ここには重ねランプを作れません（${reason.replace(/。$/, '')}）`));
+      return box;
+    }
+    let sel: ORampOption | null = null;
+    const list = el('div', 'seg wrap');
+    const go = el('button', 'btn hidden', '');
+    for (const o of options) {
+      const b = el('button', '', `${o.label}　${yen(o.plan.cost)}`);
+      b.onpointerenter = () => this.showORPreview(o);
+      b.onpointerleave = () => this.showORPreview(sel);
+      b.onclick = () => {
+        sfx.click();
+        sel = o;
+        list.querySelectorAll('button').forEach((q) => q.classList.remove('on'));
+        b.classList.add('on');
+        this.showORPreview(o);
+        go.textContent = `${o.label}を作る（${yen(o.plan.cost)}）`;
+        go.classList.remove('hidden');
+      };
+      list.append(b);
+    }
+    go.onclick = () => {
+      if (!sel) return;
+      const o = sel;
+      void this.game.exec({ t: 'oramp', mode: o.mode, x, y, fx: o.fx, fy: o.fy, median: o.median }).then((r) => {
+        if (r.ok) { sfx.road(); if (r.msg) this.showToast(r.msg); } else { sfx.error(); this.showToast(r.msg || 'できませんでした', true); }
+        this.clearORPreview();
+        setTimeout(() => { if (this.infoCell) this.renderInfo(); }, 250);
+      });
+    };
+    box.append(list, go);
+    box.append(el('p', 'muted', '出口は高架から下の道路へ、入口は下の道路から高架へ。出入口セットは、向きごとに手前が出口、先が入口です。選ぶと地図に場所を表示します。'));
+    return box;
+  }
 
   // 重ねランプの設定：向きごとに「出口と入口・出口だけ・入口だけ・なし」と、ランプごとの降りる（上る）位置
   private orampPanel(ref: ORampSpec): HTMLElement {
@@ -624,6 +696,8 @@ export class Hud {
       box.append(el('p', 'muted', `${DIR_NAMES[a]}の車線`));
       const seg = el('div', 'seg wrap');
       ([[3, '出口と入口'], [1, '出口だけ'], [2, '入口だけ'], [0, 'なし']] as const).forEach(([v, name]) => {
+        // 置けないもの（重なる・下の道路が合わない）は出さない
+        if (v !== want && !editORampDir(g.clone(), T, a0, a, v).ok) return;
         const b = el('button', want === v ? 'on' : '', name);
         b.onclick = () => {
           if (v === want) return;
