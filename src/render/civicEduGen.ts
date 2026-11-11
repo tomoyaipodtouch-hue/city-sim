@@ -131,8 +131,8 @@ function bikeShelter(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: nu
   }
 }
 // 植え込みのベンチ（低い箱）
-function bench(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number) {
-  mb.box(x0, 0, z0, x1, 0.45, z1, C(0xa88458), PAT.none, C(0xb8946a));
+function bench(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y = 0) {
+  mb.box(x0, y, z0, x1, y + 0.45, z1, C(0xa88458), PAT.none, C(0xb8946a));
 }
 // 街灯（夜は頭が光る）
 function lamp(mb: MeshBuilder, x: number, z: number, h = 4.5) {
@@ -535,6 +535,122 @@ function car(mb: MeshBuilder, x: number, z: number, alongX: boolean, col: THREE.
   mb.box(x - hx, 0.3, z - hz, x + hx, 0.95, z + hz, col);
   mb.box(x - cx, 0.95, z - cz, x + cx, 1.45, z + cz, g, PAT.none, col);
 }
+// ---- 屋上庭園の部品 ----
+const DECK = C(0xb98b5b), DECK_L = C(0x9c7348), SHRUB = C(0x4f7a3a), RAIL = C(0xa8cbd8);
+// ガラスの手すり（ふちに沿って、上に細いアルミの笠木）
+function glassRail(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, h = 1.1) {
+  const t = 0.08, cap = C(0xd9dcdf);
+  for (const [a, b, c, d] of [[x0, z0, x1, z0 + t], [x0, z1 - t, x1, z1], [x0, z0 + t, x0 + t, z1 - t], [x1 - t, z0 + t, x1, z1 - t]]) {
+    mb.box(a, y, b, c, y + h, d, RAIL, PAT.none, RAIL);
+    mb.box(a - 0.03, y + h, b - 0.03, c + 0.03, y + h + 0.07, d + 0.03, cap);
+  }
+}
+// 人（服の色の胴と頭）
+const CLOTHES = [0x2f4f7f, 0xb03a2e, 0x3d6b4a, 0xe0b34a, 0x2b2b2b, 0xd8d8d8, 0x7a4f8a].map(C);
+function person(mb: MeshBuilder, x: number, z: number, y: number, k: number) {
+  const c = CLOTHES[k % CLOTHES.length];
+  mb.box(x - 0.13, y, z - 0.1, x + 0.13, y + 0.85, z + 0.1, C(0x3a3d44));
+  mb.box(x - 0.2, y + 0.85, z - 0.13, x + 0.2, y + 1.5, z + 0.13, c);
+  mb.box(x - 0.11, y + 1.5, z - 0.11, x + 0.11, y + 1.76, z + 0.11, C(0xd9b08c));
+}
+// 足元の小さな灯り（夜に光る）
+function bollard(mb: MeshBuilder, x: number, z: number, y: number) {
+  mb.box(x - 0.09, y, z - 0.09, x + 0.09, y + 0.55, z + 0.09, DARK, PAT.none, C(0xfff0c8));
+  mb.box(x - 0.1, y + 0.4, z - 0.1, x + 0.1, y + 0.55, z + 0.1, C(0xffe6b0), PAT.lit);
+}
+// 木の板のデッキ（板の目地は向きに沿って）
+function deck(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, alongZ: boolean) {
+  mb.ground(x0, z0, x1, z1, y, DECK);
+  if (alongZ) for (let x = x0 + 0.6; x < x1 - 0.1; x += 0.6) mb.ground(x - 0.03, z0, x + 0.03, z1, y + 0.005, DECK_L);
+  else for (let z = z0 + 0.6; z < z1 - 0.1; z += 0.6) mb.ground(x0, z - 0.03, x1, z + 0.03, y + 0.005, DECK_L);
+}
+// 植え込み（低い木の箱に低木、ときどき小さな木）
+function planterBed(mb: MeshBuilder, tf: TF, x0: number, z0: number, x1: number, z1: number, y: number, tree: boolean) {
+  mb.box(x0, y, z0, x1, y + 0.5, z1, DECK_L, PAT.none, SHRUB);
+  for (let x = x0 + 0.8; x < x1 - 0.5; x += 1.6) mb.box(x - 0.45, y + 0.5, (z0 + z1) / 2 - 0.45, x + 0.45, y + 0.95, (z0 + z1) / 2 + 0.45, C(0x5d8a45), PAT.none, C(0x6a9a4e));
+  if (tree) tf((x0 + x1) / 2, (z0 + z1) / 2, 0.45, 0, y + 0.5);
+}
+// 議会棟の屋上庭園：まわりはガラスの手すり、奥に階段・エレベーターの塔屋（ガラスの出入口）、中央を通る木のデッキの道、
+// 芝と植え込み、パーゴラの下のベンチ、小さなカフェ、天窓、足元の灯り、人
+function roofGarden(mb: MeshBuilder, tf: TF, x0: number, z0: number, x1: number, z1: number, y: number) {
+  const W = x1 - x0, D = z1 - z0, cx = (x0 + x1) / 2, big = W > 22;
+  mb.ground(x0, z0, x1, z1, y + 0.02, C(0xcfcac0));
+  glassRail(mb, x0, z0, x1, z1, y);
+  // 塔屋（白い箱、正面はガラスの扉）
+  const kx0 = x0 + 1.5, kx1 = kx0 + 6, kz0 = z0 + 1.5, kz1 = kz0 + 4.5, kH = 3.4;
+  mb.box(kx0, y, kz0, kx1, y + kH, kz1, WHITE, PAT.none, ROOF);
+  mb.box(kx0 - 0.3, y + kH, kz0 - 0.3, kx1 + 0.3, y + kH + 0.3, kz1 + 0.3, C(0xc08a55), PAT.none, ROOF);
+  mb.box(kx0 + 1.2, y, kz1, kx1 - 1.2, y + 2.6, kz1 + 0.06, GLASS_L, PAT.fullglass, GLASS_L);
+  // 道：塔屋の前から正面まで（縦）と、横切る道
+  const pw = 2.6, pz = z0 + D * 0.55;
+  deck(mb, kx0 + 1.7, kz1, kx0 + 1.7 + pw, z1 - 1, y + 0.06, true);
+  deck(mb, x0 + 1, pz - pw / 2, x1 - 1, pz + pw / 2, y + 0.065, false);
+  const px0 = kx0 + 1.7, px1 = px0 + pw;
+  // 区画：道で分けた4つ。芝と植え込み
+  const zones: [number, number, number, number][] = [
+    [px1 + 0.6, z0 + 1.2, x1 - 1.2, pz - pw / 2 - 0.6],
+    [x0 + 1.2, pz + pw / 2 + 0.6, px0 - 0.6, z1 - 1.2],
+    [px1 + 0.6, pz + pw / 2 + 0.6, x1 - 1.2, z1 - 1.2],
+  ];
+  zones.forEach(([a, b, c, d], k) => {
+    if (c - a < 3 || d - b < 3) return;
+    mb.ground(a, b, c, d, y + 0.05, LAWN);
+    // ふちの植え込み（長い方の辺）
+    planterBed(mb, tf, a, d - 1.4, c, d, y, k !== 1);
+    if (k === 0 && d - b > 8) planterBed(mb, tf, a, b, a + Math.min(6, c - a), b + 1.4, y, true);
+    // 手前の広い芝：木の島（植え込み）とベンチを散らす
+    if (k === 2) {
+      const mz = (b + d) / 2 + 1.2;
+      for (let x = a + 3; x + 3 < c - 1; x += 8) {
+        planterBed(mb, tf, x, mz - 0.7, x + 3, mz + 0.7, y, true);
+        bench(mb, x + 0.3, mz + 1.0, x + 2.7, mz + 1.5, y);
+      }
+    }
+  });
+  // パーゴラ（前の右の区画の手前、木の柱と梁）とその下のベンチ
+  {
+    const gx0 = px1 + 1.5, gx1 = Math.min(x1 - 2, gx0 + (big ? 9 : 6)), gz0 = pz + pw / 2 + 1.2, gz1 = gz0 + 3.6, gy = y + 2.8;
+    for (const x of [gx0, gx1]) for (const z of [gz0, gz1]) mb.box(x - 0.12, y, z - 0.12, x + 0.12, gy, z + 0.12, C(0xa5733f));
+    for (const z of [gz0, gz1]) mb.box(gx0 - 0.3, gy, z - 0.1, gx1 + 0.3, gy + 0.25, z + 0.1, C(0xc08a55));
+    for (let x = gx0; x <= gx1 + 0.01; x += 0.7) mb.box(x - 0.05, gy + 0.25, gz0 - 0.4, x + 0.05, gy + 0.4, gz1 + 0.4, C(0xc08a55));
+    deck(mb, gx0 - 0.3, gz0 - 0.3, gx1 + 0.3, gz1 + 0.3, y + 0.07, false);
+    mb.box(gx0 + 0.4, y, gz1 - 0.8, gx1 - 0.4, y + 0.45, gz1 - 0.3, C(0xa88458), PAT.none, C(0xb8946a));
+    person(mb, gx0 + 1.6, gz1 - 1.3, y, 0); person(mb, gx0 + 2.4, gz1 - 1.3, y, 3);
+  }
+  // カフェ（大きな屋上だけ）：小さなガラスの箱と木の屋根、テーブル
+  if (big) {
+    const fx0 = x1 - 8.5, fx1 = x1 - 2, fz0 = z0 + 2, fz1 = fz0 + 4.5;
+    mb.box(fx0, y, fz0, fx1, y + 3, fz1, GLASS_L, PAT.fullglass, ROOF);
+    mb.box(fx0 - 0.8, y + 3, fz0 - 0.4, fx1 + 0.4, y + 3.35, fz1 + 1.6, C(0xc08a55), PAT.none, WHITE2);
+    for (let k = 0; k < 3; k++) {
+      const tx = fx0 + 0.8 + k * 2.2, tz = fz1 + 2.8;
+      mb.box(tx - 0.4, y, tz - 0.4, tx + 0.4, y + 0.75, tz + 0.4, WHITE, PAT.none, WHITE);
+      person(mb, tx + 0.7, tz, y, k + 4);
+    }
+    deck(mb, fx0 - 0.8, fz1, fx1 + 0.4, fz1 + 4.2, y + 0.06, true);
+  }
+  // 天窓（残す）
+  for (let x = px1 + 2; x + 2 < x1 - 2 && x < px1 + 10; x += 4.5) mb.box(x, y, pz - pw / 2 - 4, x + 2, y + 0.45, pz - pw / 2 - 2.2, WHITE2, PAT.none, GLASS_L);
+  // ベンチと足元の灯り（道に沿って）
+  for (let z = kz1 + 2; z < z1 - 2; z += 4) { bollard(mb, px0 - 0.3, z, y); bollard(mb, px1 + 0.3, z + 2, y); }
+  for (let x = x0 + 3; x < x1 - 2; x += 5) bollard(mb, x, pz - pw / 2 - 0.3, y);
+  bench(mb, x0 + 2, pz + pw / 2 + 0.3, x0 + 5, pz + pw / 2 + 0.8, y);
+  // 歩く人
+  person(mb, px0 + 0.8, z1 - 5, y, 1); person(mb, px1 - 0.7, pz + 3, y, 2); person(mb, cx + 3, pz - 0.4, y, 5); person(mb, x0 + 3.2, pz, y, 6);
+}
+// 行政棟の屋上テラス：正面の側に木のデッキ、ガラスの手すり、植え込み、ベンチと人
+function roofTerrace(mb: MeshBuilder, tf: TF, x0: number, z0: number, x1: number, z1: number, y: number, tz0: number) {
+  glassRail(mb, x0, z0, x1, z1, y);
+  deck(mb, x0 + 0.6, tz0, x1 - 0.6, z1 - 0.6, y + 0.08, false);
+  const n = Math.max(2, Math.floor((x1 - x0) / 9));
+  for (let k = 0; k < n; k++) {
+    const x = x0 + 2 + (k * (x1 - x0 - 6)) / Math.max(1, n - 1);
+    planterBed(mb, tf, x, z1 - 2.2, x + 2.4, z1 - 0.9, y, k % 2 === 0);
+    if (k < n - 1) bench(mb, x + 4, tz0 + 0.8, x + 6.5, tz0 + 1.3, y);
+    bollard(mb, x + 3.2, z1 - 1.4, y);
+  }
+  person(mb, x0 + 6, tz0 + 2.2, y, 2); person(mb, x1 - 7, tz0 + 2.6, y, 4); person(mb, x1 - 6.4, tz0 + 2.4, y, 0);
+}
 // ================= 市役所（6×4。古いセーブの 4×3 も敷地の大きさから組み立てる） =================
 // 2つのガラスの四角い棟：背の高い行政棟と、低く横に広い議会棟（上にガラスの議場）。2階の高さのガラスの渡り廊下でつなぐ。前に広場
 export function townHall(mb: MeshBuilder, f: LotFrame, tf: TF) {
@@ -565,8 +681,9 @@ export function townHall(mb: MeshBuilder, f: LotFrame, tf: TF) {
   // 屋上：薄い張り出しのスラブ、奥まった機械室（ガラスのルーバー）
   slab(mb, ax0, az0, ax1, az1, aH, 0.55, 0.5, WHITE, ROOF);
   under(ax0 - 0.5, az0 - 0.5, ax1 + 0.5, az1 + 0.5, aH);
-  mb.box(ax0 + 4, aH + 0.55, az0 + 4, ax1 - 4, aH + 3.6, az1 - 6, C(0xcdd2d6), PAT.industrial, C(0xbfc5ca));
-  greenRoof(mb, ax0, az0, ax1, az1, aH + 0.55, false);
+  mb.box(ax0 + 4, aH + 0.55, az0 + 4, ax1 - 4, aH + 3.6, az1 - 7, C(0xcdd2d6), PAT.industrial, C(0xbfc5ca));
+  greenRoof(mb, ax0, az0, ax1, az1 - 6.5, aH + 0.55, false);
+  roofTerrace(mb, tf, ax0 - 0.4, az0 - 0.4, ax1 + 0.4, az1 + 0.4, aH + 0.55, az1 - 6);
   // ---- 議会棟：2階の基壇の上に、前へ張り出すガラスの議場 ----
   const gap = Math.max(6, f.W * 0.09);
   // 右の端は駐車場（大きな敷地は2列、小さな敷地は1列）
@@ -584,7 +701,7 @@ export function townHall(mb: MeshBuilder, f: LotFrame, tf: TF) {
   for (const s of sides(hx0, hz0, hx1, hz1)) for (let t = 1.2; t < s.L - 0.5; t += 2.4) fin(mb, s, t, 0.16, 0.35, cH + 0.5, hH, wood, woodS);
   slab(mb, hx0, hz0, hx1, hz1, hH, 0.7, 2.0, WHITE, ROOF);
   under(hx0 - 2, hz0 - 2, hx1 + 2, hz1 + 2, hH, true);
-  greenRoof(mb, hx0, hz0, hx1, hz1, hH + 0.7);
+  roofGarden(mb, tf, hx0 - 1.6, hz0 - 1.6, hx1 + 1.6, hz1 + 1.6, hH + 0.7);
   // 張り出しの下の明かりと、前の細い柱
   under(hx0, cz1, hx1, hz1, cH, true);
   for (let x = hx0 + 1; x < hx1; x += (hx1 - hx0 - 2) / 3) mb.box(x - 0.2, 0, hz1 - 0.7, x + 0.2, cH, hz1 - 0.3, wood);
