@@ -106,7 +106,14 @@ const NODE_CAP: Record<number, number> = {
 };
 
 // 自動のときの制御方式：交通量が少なければ信号なし、多くなると一時停止、さらに多いと信号
-export function autoCtl(vol: number, deg: number, roadType: number) {
+export function autoCtl(vol: number, deg: number, roadType: number, prev = 0) {
+  const c = autoCtl0(vol, deg, roadType);
+  // 前の月の方式から下げるのは、交通量がしきい値より 3 割少なくなってから（しきい値のあたりで毎月切り替わらないように。
+  // 一時停止にすると交通量が減って止めをやめ、やめると増えてまた一時停止に、をくり返さない）
+  if (prev > c && prev <= Ctl.Signal && autoCtl0(vol / 0.7, deg, roadType) >= prev) return prev;
+  return c;
+}
+function autoCtl0(vol: number, deg: number, roadType: number) {
   if (deg < 3) return Ctl.None;
   if (vol < 900) return Ctl.None;
   if (vol < 2600 && roadType <= RoadType.Road) return Ctl.Stop;
@@ -177,7 +184,11 @@ export function normalizeAvenueJunctions(g: Grid) {
   }
 }
 
-export function buildJunctions(g: Grid, traffic: Float32Array): JunctionModel {
+// prev：前の月に決めた方式（自動の交差点が、しきい値のあたりで行ったり来たりしないように）
+// vol：方式を決める交通量（ならした値。なければ traffic）
+export function buildJunctions(g: Grid, traffic: Float32Array, prev?: Uint8Array, vol?: Float32Array): JunctionModel {
+  const pv = prev && prev.length === g.n * g.n ? prev : null;
+  const tv = vol && vol.length >= g.n * g.n ? vol : traffic;
   const N = g.n * g.n;
   const ctl = new Uint8Array(N), load = new Float32Array(N), deg = new Uint8Array(N);
   const done = new Uint8Array(N); // 1 = 大通りの交差点として処理ずみ、2 = ふつうの交差点のまとまり
@@ -194,9 +205,9 @@ export function buildJunctions(g: Grid, traffic: Float32Array): JunctionModel {
     if (grp && grp.avenue) {
       // 大通りの交差点：まとまり全体で1つの制御。自動なら、いちばん多い交通量で決める
       let vol = 0, dmax = 0, tmax = 0;
-      for (const c of grp.cells) { vol = Math.max(vol, traffic[c]); dmax = Math.max(dmax, junctionDeg(g, c)); tmax = Math.max(tmax, g.road[c]); }
+      for (const c of grp.cells) { vol = Math.max(vol, tv[c]); dmax = Math.max(dmax, junctionDeg(g, c)); tmax = Math.max(tmax, g.road[c]); }
       let c = groupCtl(g, grp.cells);
-      if (c === Ctl.Auto) c = autoCtl(vol, dmax, tmax);
+      if (c === Ctl.Auto) c = autoCtl(vol, dmax, tmax, pv ? pv[grp.cells[0]] : 0);
       for (const j of grp.cells) {
         done[j] = 1;
         ctl[j] = c;
@@ -204,7 +215,7 @@ export function buildJunctions(g: Grid, traffic: Float32Array): JunctionModel {
       }
       continue;
     }
-    const c = g.ictl[i] === Ctl.Auto ? autoCtl(traffic[i], d, g.road[i]) : g.ictl[i];
+    const c = g.ictl[i] === Ctl.Auto ? autoCtl(tv[i], d, g.road[i], pv ? pv[i] : 0) : g.ictl[i];
     ctl[i] = c;
     setLoad(i, c, traffic[i]);
   }

@@ -1674,7 +1674,11 @@ export class World {
     const hwy = this.highwayConnected ? 1.5 : 1;
     const external = this.neighborConnected ? Math.round((200 + pop * 0.25) * hwy) : 0;
     const traffic = this.maps.traffic, cong = this.maps.congestion;
-    const junctions = buildJunctions(g, traffic);
+    // 自動の交差点の方式は、ならした交通量で決める（一時停止にすると車が別の道へ移り、翌月には止めをやめる、を毎月くり返さない）
+    const NJ = g.n * g.n;
+    if (this.junctionVol.length !== NJ) this.junctionVol = traffic.slice(0, NJ);
+    else for (let i = 0; i < NJ; i++) this.junctionVol[i] = this.junctionVol[i] * 0.6 + traffic[i] * 0.4;
+    const junctions = buildJunctions(g, traffic, this.junctionCtl, this.junctionVol);
     const rnd = () => this.rng.next();
     // 駅とバス停
     const stations: { kind: 'bus' | LineKind; roadCells: number[]; lineCells: number[] }[] = [];
@@ -1856,6 +1860,7 @@ export class World {
     this.maps.jctl.set(junctions.ctl);
   }
   junctionCtl: Uint8Array = new Uint8Array(0);
+  junctionVol: Float32Array = new Float32Array(0); // 自動の交差点の方式を決める、月ごとにならした交通量
   transitRiders = 0; // 1日の公共交通の乗客数
   services: ServiceState = defaultServiceState();
   ordinances = new Set<OrdinanceId>();

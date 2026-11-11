@@ -163,6 +163,8 @@ export class CityRenderer {
     this.terrain = new TerrainLayer(n);
     this.scene.add(this.terrain.group);
     this.lastNightKey = -1; // 新しい地形のオーバーレイにも、昼夜の明るさを入れ直す
+    this.jctlAt = -Infinity; // 新しい街の交差点の方式は、すぐに入れる
+    this.jctlPending = null;
     this.grid = new Grid(n);
     this.rig.setMap(n);
     this.scene.remove(this.buildings.group);
@@ -198,14 +200,28 @@ export class CityRenderer {
     this.maps = m;
     this.dirty.overlay = true;
     // 交差点の制御方式が変わったら道路を作り直す（信号やラウンドアバウトの表示）
+    // 自動の交差点の方式は交通量で毎月どこかが変わる。道路は全部作り直す（重い）ので、方式の変化だけのときは
+    // 90 秒に1回までにまとめる（そのあいだも、道路が変わって作り直すときには一緒に入れる）。車は見えている方式に合わせる
     const old = this.roads.jctl;
     if (old.length !== m.jctl.length || old.some((v, i) => v !== m.jctl[i])) {
-      this.roads.jctl = m.jctl;
-      this.dirty.grid = true;
-    }
-    this.cars.jctl = m.jctl;
+      const now = performance.now();
+      // 手で決めた交差点（自動でないもの）が変わったときは、すぐに入れる
+      const manual = !!this.grid && old.length === m.jctl.length && old.some((v, i) => v !== m.jctl[i] && this.grid!.ictl[i] !== 0);
+      if (old.length !== m.jctl.length || manual || now - this.jctlAt > 90000) this.applyJctl(m.jctl);
+      else this.jctlPending = m.jctl;
+    } else this.jctlPending = null;
     if (this.grid) this.cars.setData(this.grid, m.traffic, m.congestion, m.freight, m.riders, m.garbage, m.garbageLeft);
     this.kick();
+  }
+
+  private jctlAt = -Infinity;
+  private jctlPending: Uint8Array | null = null;
+  private applyJctl(j: Uint8Array) {
+    this.roads.jctl = j;
+    this.cars.jctl = j;
+    this.jctlAt = performance.now();
+    this.jctlPending = null;
+    this.dirty.grid = true;
   }
 
   setDataView(v: DataView) {
@@ -303,7 +319,9 @@ export class CityRenderer {
     }
     if (this.dirty.grid) {
       // 建物が建つたびに grid は更新されるので、道路に関係する部分が変わったときだけ作り直す
-      const key = this.roadKey(g, heights);
+      let key = this.roadKey(g, heights);
+      // 道路を作り直すなら、まだ入れていない交差点の方式も一緒に入れる
+      if (key !== this.lastRoadKey && this.jctlPending) { this.applyJctl(this.jctlPending); key = this.roadKey(g, false); }
       // 地面の高さが変わっても、道路・線路のまわりの高さが同じなら作り直さない（キーに入っている）
       if (key !== this.lastRoadKey) {
         this.lastRoadKey = key;
@@ -366,7 +384,7 @@ export class CityRenderer {
     for (let i = 0; i < N; i++) {
       if (!(g.road[i] | g.up[i] | g.pline[i] | g.rail[i] | g.erail[i] | g.mono[i] | g.sub[i] | g.bstop[i])) continue;
       mix(g.rail[i] | (g.erail[i] << 8) | (g.mono[i] << 16) | (g.sub[i] << 24)); mix(g.bstop[i]); mix(g.bstyle[i]); mix(g.estn[i]); mix(g.pstyle[i]);
-      mix(i); mix(g.road[i]); mix(g.conn[i]); mix(g.oramp[i]); mix(g.up[i]); mix(g.conn1[i]); mix(g.pline[i]); mix(Math.round(g.upH[i] * 4)); mix(Math.round(g.deck[i] * 4)); mix(Math.round(g.lift[i] * 4));
+      mix(i); mix(g.road[i] | (g.ictl[i] << 8) | (g.iflags[i] << 16)); mix(g.conn[i]); mix(g.oramp[i]); mix(g.up[i]); mix(g.conn1[i]); mix(g.pline[i]); mix(Math.round(g.upH[i] * 4)); mix(Math.round(g.deck[i] * 4)); mix(Math.round(g.lift[i] * 4));
     }
     if (this.roads.jctl.length) for (let i = 0; i < N; i++) if (this.roads.jctl[i]) { mix(i); mix(this.roads.jctl[i]); }
     // 道路・線路・送電線のマスと、そのとなりのマスの地面の高さ（公園や施設を置いて地面をならしても、道路から離れていれば作り直さない）
