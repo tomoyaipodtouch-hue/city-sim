@@ -200,7 +200,7 @@ export const FREIGHT_RATE: Partial<Record<GrowKind, number>> = { IA: 0.05, ID: 0
 export const freightTrips = (b: { type: string; occ: number }) => Math.max(1, Math.round(b.occ * (FREIGHT_RATE[b.type as GrowKind] ?? 0.1)));
 // 港・貨物駅があるとき、遠くへ運ぶ荷物（船・鉄道に積みかえる）の割合。残りは近くの都市へトラックで運ぶ（道路・高速道路でマップの端へ）。
 // 遠くへの荷物は、マップの端より FREIGHT_TERMINAL_PREF 分以上遠くなければ港・貨物駅へ運ぶ
-export const FREIGHT_LONG = 0.6;
+export const FREIGHT_LONG = 0.7;
 const FREIGHT_TERMINAL_PREF = 30;
 // CIQ庁舎のまわり：需要が足りないときでも、毎日これだけの回数は倉庫業が建つのをためす。種類を選ぶときの需要の下限
 const CIQ_TRIES = 2;

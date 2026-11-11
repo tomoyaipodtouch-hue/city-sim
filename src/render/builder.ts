@@ -33,6 +33,8 @@ export const PAT = {
 // 庭の模様（石・地面・葉・灯籠）なら、上の面にも「庭の石や木」の模様をつける（窓の模様などは上の面にはつけない）
 const gardenPat = (p: number) => (p >= PAT.garden && p <= PAT.gardenGlow ? PAT.garden : 0);
 
+export interface PackedGeo { pos: Float32Array; nor: Float32Array; col: Float32Array; uvm: Float32Array; pat: Float32Array; mat: Float32Array; idx: Uint32Array }
+
 export class MeshBuilder {
   pos: number[] = [];
   nor: number[] = [];
@@ -413,6 +415,23 @@ export class MeshBuilder {
 
   get vertexCount() {
     return this.pos.length / 3;
+  }
+
+  // 作った形を、あとで別の入れ物に足せる形にしまう（建物ごとの形の覚え）
+  pack(): PackedGeo {
+    return { pos: Float32Array.from(this.pos), nor: Float32Array.from(this.nor), col: Float32Array.from(this.col), uvm: Float32Array.from(this.uvm), pat: Float32Array.from(this.pat), mat: Float32Array.from(this.mat), idx: Uint32Array.from(this.idx) };
+  }
+  append(p: PackedGeo) {
+    const base = this.pos.length / 3;
+    const add = (dst: number[], src: Float32Array) => { for (let i = 0; i < src.length; i++) dst.push(src[i]); };
+    add(this.pos, p.pos);
+    add(this.nor, p.nor);
+    add(this.col, p.col);
+    add(this.uvm, p.uvm);
+    add(this.pat, p.pat);
+    add(this.mat, p.mat);
+    const I = this.idx;
+    for (let i = 0; i < p.idx.length; i++) I.push(p.idx[i] + base);
   }
 
   toGeometry(): THREE.BufferGeometry {

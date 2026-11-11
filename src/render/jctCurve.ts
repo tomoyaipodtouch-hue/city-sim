@@ -228,7 +228,46 @@ function fairSolve(w: number[], t: number[]): number[] {
 }
 
 
+// 曲線をならす計算は重い（ジャンクション1つで数十 ms）ので、ジャンクションのまわりのマスが変わらないかぎり、前の結果を使う。
+// 道路の層・街灯・車の層が同じ盤面で続けて呼ぶので、そのたびに解き直さない。毎月の交通量の更新でも解き直さない
+const J_R = 4; // ジャンクションのマスから、形に効くマスの範囲（本線の向き・高さ・つながりを見る）
+const jCache = new Map<number, { k1: number; k2: number; n: number; chains: JChain[] }>();
+function jctKey(g: Grid): [number, number] {
+  const n = g.n, N = n * n;
+  let h1 = 2166136261, h2 = 0x9e3779b9;
+  const mix = (v: number) => { h1 = Math.imul(h1 ^ v, 16777619); h2 = Math.imul(h2 ^ v, 0x5bd1e995) ^ (h2 >>> 15); };
+  const seen = new Uint8Array(N);
+  let any = false;
+  for (let i = 0; i < N; i++) {
+    if (!g.jct[i]) continue;
+    any = true;
+    const x = i % n, y = (i / n) | 0;
+    for (let yy = Math.max(0, y - J_R); yy <= Math.min(n - 1, y + J_R); yy++)
+      for (let xx = Math.max(0, x - J_R); xx <= Math.min(n - 1, x + J_R); xx++) seen[yy * n + xx] = 1;
+  }
+  if (!any) return [0, 0];
+  const n1 = n + 1;
+  for (let c = 0; c < N; c++) {
+    if (!seen[c]) continue;
+    const x = c % n, y = (c / n) | 0, v = y * n1 + x;
+    mix(c); mix(g.road[c] | (g.up[c] << 8) | (g.jct[c] << 16)); mix(g.conn[c] | (g.conn1[c] << 8) | (g.flow[c] << 16) | (g.flow1[c] << 24));
+    mix(Math.round(g.deck[c] * 64)); mix(Math.round(g.lift[c] * 64)); mix(Math.round(g.upH[c] * 64));
+    mix(Math.round(g.heights[v] * 64)); mix(Math.round(g.heights[v + 1] * 64)); mix(Math.round(g.heights[v + n1] * 64)); mix(Math.round(g.heights[v + n1 + 1] * 64));
+  }
+  return [h1 | 1, h2];
+}
+
+// 呼ぶ側は、返した鎖を書き換えないこと（同じものを次の呼び出しにも返す）
 export function findJctChains(g: Grid, lift: number): JChain[] {
+  const [k1, k2] = jctKey(g);
+  const hit = jCache.get(lift);
+  if (hit && hit.k1 === k1 && hit.k2 === k2 && hit.n === g.n) return hit.chains;
+  const chains = k1 === 0 && k2 === 0 ? [] : solveJctChains(g, lift);
+  jCache.set(lift, { k1, k2, n: g.n, chains });
+  return chains;
+}
+
+function solveJctChains(g: Grid, lift: number): JChain[] {
   const n = g.n, N = n * n;
   // ランプのノードと、前後のノード
   const preds = new Map<number, number[]>(), succs = new Map<number, number[]>();

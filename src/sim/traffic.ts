@@ -268,9 +268,10 @@ export function edgeMinutes(g: Grid, from: number, d: number, congestion: Float3
 // トラック1台を乗用車何台分の交通量として数えるか（乗用車換算。箱型トラックとトレーラーの平均）
 export const TRUCK_PCE = 2.5;
 // トラックが経路を選ぶときの、道路の種類ごとの重み（移動時間にかける）。幹線道路（大通り・一般道）と高速道路・ランプを好み、
-// 街路と住宅地に面した道路を避ける。重みは経路選びだけに使い、輸送時間は実際の時間で数える
-export const TRUCK_STREET = 2.5; // 街路
-export const TRUCK_RESIDENTIAL = 1.6; // 住宅地に面した道路（さらにかける）
+// 街路と住宅地に面した道路を避ける（住宅地の街路は 2.9 倍、住宅地の一般道は 1.8 倍。工場・倉庫の前の街路は 1.6 倍で、荷物の出し入れには使う）。
+// 重みは経路選びだけに使い、輸送時間は実際の時間で数える
+export const TRUCK_STREET = 1.6; // 街路
+export const TRUCK_RESIDENTIAL = 1.8; // 住宅地に面した道路（さらにかける）
 export function truckRoadFactor(g: Grid, node: number) {
   const t = g.nodeType(node);
   if (t !== RoadType.Street && t !== RoadType.Road && t !== RoadType.OneWay) return 1;

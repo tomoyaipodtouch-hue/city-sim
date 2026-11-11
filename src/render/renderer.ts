@@ -304,7 +304,8 @@ export class CityRenderer {
     if (this.dirty.grid) {
       // 建物が建つたびに grid は更新されるので、道路に関係する部分が変わったときだけ作り直す
       const key = this.roadKey(g);
-      if (key !== this.lastRoadKey || heights) {
+      // 地面の高さが変わっても、道路・線路のまわりの高さが同じなら作り直さない（キーに入っている）
+      if (key !== this.lastRoadKey) {
         this.lastRoadKey = key;
         this.roads.rebuild(g);
         this.roadBridges.rebuild(g);
@@ -345,6 +346,7 @@ export class CityRenderer {
   }
 
   private lastRoadKey = -1;
+  private vMark = new Uint8Array(0);
   private lastQuayKey = -1;
   private lastStationSig = '';
   // 高架鉄道の駅のホームがあるマス（敷地のある駅のまわりと、線路の上だけの駅）
@@ -367,6 +369,15 @@ export class CityRenderer {
       mix(i); mix(g.road[i]); mix(g.conn[i]); mix(g.oramp[i]); mix(g.up[i]); mix(g.conn1[i]); mix(g.pline[i]); mix(Math.round(g.upH[i] * 4)); mix(Math.round(g.deck[i] * 4)); mix(Math.round(g.lift[i] * 4));
     }
     if (this.roads.jctl.length) for (let i = 0; i < N; i++) if (this.roads.jctl[i]) { mix(i); mix(this.roads.jctl[i]); }
+    // 道路・線路・送電線のマスと、そのとなりのマスの地面の高さ（公園や施設を置いて地面をならしても、道路から離れていれば作り直さない）
+    const n = g.n, n1 = n + 1;
+    const vm = this.vMark.length === n1 * n1 ? this.vMark.fill(0) : (this.vMark = new Uint8Array(n1 * n1));
+    for (let i = 0; i < N; i++) {
+      if (!(g.road[i] | g.up[i] | g.pline[i] | g.rail[i] | g.erail[i] | g.mono[i] | g.sub[i])) continue;
+      const x = i % n, y = (i / n) | 0;
+      for (let vy = Math.max(0, y - 1); vy <= Math.min(n, y + 2); vy++) for (let vx = Math.max(0, x - 1); vx <= Math.min(n, x + 2); vx++) vm[vy * n1 + vx] = 1;
+    }
+    for (let v = 0; v < vm.length; v++) if (vm[v]) { mix(v); mix(Math.round(g.heights[v] * 64)); }
     return h;
   }
 

@@ -3944,8 +3944,14 @@ export class RoadLayer {
       if (orLow.length) {
         // 重ねランプの擁壁の下にかかる歩道は、その範囲を切り取る
         const mx = (p[0] + p[6]) / 2, mz = (p[2] + p[8]) / 2, rr = Math.hypot(p[6] - p[0], p[8] - p[2]) / 2 + Math.hypot(p[9] - p[0], p[11] - p[2]);
-        const near = orLow.filter((o) => Math.hypot(o.x - mx, o.z - mz) < o.r + rr).map((o) => o.R);
-        if (near.length) cw = [...(cw ?? []), ...near];
+        // （歩道の四角ごとに配列を作らない：遠いものは先に外す）
+        let near: Region[] | null = null;
+        for (const o of orLow) {
+          const lim = o.r + rr;
+          if (Math.abs(o.x - mx) >= lim || Math.abs(o.z - mz) >= lim || Math.hypot(o.x - mx, o.z - mz) >= lim) continue;
+          (near ??= []).push(o.R);
+        }
+        if (near) cw = [...(cw ?? []), ...near];
       }
       if (cw && cw.some((R) => inRegion(R, (p[0] + p[6]) / 2, (p[2] + p[8]) / 2) && inRegion(R, p[0], p[2]) && inRegion(R, p[3], p[5]) && inRegion(R, p[6], p[8]) && inRegion(R, p[9], p[11]))) continue;
       const w0 = O.I.length / 3;

@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { Grid } from '../sim/grid';
 import { BState, type Building } from '../sim/world';
-import { MeshBuilder } from './builder';
+import { MeshBuilder, PackedGeo } from './builder';
 import { generateBuilding, setupLot, TreeSpot, farmFields, FxSpot, cemeteryStage } from './buildingGen';
 import { forcedLogi } from './logiRegistry';
 import { createBuildingMaterial } from './materials';
@@ -205,16 +205,37 @@ export class BuildingLayer {
       for (let i = 0; i < bs.length; i++) {
         const b = bs[i];
         const cp = camp.get(b.id), cb = cp ? cbase.get(cp.seed) : undefined;
-        const f = setupLot(mb, b, cb !== undefined ? () => cb : groundAt, minAt);
+        // 建物ごとの形の覚え：同じ建物・同じ地面なら、前に作った形をそのまま使う（区画の中の1軒が建つたびに、
+        // 区画の全部の建物を作り直さない）。池・滝・明かりのある公園と農家は、毎回作る
+        const bk = this.buildingKey(g, b, lv[i], cp, cb, cparkIds.size ? isCpark : null);
+        const hit = this.bcache.get(b.id);
+        if (hit && hit.key === bk) {
+          mb.append(hit.geo);
+          for (const t of hit.trees) trees.push(t);
+          for (const q of hit.fx) fx.push(q);
+          if (hit.beacon) beacons.push(...hit.beacon);
+          continue;
+        }
+        const one = new MeshBuilder();
+        const tr0 = trees.length, fx0 = fx.length;
+        const pond0 = pb.pos.length + pb.lights.length + pb.falls.length + pb.glows.length;
+        const f = setupLot(one, b, cb !== undefined ? () => cb : groundAt, minAt);
         if (cp) Object.assign(f, { campus: cp.seed, joinL: cp.L, joinR: cp.R, lead: cp.lead, cden: cp.den });
-        const v0 = mb.pos.length;
-        generateBuilding(mb, b, f, trees, isCpark, pb, fx, lv[i] / PORT_STEPS);
+        generateBuilding(one, b, f, trees, isCpark, pb, fx, lv[i] / PORT_STEPS);
         // 農家：同じ区画（8×8）の空いた農地を、ぜんぶ畑にする
-        if (b.type === 'IA' && g.zone[g.idx(b.x, b.y)] === ZoneType.F) farmFields(mb, g, b, farmEmpty(g, b), trees);
+        const farm = b.type === 'IA' && g.zone[g.idx(b.x, b.y)] === ZoneType.F;
+        if (farm) farmFields(one, g, b, farmEmpty(g, b), trees);
         // 高さ 60m を超える建物のいちばん高いところに、航空障害灯を付ける
         let top = -Infinity, tx = 0, tz = 0;
-        for (let k = v0; k < mb.pos.length; k += 3) if (mb.pos[k + 1] > top) { top = mb.pos[k + 1]; tx = mb.pos[k]; tz = mb.pos[k + 2]; }
-        if (top - f.base > 60) beacons.push(tx, top + 0.6, tz);
+        for (let k = 0; k < one.pos.length; k += 3) if (one.pos[k + 1] > top) { top = one.pos[k + 1]; tx = one.pos[k]; tz = one.pos[k + 2]; }
+        const beacon = top - f.base > 60 ? [tx, top + 0.6, tz] : null;
+        if (beacon) beacons.push(...beacon);
+        const geo = one.pack();
+        mb.append(geo);
+        const pond1 = pb.pos.length + pb.lights.length + pb.falls.length + pb.glows.length;
+        if (!farm && pond1 === pond0) {
+          this.bcache.set(b.id, { key: bk, geo, trees: trees.slice(tr0), fx: fx.slice(fx0), beacon });
+        } else this.bcache.delete(b.id);
       }
       const mesh = new THREE.Mesh(mb.toGeometry(), this.material);
       mesh.castShadow = true;
@@ -244,7 +265,32 @@ export class BuildingLayer {
       }
       this.chunks.set(c, { key, mesh, pond, glow, fall, trees, beacons, fx, lights: pb.lights, falls: pb.falls });
     }
+    // もう無い建物（取り壊し・建て替え）の覚えを捨てる
+    {
+      const alive = new Set<number>();
+      for (const b of list) alive.add(b.id);
+      for (const id of [...this.bcache.keys()]) if (!alive.has(id)) this.bcache.delete(id);
+    }
     return treesChanged;
+  }
+
+  // 建物ごとの形の覚え（建物の id → 形を決める値と、作った形）
+  private bcache = new Map<number, { key: string; geo: PackedGeo; trees: TreeSpot[]; fx: FxSpot[]; beacon: number[] | null }>();
+  // 建物の形を決める値：種類・状態・向き・大きさ・階数・密度、港への近さ、連結、敷地の地面の高さ、となりの公園
+  private buildingKey(g: Grid, b: Building, lv: number, cp: Campus | undefined, cb: number | undefined, isCpark: ((x: number, y: number) => boolean) | null) {
+    let k = `${b.type}.${b.state}.${b.face}.${b.x}.${b.y}.${b.w}.${b.h}.${b.floors}.${b.den}.${b.seed}.${b.civic ? 1 : 0}.p${lv}`;
+    if (cp) k += `.j${cp.seed}.${cp.den}.${cp.port}.${cp.L ? 1 : 0}${cp.R ? 1 : 0}${cp.lead ? 1 : 0}.${cb ?? 0}`;
+    if (b.type === 'cemetery') k += `.g${cemeteryStage(b)}`;
+    let h = 0;
+    for (let y = b.y; y <= b.y + b.h; y++) for (let x = b.x; x <= b.x + b.w; x++) h = Math.imul(h ^ Math.round(g.vh(x, y) * 64), 16777619);
+    k += `.h${h}`;
+    if (isCpark) {
+      let m = 0;
+      for (let x = b.x - 1; x <= b.x + b.w; x++) m = Math.imul(m ^ ((isCpark(x, b.y - 1) ? 1 : 0) + (isCpark(x, b.y + b.h) ? 2 : 0)), 31) + 7;
+      for (let y = b.y; y < b.y + b.h; y++) m = Math.imul(m ^ ((isCpark(b.x - 1, y) ? 1 : 0) + (isCpark(b.x + b.w, y) ? 2 : 0)), 31) + 7;
+      k += `.c${m}`;
+    }
+    return k;
   }
 
   private gather() {
