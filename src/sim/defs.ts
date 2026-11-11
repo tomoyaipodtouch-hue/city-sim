@@ -48,6 +48,9 @@ export const ROADS: Record<number, RoadDef> = {
 
 export const OVERPASS_LIFT = 7.5; // 地上の高速道路をまたぐ道路の高さ
 export const RAMP_COST = 600; // ランプ1か所
+// ジャンクション（都市高速どうし）のランプ：ゆるいカーブの2車線分の幅で作るので、ふつうのランプより速く、容量も本線より大きい（つなぎ目で詰まらないように）
+export const JCT_RAMP_SPEED = 70;
+export const JCT_RAMP_CAP = 5200;
 export const isHighway = (t: number) => t === RoadType.Highway || t === RoadType.GroundHighway || t === RoadType.UrbanHighway || t === RoadType.UrbanGroundHighway || t === RoadType.UrbanHighway1W || t === RoadType.UrbanGroundHighway1W;
 // 地上の高速道路（一般の道路は立体交差でまたぐ）
 export const isGroundHighway = (t: number) => t === RoadType.GroundHighway || t === RoadType.UrbanGroundHighway || t === RoadType.UrbanGroundHighway1W;

@@ -4,7 +4,7 @@
 // 経路探索のノードは「階層 × マス」（地上と上空）。最後の番号は「隣の都市」。
 import { Grid, Ctl, JF } from './grid';
 import { CELL, DX, DY, isDiag } from './constants';
-import { BUS_WAIT, LINES, LineKind, ROADS, RoadType, isHighway } from './defs';
+import { BUS_WAIT, JCT_RAMP_SPEED, LINES, LineKind, ROADS, RoadType, isHighway } from './defs';
 
 const START_OVERHEAD_MIN = 2; // 家を出て駐車場まで等
 // パーク&ライド：駅に面した道路で車を降り、駐車して改札まで歩く時間（分）
@@ -259,7 +259,7 @@ export function junctionDelay(g: Grid, j: JunctionModel, cell: number, din: numb
 export function edgeMinutes(g: Grid, from: number, d: number, congestion: Float32Array) {
   const def = ROADS[g.nodeType(from)] || ROADS[1];
   const len = isDiag(d) ? CELL * 1.414 : CELL;
-  const base = len / ((def.speedKmh * 1000) / 60);
+  const base = len / (((isJctRamp(g, from) ? JCT_RAMP_SPEED : def.speedKmh) * 1000) / 60);
   return base * congestion[from];
 }
 
@@ -643,6 +643,12 @@ export function assignTrips(
 export function congestionFactor(volume: number, capacity: number) {
   const r = volume / capacity;
   return Math.min(8, 1 + 0.15 * r * r * r * r);
+}
+
+// ジャンクションのランプのノード
+export function isJctRamp(g: Grid, node: number) {
+  const N = g.n * g.n;
+  return node >= N ? (g.jct[node - N] & 2) !== 0 : (g.jct[node] & 1) !== 0;
 }
 
 export const isUrbanHighway = (t: number) => t === RoadType.UrbanHighway || t === RoadType.UrbanGroundHighway;

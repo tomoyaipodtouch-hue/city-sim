@@ -6,6 +6,7 @@ import type { FromWorker, NewCityOpts, ToWorker } from './sim/protocol';
 export class GameClient {
   worker: Worker;
   grid: Grid | null = null;
+  gridSeq = 0; // 地図が届くたびに増える（ツールの計画の使い回しに使う）
   buildings = new Map<number, Building>();
   buildingList: Building[] = [];
   maps: Maps | null = null;
@@ -49,6 +50,7 @@ export class GameClient {
         if (m.heights) g.heights.set(m.heights);
         const rec = g as unknown as Record<string, { set(a: ArrayLike<number>): void }>;
         for (const k in m.arrays) rec[k]?.set(m.arrays[k]);
+        this.gridSeq++;
         this.onGrid?.(g, !!m.heights);
         break;
       }

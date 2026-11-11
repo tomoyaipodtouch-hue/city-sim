@@ -1,6 +1,7 @@
 // ツールの定義と、ドラッグ中のプレビュー・確定
 import { BUS_STOP_COST, CIVIC, CivicId, DENSITY_NAMES, LINES, LineKind, ROADS, RoadType, ZoneType, ZONE_COST, ZONE_NAMES, POWER_LINE_COST, RAMP_COST , ESTOP_COST } from '../sim/defs';
 import { normRect, planBulldoze, planBusStop, planCloverleaf, planTransitLine, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoadCmd, planZone, planURamp, planTerrain, TERRAIN_STEP, TerrainOp, planTrees, TREE_COST, planEStop, planReclaim, RECLAIM_COST } from '../sim/plan';
+import { JCT_FORMS, planJct, JctForm } from '../sim/jct';
 import type { PreviewArrow } from '../render/previewLayer';
 import type { Command } from '../sim/world';
 import type { GameClient } from '../game';
@@ -42,6 +43,10 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { tool: 'uramp', name: '都市高速のランプ（1×5）', note: yen(RAMP_COST * 3) },
       { tool: 'diamond', name: 'ダイヤモンド型インターチェンジ', note: '高速道路をタップ' },
       { tool: 'clover', name: 'クローバー型インターチェンジ', note: '高速道路の交差点をタップ' },
+      { tool: 'jct:tee', name: 'ジャンクション（T字・Y字）', note: '都市高速が合わさるマスをタップ' },
+      { tool: 'jct:semi', name: 'ジャンクション（十字・準直結型）', note: '都市高速の交差をタップ' },
+      { tool: 'jct:clover', name: 'ジャンクション（十字・クローバー型）', note: '集散路つき。交差をタップ' },
+      { tool: 'jct:turbine', name: 'ジャンクション（十字・タービン型）', note: '都市高速の交差をタップ' },
     ],
   },
   {
@@ -202,6 +207,17 @@ export class ToolController {
   onResult: ((ok: boolean, msg: string) => void) | null = null;
 
   constructor(private game: GameClient, private r: CityRenderer) {}
+
+  // ジャンクションの計画は重いので、同じ地図・同じマス・同じ形なら使い回す
+  private jctCache: { key: string; grid: unknown; plan: ReturnType<typeof planJct> } | null = null;
+  private jctPlan(form: JctForm, x: number, y: number) {
+    const g = this.game.grid!;
+    const key = `${form}:${x}:${y}:${this.game.gridSeq}`;
+    if (this.jctCache && this.jctCache.key === key && this.jctCache.grid === g && this.jctCache.plan) return this.jctCache.plan;
+    const plan = planJct(g, form, x, y);
+    this.jctCache = { key, grid: g, plan };
+    return plan;
+  }
 
   setTool(t: string) {
     this.tool = t;
@@ -397,6 +413,13 @@ export class ToolController {
       pv.setPath(g, []);
       return plan.ok ? { text: `クローバー型　${yen(plan.cost)}`, bad: false } : { text: plan.reason, bad: true };
     }
+    if (t.startsWith('jct:')) {
+      const form = t.split(':')[1] as JctForm;
+      const plan = this.jctPlan(form, x, y);
+      pv.setTiles(g, plan.ok ? plan.cells : plan.bad.size ? [...plan.bad] : [g.idx(x, y)], () => (plan.ok ? 0x5cc46a : 0xe5534b));
+      pv.setPath(g, []);
+      return plan.ok ? { text: `ジャンクション　${yen(plan.cost)}`, bad: false } : { text: plan.reason, bad: true };
+    }
     if (t === 'diamond') {
       const plan = planDiamond(g, x, y);
       pv.setTiles(g, plan.cells.length ? plan.cells : [g.idx(x, y)], (i) => (!plan.ok && (plan.bad.has(i) || !plan.cells.length) ? 0xe5534b : plan.ok ? 0x5cc46a : 0xf0b429));
@@ -445,10 +468,11 @@ export class ToolController {
     else if (t === 'estop') cmd = { t: 'estop', x: d.x1, y: d.y1 };
     else if (t === 'diamond') cmd = { t: 'diamond', x: d.x1, y: d.y1 };
     else if (t === 'clover') cmd = { t: 'clover', x: d.x1, y: d.y1 };
+    else if (t.startsWith('jct:') && JCT_FORMS.includes(t.split(':')[1] as JctForm)) cmd = { t: 'jct', form: t.split(':')[1] as JctForm, x: d.x1, y: d.y1 };
     if (!cmd) return;
     const res = await this.game.exec(cmd);
     if (res.ok) {
-      if (cmd.t === 'road' || cmd.t === 'pline' || cmd.t === 'ramp' || cmd.t === 'uramp' || cmd.t === 'diamond' || cmd.t === 'clover' || cmd.t === 'transit') sfx.road();
+      if (cmd.t === 'road' || cmd.t === 'pline' || cmd.t === 'ramp' || cmd.t === 'uramp' || cmd.t === 'diamond' || cmd.t === 'clover' || cmd.t === 'jct' || cmd.t === 'transit') sfx.road();
       else if (cmd.t === 'busstop' || cmd.t === 'estop') sfx.plop();
       else if (cmd.t === 'zone') sfx.zone();
       else if (cmd.t === 'bulldoze' || cmd.t === 'terrain') sfx.bulldoze();

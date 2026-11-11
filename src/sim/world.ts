@@ -4,17 +4,18 @@ import { Rng } from './rng';
 import { DAYS_PER_MONTH, DX, DY } from './constants';
 import {
   CIVIC, CivicId, plantPower, DEFAULT_TAX, DEPT_NAMES, Dept, DIFFICULTY, isHighway, SERVICE_DEPT, LineKind, LINES, FARE, BUS_STOP_UPKEEP, ESTOP_UPKEEP, GROW, GROW_KINDS, GrowKind, IND_DENSITY_MUL, maxFloorsFor, POWER_LINE_UPKEEP, ROADS, RoadType,
-  ZONE_KINDS, ZoneType, FARM_TILE, IL_BIG_SIZES, LOGI_REACH, logiReach,
+  JCT_RAMP_CAP, ZONE_KINDS, ZoneType, FARM_TILE, IL_BIG_SIZES, LOGI_REACH, logiReach,
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
 import {
   applyCloverleaf, applyDiamond, applyTerrain, applyReclaim, planReclaim, applyURamp, linkURampMiddles, linkUrbanEnds, planTrees, planEStop, estopGroup, estopRoads, platformCells, planURamp, planTerrain, TerrainOp, applyRamp, planRoadCmd, levelAvenueDecks, applyTransitLine, levelViaductsOverWater, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planZone,
 } from './plan';
 import { CELL } from './constants';
+import { applyJct, JctForm, planJct } from './jct';
 import { ADVISORS, Advice, computeRating, Loan, LOAN_AMOUNTS, loanRate, makeAdvice, MAX_LOANS, newLoan, ordinanceCost, ordinanceEffects, OrdinanceEffects, OrdinanceId, ORDINANCES, payLoan, rewardUnlocked, REWARD_REQ } from './governance';
 import { defaultServiceState, facilityEffect, makeServiceMaps, ServiceMaps, ServiceState, updateServices } from './services';
 import { Ages, agesOf, FuneralState, taxFactor, updatePopulation, WORK_RATE, workersOf } from './population';
-import { assignTrips, buildJunctions, buildRoadGraph, buildTransitModel, congestionFactor, Destination, junctionGroup, LAYER, normalizeAvenueJunctions, Origin, parkingMinutes } from './traffic';
+import { isJctRamp, assignTrips, buildJunctions, buildRoadGraph, buildTransitModel, congestionFactor, Destination, junctionGroup, LAYER, normalizeAvenueJunctions, Origin, parkingMinutes } from './traffic';
 
 export enum BState {
   Building = 0,
@@ -160,6 +161,7 @@ export type Command =
   | { t: 'ramp'; x: number; y: number }
   | { t: 'diamond'; x: number; y: number }
   | { t: 'clover'; x: number; y: number }
+  | { t: 'jct'; form: JctForm; x: number; y: number }
   | { t: 'transit'; x0: number; y0: number; x1: number; y1: number; kind: LineKind }
   | { t: 'busstop'; x: number; y: number }
   | { t: 'junction'; cell: number; ctl: number; split: number; flags: number }
@@ -554,6 +556,14 @@ export class World {
         this.afterGridChange();
         return { ok: true, cost: plan.cost };
       }
+      case 'jct': {
+        const plan = planJct(g, c.form, c.x, c.y);
+        if (!plan.ok) return { ok: false, msg: plan.reason };
+        if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
+        applyJct(g, plan);
+        this.afterGridChange();
+        return { ok: true, cost: plan.cost };
+      }
       case 'bridgeStyle': {
         // つながっている橋のマス全部の形を変える
         const n = g.n;
@@ -688,7 +698,7 @@ export class World {
       g.conn1[j] &= b;
       g.flow1[j] &= b;
       // 上空の道路がどこにもつながらなくなったら消す（立体交差の残り）
-      if (g.up[j] && !g.conn1[j]) { g.up[j] = 0; g.upH[j] = 0; }
+      if (g.up[j] && !g.conn1[j]) { g.up[j] = 0; g.upH[j] = 0; g.jct[j] &= ~2; }
     }
     g.road[i] = 0;
     g.conn[i] = 0;
@@ -702,6 +712,7 @@ export class World {
     g.ictl[i] = 0;
     g.isplit[i] = 50;
     g.iflags[i] = 0;
+    g.jct[i] = 0;
   }
 
   private placeBuilding(b: Building) {
@@ -1706,7 +1717,7 @@ export class World {
       const vol = (rc.volume[v] + rs.volume[v] + rf.volume[v]) * this.fx.traffic;
       traffic[v] = traffic[v] * 0.4 + vol * 0.6;
       this.maps.freight[v] = this.maps.freight[v] * 0.4 + rf.volume[v] * 0.6;
-      const cap = ROADS[t].capacity;
+      const cap = t === RoadType.Ramp && isJctRamp(g, v) ? JCT_RAMP_CAP : ROADS[t].capacity;
       cong[v] = cong[v] * 0.5 + congestionFactor(traffic[v], cap) * 0.5;
     }
     let employed = 0;
