@@ -1273,8 +1273,43 @@ export class RoadLayer {
       // 都市高速の高架：欄干と桁を、新しい断面で（cut の範囲は欄干を付けない）
       if (viaCur && hasBarrier(t)) {
         // 区間 k（点 k から k+1）の真ん中が cut の中なら、欄干を付けない
-        const segOk = (si: number, k: number) => sides[si] === true && (k + 1 >= pts.length || !cut.some((c) => c.side === si && (acc[k] + acc[k + 1]) / 2 > c.s0 && (acc[k] + acc[k + 1]) / 2 < c.s1));
-        via(pts.map((p, k): VP => ({ x: p.x, z: p.z, h: p.h - drop, nx: nrm[k][0], nz: nrm[k][1], e: [p.hw, p.hw], hs: [p.h - drop, p.h - drop], para: [sides[0] === true, sides[1] === true], sp: [segOk(0, k), segOk(1, k)] })));
+        // 欄干を切る範囲の端に点を入れて、切るところをちょうどそこにする（区間ごとに切ると、短い欄干の切れ端が残ったり、すき間ができたりする）
+        let P2 = pts, n2 = nrm, a2 = acc;
+        const tot2 = acc[acc.length - 1];
+        const cs = cut.flatMap((c) => [c.s0, c.s1]).filter((v) => v > 0.05 && v < tot2 - 0.05);
+        if (cs.length) {
+          P2 = splitAt(pts, cs);
+          a2 = [0];
+          for (let k = 1; k < P2.length; k++) a2.push(a2[k - 1] + Math.hypot(P2[k].x - P2[k - 1].x, P2[k].z - P2[k - 1].z));
+          // 横向き：もとの点ならそのまま、入れた点は前後の区間の向きから（もとの横向きと同じ側）
+          n2 = P2.map((p, k) => {
+            const o = pts.findIndex((q) => Math.abs(q.x - p.x) < 1e-6 && Math.abs(q.z - p.z) < 1e-6);
+            if (o >= 0) return nrm[o];
+            const A = P2[Math.max(0, k - 1)], B = P2[Math.min(P2.length - 1, k + 1)];
+            const dx = B.x - A.x, dz = B.z - A.z, l = Math.hypot(dx, dz) || 1;
+            let nx = -dz / l, nz = dx / l;
+            // もとの近い点の横向きと同じ側に
+            let best = 0, bd = Infinity;
+            pts.forEach((q, j) => { const d = Math.hypot(q.x - p.x, q.z - p.z); if (d < bd) { bd = d; best = j; } });
+            if (nx * nrm[best][0] + nz * nrm[best][1] < 0) { nx = -nx; nz = -nz; }
+            return [nx, nz] as [number, number];
+          });
+        }
+        const inCut = (si: number, k: number) => k + 1 < P2.length && cut.some((c) => c.side === si && (a2[k] + a2[k + 1]) / 2 > c.s0 && (a2[k] + a2[k + 1]) / 2 < c.s1);
+        const okSeg: boolean[][] = [0, 1].map((si) => P2.map((_, k) => sides[si] === true && !inCut(si, k)));
+        // 切る範囲にはさまれた 3m より短い欄干は、切れ端に見えるので付けない
+        for (const si of [0, 1]) {
+          let k = 0;
+          while (k + 1 < P2.length) {
+            if (!okSeg[si][k]) { k++; continue; }
+            let e = k;
+            while (e + 1 < P2.length && okSeg[si][e]) e++;
+            const len2 = a2[e] - a2[k];
+            if (len2 < 3 && k > 0 && !okSeg[si][k - 1] && e + 1 < P2.length && !okSeg[si][e]) for (let j = k; j < e; j++) okSeg[si][j] = false;
+            k = e + 1;
+          }
+        }
+        via(P2.map((p, k): VP => ({ x: p.x, z: p.z, h: p.h - drop, nx: n2[k][0], nz: n2[k][1], e: [p.hw, p.hw], hs: [p.h - drop, p.h - drop], para: [sides[0] === true, sides[1] === true], sp: [okSeg[0][k], okSeg[1][k]] })));
         return;
       }
       // 歩道（縁石つき）、高速道路の壁、または中央分離帯
@@ -3393,7 +3428,7 @@ export class RoadLayer {
     onGround = false;
     liftCur = 0;
     const orFoot: [number, number, number][] = []; // ランプの路面の点と、まわりの木をよける半径
-    const orLow: [number, number, number][] = []; // ランプの低いところの点と半径（その下の歩道は描かない）
+    const orLow: { R: Region; x: number; z: number; r: number }[] = []; // ランプの低いところの範囲（その下の歩道は切り取る）
     const SIGN_GREEN = new THREE.Color(0x1d7a46);
     for (const G of ors) {
       const { q0, qg } = orEdges(G);
@@ -3443,10 +3478,22 @@ export class RoadLayer {
         L.push({ x, z, h, nx, nz, half, hi: q >= qe - 0.01 ? gh : hi, ho: h, pi: q >= qg, q, o: orPt.o, ph });
       }
       if (L.length < 2) continue;
-      for (const p of L) {
-        orFoot.push([p.x, p.z, p.half + 1.8]);
-        // 低いところ（擁壁と土の部分）の下の歩道は作らない（擁壁が歩道を突き抜けないように）
-        if (p.h - g.groundAt(p.x, p.z) < 3.2) orLow.push([p.x, p.z, p.half + PAR_T + 0.3]);
+      for (const p of L) orFoot.push([p.x, p.z, p.half + 1.8]);
+      // 低いところ（擁壁と土の部分）の下の歩道は、擁壁の外の面でちょうど切り取る（擁壁が歩道を突き抜けないように）
+      for (let k = 0; k + 1 < L.length; k++) {
+        const A = L[k], B = L[k + 1];
+        if (A.h - g.groundAt(A.x, A.z) > 3.2 && B.h - g.groundAt(B.x, B.z) > 3.2) continue;
+        const wa = A.half + PAR_T + 0.02, wb = B.half + PAR_T + 0.02;
+        const poly = [[A.x - A.nx * wa, A.z - A.nz * wa], [B.x - B.nx * wb, B.z - B.nz * wb], [B.x + B.nx * wb, B.z + B.nz * wb], [A.x + A.nx * wa, A.z + A.nz * wa]];
+        const cx = (A.x + B.x) / 2, cz = (A.z + B.z) / 2;
+        const R: Region = [];
+        for (let e = 0; e < 4; e++) {
+          const [px, pz] = poly[e], [qx, qz] = poly[(e + 1) % 4];
+          let a = qz - pz, b = -(qx - px), c = a * px + b * pz;
+          if (a * cx + b * cz > c) { a = -a; b = -b; c = -c; }
+          R.push(a, b, c);
+        }
+        orLow.push({ R, x: cx, z: cz, r: Math.hypot(B.x - A.x, B.z - A.z) / 2 + Math.max(wa, wb) + 1 });
       }
       // 路面：高架の部分は本線と同じコンクリート（同じ色・同じ道ごとの乱数・同じ目地の位置）、
       // 地面に近い部分は下の一般道と同じアスファルト（同じ乱数）。境には伸縮継手
@@ -3782,12 +3829,16 @@ export class RoadLayer {
       for (let c = 0; c < 4 && k < 2; c++) if (onOtherRoad(p[c * 3] * 0.8 + mx * 0.2, p[c * 3 + 2] * 0.8 + mz * 0.2, owner, -1, my)) k++;
       return k >= 2;
     };
-    const underLowRamp = (x: number, z: number) => orLow.some(([ox, oz, r]) => (x - ox) ** 2 + (z - oz) ** 2 < r * r);
     for (const q of walkQ) {
       const p = q.p;
       if (overlaps(p, -2)) continue;
-      if (orLow.length && [0, 1, 2, 3].some((c) => underLowRamp(p[c * 3], p[c * 3 + 2])) || (orLow.length && underLowRamp((p[0] + p[6]) / 2, (p[2] + p[8]) / 2))) continue;
-      const cw = q.o !== undefined ? clipOf.get(q.o)?.walk : undefined;
+      let cw = q.o !== undefined ? clipOf.get(q.o)?.walk : undefined;
+      if (orLow.length) {
+        // 重ねランプの擁壁の下にかかる歩道は、その範囲を切り取る
+        const mx = (p[0] + p[6]) / 2, mz = (p[2] + p[8]) / 2, rr = Math.hypot(p[6] - p[0], p[8] - p[2]) / 2 + Math.hypot(p[9] - p[0], p[11] - p[2]);
+        const near = orLow.filter((o) => Math.hypot(o.x - mx, o.z - mz) < o.r + rr).map((o) => o.R);
+        if (near.length) cw = [...(cw ?? []), ...near];
+      }
       if (cw && cw.some((R) => inRegion(R, (p[0] + p[6]) / 2, (p[2] + p[8]) / 2) && inRegion(R, p[0], p[2]) && inRegion(R, p[3], p[5]) && inRegion(R, p[6], p[8]) && inRegion(R, p[9], p[11]))) continue;
       const w0 = O.I.length / 3;
       // タイルの模様の座標：縁石からの距離と、歩道に沿った位置（隣とつながるよう、向きをそろえる）
