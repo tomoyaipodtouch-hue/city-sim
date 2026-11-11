@@ -33,7 +33,7 @@ export const PAT = {
 // 庭の模様（石・地面・葉・灯籠）なら、上の面にも「庭の石や木」の模様をつける（窓の模様などは上の面にはつけない）
 const gardenPat = (p: number) => (p >= PAT.garden && p <= PAT.gardenGlow ? PAT.garden : 0);
 
-export interface PackedGeo { pos: Float32Array; nor: Float32Array; col: Float32Array; uvm: Float32Array; pat: Float32Array; mat: Float32Array; idx: Uint32Array }
+export interface PackedGeo { pos: Float32Array; nor: Float32Array; col: Float32Array; uvm: Float32Array; pat: Float32Array; mat: Float32Array; idx: Uint32Array | Uint16Array }
 
 export class MeshBuilder {
   pos: number[] = [];
@@ -419,7 +419,7 @@ export class MeshBuilder {
 
   // 作った形を、あとで別の入れ物に足せる形にしまう（建物ごとの形の覚え）
   pack(): PackedGeo {
-    return { pos: Float32Array.from(this.pos), nor: Float32Array.from(this.nor), col: Float32Array.from(this.col), uvm: Float32Array.from(this.uvm), pat: Float32Array.from(this.pat), mat: Float32Array.from(this.mat), idx: Uint32Array.from(this.idx) };
+    return { pos: Float32Array.from(this.pos), nor: Float32Array.from(this.nor), col: Float32Array.from(this.col), uvm: Float32Array.from(this.uvm), pat: Float32Array.from(this.pat), mat: Float32Array.from(this.mat), idx: this.pos.length / 3 > 65535 ? Uint32Array.from(this.idx) : Uint16Array.from(this.idx) };
   }
   // しまった形をいくつもつなげて、1つのメッシュの形にする（建物の区画）
   static mergePacked(parts: PackedGeo[]): THREE.BufferGeometry {

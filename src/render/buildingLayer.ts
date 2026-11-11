@@ -9,6 +9,11 @@ import { createBuildingMaterial } from './materials';
 import { PondBuilder, createPondMaterial, createGlowMaterial, createFallMaterial } from './parkPond';
 import { CIVIC, CivicId, FARM_TILE, LOGI_REACH, logiLook, ZoneType } from '../sim/defs';
 
+type BCacheEntry = { key: string; geo: PackedGeo; trees: TreeSpot[]; fx: FxSpot[]; beacon: number[] | null };
+// 建物ごとの形の覚えの上限（バイト）。こえた分は長く使っていない建物から捨てる（捨てた建物は、次に区画を作り直すときに作る）
+const BCACHE_MAX = 24 << 20;
+const packedBytes = (p: PackedGeo) => p.pos.byteLength + p.nor.byteLength + p.col.byteLength + p.uvm.byteLength + p.pat.byteLength + p.mat.byteLength + p.idx.byteLength;
+
 const CHUNK = 16;
 
 // 倉庫業（IL）の建物の形は、港・貨物駅への近さで変わる。施設と近さのはかり方は、シミュレーション（倉庫業が建つ場所）と
@@ -210,6 +215,9 @@ export class BuildingLayer {
         const bk = this.buildingKey(g, b, lv[i], cp, cb, cparkIds.size ? isCpark : null);
         const hit = this.bcache.get(b.id);
         if (hit && hit.key === bk) {
+          // 使った覚えは新しい方へ（覚えの上限をこえたら、長く使っていないものから捨てる）
+          this.bcache.delete(b.id);
+          this.bcache.set(b.id, hit);
           parts.push(hit.geo);
           for (const t of hit.trees) trees.push(t);
           for (const q of hit.fx) fx.push(q);
@@ -234,8 +242,8 @@ export class BuildingLayer {
         parts.push(geo);
         const pond1 = pb.pos.length + pb.lights.length + pb.falls.length + pb.glows.length;
         if (!farm && pond1 === pond0) {
-          this.bcache.set(b.id, { key: bk, geo, trees: trees.slice(tr0), fx: fx.slice(fx0), beacon });
-        } else this.bcache.delete(b.id);
+          this.cacheSet(b.id, { key: bk, geo, trees: trees.slice(tr0), fx: fx.slice(fx0), beacon });
+        } else this.cacheDel(b.id);
       }
       const mesh = new THREE.Mesh(MeshBuilder.mergePacked(parts), this.material);
       mesh.castShadow = true;
@@ -269,13 +277,30 @@ export class BuildingLayer {
     {
       const alive = new Set<number>();
       for (const b of list) alive.add(b.id);
-      for (const id of [...this.bcache.keys()]) if (!alive.has(id)) this.bcache.delete(id);
+      for (const id of [...this.bcache.keys()]) if (!alive.has(id)) this.cacheDel(id);
+      // 覚えの大きさの上限（iPhone の Safari はメモリが少ない：大きな街で全部の建物の形を覚えると、描画用の形と合わせて倍になる）
+      for (const id of this.bcache.keys()) {
+        if (this.bcacheBytes <= BCACHE_MAX) break;
+        this.cacheDel(id);
+      }
     }
     return treesChanged;
   }
 
   // 建物ごとの形の覚え（建物の id → 形を決める値と、作った形）
-  private bcache = new Map<number, { key: string; geo: PackedGeo; trees: TreeSpot[]; fx: FxSpot[]; beacon: number[] | null }>();
+  private bcache = new Map<number, BCacheEntry>();
+  private bcacheBytes = 0;
+  private cacheSet(id: number, e: BCacheEntry) {
+    this.cacheDel(id);
+    this.bcache.set(id, e);
+    this.bcacheBytes += packedBytes(e.geo);
+  }
+  private cacheDel(id: number) {
+    const e = this.bcache.get(id);
+    if (!e) return;
+    this.bcache.delete(id);
+    this.bcacheBytes -= packedBytes(e.geo);
+  }
   // 建物の形を決める値：種類・状態・向き・大きさ・階数・密度、港への近さ、連結、敷地の地面の高さ、となりの公園
   private buildingKey(g: Grid, b: Building, lv: number, cp: Campus | undefined, cb: number | undefined, isCpark: ((x: number, y: number) => boolean) | null) {
     let k = `${b.type}.${b.state}.${b.face}.${b.x}.${b.y}.${b.w}.${b.h}.${b.floors}.${b.den}.${b.seed}.${b.civic ? 1 : 0}.p${lv}`;
