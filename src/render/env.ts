@@ -118,4 +118,10 @@ export class SkyEnv {
     }
     t.viewport.set(0, 0, SIZE, SIZE);
   }
+
+  dispose() {
+    this.target.dispose();
+    this.mesh.geometry.dispose();
+    (this.mesh.material as THREE.Material).dispose();
+  }
 }

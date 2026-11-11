@@ -3,7 +3,9 @@ import type { GameClient } from '../game';
 import type { CityRenderer } from '../render/renderer';
 import { DATA_VIEWS, DataView } from '../render/overlay';
 import { ToolController, TOOL_GROUPS, PreviewInfo } from './tools';
-import { ADVISORS, AdvisorId, LOAN_AMOUNTS, MAX_LOANS, ordinanceCost, ORDINANCES } from '../sim/governance';
+import { metaParts } from './menu';
+import { ThumbService } from './thumbs';
+import { ADVISORS, AdvisorId, LOAN_AMOUNTS, MAX_LOANS, ordinanceCost, ORDINANCES, REWARD_REQ, rewardUnlocked } from '../sim/governance';
 import { CIVIC, CivicId, plantPower, DENSITY_NAMES, DEPTS, DEPT_NAMES, DIFFICULTY, isHighway, LINES, GROW, GROW_KINDS, GrowKind, ROADS, TAX_LABELS, ZONE_NAMES } from '../sim/defs';
 import { BState } from '../sim/world';
 import type { Stats } from '../sim/world';
@@ -103,6 +105,7 @@ export class Hud {
   private group = ''; // 選んでいるツールのグループ
   private subGroup = ''; // 開いているサブメニューのグループ
   private toastTimer = 0;
+  private thumbs = new ThumbService(() => this.r.renderer);
   private newsQueue: string[] = [];
   private newsTimer = 0;
   private stats: Stats | null = null;
@@ -197,18 +200,42 @@ export class Hud {
     this.subGroup = id;
     this.sub.innerHTML = '';
     this.sub.append(el('h3', '', g.name));
-    for (const it of g.items || []) {
-      const b = el('button', 'sitem' + (it.tool && it.tool === this.tools.tool ? ' on' : ''));
-      b.innerHTML = `<span class="l">${it.swatch ? `<i class="sw" style="background:${it.swatch}"></i>` : ''}<span class="nm">${it.name}</span></span><span class="nt">${it.note || ''}</span>`;
-      b.disabled = !!it.disabled;
-      b.onclick = () => {
-        sfx.click();
-        this.selectTool(it.tool!, id);
-        this.closeSub();
-        const desc = it.tool?.startsWith('plop:') ? CIVIC[it.tool.split(':')[1] as CivicId].desc : '';
-        this.showToast(`${it.name}${desc ? '：' + desc : ''}`);
-      };
-      this.sub.append(b);
+    const st = this.stats;
+    for (const sec of g.sections || []) {
+      // 見出しごとにまとめる（見出しは、その項目を送っているあいだだけ上に残る）
+      const box = el('section', 'sgrp');
+      box.append(el('h4', 'ssec', sec.title));
+      this.sub.append(box);
+      for (const it of sec.items) {
+        // 記念施設は、条件を満たすまで灰色（絵は出す。タップすると条件を知らせる）
+        const locked = !!it.reward && !this.game.sandbox && !rewardUnlocked(it.reward, st?.population ?? 0, st?.rating ?? 0, st?.services.eq.adult ?? 0);
+        const b = el('button', 'sitem' + (it.tool === this.tools.tool ? ' on' : '') + (locked || it.disabled ? ' off' : ''));
+        const th = el('span', 'th');
+        const tx = el('span', 'tx');
+        tx.append(el('span', 'nm', it.name));
+        const meta = metaParts(it);
+        if (meta.length) {
+          const mt = el('span', 'mt');
+          for (const m of meta) mt.append(el('span', '', m));
+          tx.append(mt);
+        }
+        if (it.req) tx.append(el('span', 'rq', `${locked ? '🔒 ' : ''}${it.req}`));
+        b.append(th, tx);
+        this.thumbs.fill(th, it.thumb);
+        b.disabled = !!it.disabled;
+        b.onclick = () => {
+          sfx.click();
+          if (locked) {
+            this.showToast(`${it.name}：まだ建てられません（条件：${REWARD_REQ[it.reward!].label}）`, true);
+            return;
+          }
+          this.selectTool(it.tool, id);
+          this.closeSub();
+          const desc = it.desc ?? (it.tool.startsWith('plop:') ? CIVIC[it.tool.split(':')[1] as CivicId].desc : '');
+          this.showToast(`${it.name}${desc ? '：' + desc : ''}`);
+        };
+        box.append(b);
+      }
     }
     this.sub.classList.remove('hidden');
     this.highlightToolbar();

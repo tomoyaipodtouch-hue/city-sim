@@ -1,6 +1,6 @@
 // ツールの定義と、ドラッグ中のプレビュー・確定
-import { BUS_STOP_COST, CIVIC, CivicId, DENSITY_NAMES, LINES, LineKind, ROADS, RoadType, ZoneType, ZONE_COST, ZONE_NAMES, POWER_LINE_COST, RAMP_COST , ESTOP_COST } from '../sim/defs';
-import { normRect, planBulldoze, planBusStop, planCloverleaf, planTransitLine, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoadCmd, planZone, planURamp, planTerrain, TERRAIN_STEP, TerrainOp, planTrees, TREE_COST, planEStop, planReclaim, RECLAIM_COST, BULLDOZE_LAYERS, BULLDOZE_LAYER_NAMES } from '../sim/plan';
+import { CIVIC, CivicId, LineKind, RoadType, ZoneType } from '../sim/defs';
+import { normRect, planBulldoze, planBusStop, planCloverleaf, planTransitLine, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoadCmd, planZone, planURamp, planTerrain, TerrainOp, planTrees, planEStop, planReclaim, BULLDOZE_LAYERS, BULLDOZE_LAYER_NAMES } from '../sim/plan';
 import type { BulldozeLayer } from '../sim/plan';
 import { JCT_FORMS, planJct, JctForm } from '../sim/jct';
 import type { PreviewArrow } from '../render/previewLayer';
@@ -9,152 +9,9 @@ import type { GameClient } from '../game';
 import type { CityRenderer } from '../render/renderer';
 import { sfx } from '../sound';
 
-export interface ToolItem {
-  tool?: string;
-  name: string;
-  note?: string;
-  swatch?: string;
-  disabled?: boolean;
-}
-export interface ToolGroup {
-  id: string;
-  name: string;
-  icon: string;
-  items?: ToolItem[];
-  tool?: string; // 下位メニューがない場合
-  soon?: string;
-}
-
+export { TOOL_GROUPS } from './menu';
 const yen = (v: number) => `§${Math.round(v).toLocaleString()}`;
-
-export const TOOL_GROUPS: ToolGroup[] = [
-  {
-    id: 'road', name: '道路', icon: 'road', items: [
-      { tool: 'road:1', name: ROADS[RoadType.Street].name, note: `${yen(ROADS[1].cost)}/マス` },
-      { tool: 'road:2', name: ROADS[RoadType.Road].name, note: `${yen(ROADS[2].cost)}/マス` },
-      { tool: 'road:3', name: ROADS[RoadType.OneWay].name, note: `${yen(ROADS[3].cost)}/マス` },
-      { tool: 'road:4', name: `${ROADS[RoadType.Avenue].name}（2マス幅）`, note: `${yen(ROADS[4].cost * 2)}/マス` },
-      { tool: 'road:5', name: `${ROADS[RoadType.Highway].name}（2マス幅）`, note: `${yen(ROADS[5].cost * 2)}/マス` },
-      { tool: 'road:6', name: `${ROADS[RoadType.GroundHighway].name}（2マス幅）`, note: `${yen(ROADS[6].cost * 2)}/マス` },
-      { tool: 'road:8', name: ROADS[RoadType.UrbanHighway].name, note: `${yen(ROADS[8].cost)}/マス` },
-      { tool: 'road:9', name: ROADS[RoadType.UrbanGroundHighway].name, note: `${yen(ROADS[9].cost)}/マス` },
-      { tool: 'road:10', name: ROADS[RoadType.UrbanHighway1W].name, note: `${yen(ROADS[10].cost)}/マス（引いた向きに走る）` },
-      { tool: 'road:11', name: ROADS[RoadType.UrbanGroundHighway1W].name, note: `${yen(ROADS[11].cost)}/マス（引いた向きに走る）` },
-      { tool: 'ramp', name: 'ランプ（出入口）', note: yen(RAMP_COST) },
-      { tool: 'uramp', name: '都市高速のランプ（1×5）', note: yen(RAMP_COST * 3) },
-      { tool: 'diamond', name: 'ダイヤモンド型インターチェンジ', note: '高速道路をタップ' },
-      { tool: 'clover', name: 'クローバー型インターチェンジ', note: '高速道路の交差点をタップ' },
-      { tool: 'jct:tee', name: 'ジャンクション（T字・Y字）', note: '都市高速が合わさるマスをタップ' },
-      { tool: 'jct:semi', name: 'ジャンクション（十字・準直結型）', note: '都市高速の交差をタップ' },
-      { tool: 'jct:clover', name: 'ジャンクション（十字・クローバー型）', note: '集散路つき。交差をタップ' },
-      { tool: 'jct:turbine', name: 'ジャンクション（十字・タービン型）', note: '都市高速の交差をタップ' },
-    ],
-  },
-  {
-    id: 'zone', name: 'ゾーン', icon: 'zone', items: [
-      ...[1, 2, 3].flatMap((z) =>
-        [0, 1, 2].map((d) => ({
-          tool: `zone:${z}:${d}`,
-          name: `${ZONE_NAMES[z]}（${DENSITY_NAMES[d]}）`,
-          note: `${yen(ZONE_COST[z][d])}/マス`,
-          swatch: `color-mix(in srgb, ${['', 'var(--r)', 'var(--c)', 'var(--i)'][z]} ${[55, 80, 100][d]}%, #000)`,
-        })),
-      ),
-      { tool: 'zone:4:0', name: '農地（8×8ごとに農家1軒、残りは畑）', note: `${yen(ZONE_COST[4][0])}/マス`, swatch: '#b9a24e' },
-      { tool: 'dezone', name: 'ゾーン解除', note: '空き地のみ' },
-    ],
-  },
-  {
-    id: 'power', name: '電力', icon: 'power', items: [
-      { tool: 'pline', name: '送電線', note: `${yen(POWER_LINE_COST)}/マス` },
-      { tool: 'plop:coal', name: CIVIC.coal.name, note: yen(CIVIC.coal.cost) },
-      { tool: 'plop:gas', name: CIVIC.gas.name, note: yen(CIVIC.gas.cost) },
-      { tool: 'plop:oil', name: CIVIC.oil.name, note: yen(CIVIC.oil.cost) },
-      { tool: 'plop:wind', name: CIVIC.wind.name, note: yen(CIVIC.wind.cost) },
-      { tool: 'plop:solar', name: CIVIC.solar.name, note: yen(CIVIC.solar.cost) },
-      { tool: 'plop:nuclear', name: CIVIC.nuclear.name, note: yen(CIVIC.nuclear.cost) },
-      { tool: 'plop:nuclear_in', name: `${CIVIC.nuclear_in.name}（10×8）`, note: yen(CIVIC.nuclear_in.cost) },
-      { tool: 'plop:nuclear_sea', name: `${CIVIC.nuclear_sea.name}（10×8）`, note: yen(CIVIC.nuclear_sea.cost) },
-    ],
-  },
-  {
-    id: 'water', name: '水道', icon: 'water', items: [
-      { tool: 'plop:pump', name: CIVIC.pump.name, note: yen(CIVIC.pump.cost) },
-      { tool: 'plop:tower', name: CIVIC.tower.name, note: yen(CIVIC.tower.cost) },
-      { tool: 'plop:water_plant', name: `${CIVIC.water_plant.name}（4×6・水辺）`, note: yen(CIVIC.water_plant.cost) },
-      { tool: 'plop:desal', name: `${CIVIC.desal.name}（4×6・水辺）`, note: yen(CIVIC.desal.cost) },
-    ],
-  },
-  {
-    id: 'civic', name: '公共施設', icon: 'civic', items: [
-      { tool: 'plop:park_s', name: CIVIC.park_s.name, note: yen(CIVIC.park_s.cost) },
-      { tool: 'plop:park_l', name: CIVIC.park_l.name, note: yen(CIVIC.park_l.cost) },
-      { tool: 'plop:plaza', name: CIVIC.plaza.name, note: yen(CIVIC.plaza.cost) },
-      { tool: 'plop:playground', name: `${CIVIC.playground.name}（1×2）`, note: yen(CIVIC.playground.cost) },
-      { tool: 'plop:greenway', name: `${CIVIC.greenway.name}（1×3）`, note: yen(CIVIC.greenway.cost) },
-      { tool: 'plop:sports', name: `${CIVIC.sports.name}（2×3）`, note: yen(CIVIC.sports.cost) },
-      { tool: 'plop:garden', name: `${CIVIC.garden.name}（2×3）`, note: yen(CIVIC.garden.cost) },
-      { tool: 'plop:cpark_a', name: `${CIVIC.cpark_a.name}（3×3・つなげられる）`, note: yen(CIVIC.cpark_a.cost) },
-      { tool: 'plop:cpark_b', name: `${CIVIC.cpark_b.name}（3×4・つなげられる）`, note: yen(CIVIC.cpark_b.cost) },
-      { tool: 'plop:police_s', name: CIVIC.police_s.name, note: yen(CIVIC.police_s.cost) },
-      { tool: 'plop:police_l', name: CIVIC.police_l.name, note: yen(CIVIC.police_l.cost) },
-      { tool: 'plop:fire_s', name: CIVIC.fire_s.name, note: yen(CIVIC.fire_s.cost) },
-      { tool: 'plop:fire_l', name: CIVIC.fire_l.name, note: yen(CIVIC.fire_l.cost) },
-      { tool: 'plop:clinic', name: CIVIC.clinic.name, note: yen(CIVIC.clinic.cost) },
-      { tool: 'plop:hospital', name: CIVIC.hospital.name, note: yen(CIVIC.hospital.cost) },
-      { tool: 'plop:school_e', name: CIVIC.school_e.name, note: yen(CIVIC.school_e.cost) },
-      { tool: 'plop:school_h', name: CIVIC.school_h.name, note: yen(CIVIC.school_h.cost) },
-      { tool: 'plop:college', name: CIVIC.college.name, note: yen(CIVIC.college.cost) },
-      { tool: 'plop:library', name: CIVIC.library.name, note: yen(CIVIC.library.cost) },
-      { tool: 'plop:landfill', name: CIVIC.landfill.name, note: yen(CIVIC.landfill.cost) },
-      { tool: 'plop:incinerator', name: CIVIC.incinerator.name, note: yen(CIVIC.incinerator.cost) },
-      { tool: 'plop:incinerator_l', name: `${CIVIC.incinerator_l.name}（4×6）`, note: yen(CIVIC.incinerator_l.cost) },
-      { tool: 'plop:recycling', name: CIVIC.recycling.name, note: yen(CIVIC.recycling.cost) },
-      { tool: 'plop:crematorium', name: `${CIVIC.crematorium.name}（4×3）`, note: yen(CIVIC.crematorium.cost) },
-      { tool: 'plop:cemetery', name: `${CIVIC.cemetery.name}（4×4）`, note: yen(CIVIC.cemetery.cost) },
-      { tool: 'plop:ciq', name: `${CIVIC.ciq.name}（4×3）`, note: yen(CIVIC.ciq.cost) },
-      { tool: 'plop:mayor_house', name: `記念：${CIVIC.mayor_house.name}`, note: '人口2千・評価55' },
-      { tool: 'plop:statue', name: `記念：${CIVIC.statue.name}`, note: '人口5千・評価70' },
-      { tool: 'plop:museum', name: `記念：${CIVIC.museum.name}`, note: '人口8千・評価55・教育90' },
-      { tool: 'plop:city_hall', name: `記念：${CIVIC.city_hall.name}`, note: '人口1万・評価50' },
-      { tool: 'plop:stadium', name: `記念：${CIVIC.stadium.name}`, note: '人口3万・評価60' },
-      { tool: 'plop:future_stadium', name: `記念：${CIVIC.future_stadium.name}（8×8）`, note: '人口3万・評価60' },
-    ],
-  },
-  {
-    id: 'transit', name: '公共交通', icon: 'transit', items: [
-      { tool: 'busstop', name: 'バス停（道路をタップ）', note: yen(BUS_STOP_COST) },
-      { tool: 'line:rail', name: '鉄道の線路', note: `${yen(LINES.rail.cost)}/マス` },
-      { tool: 'plop:station', name: CIVIC.station.name, note: yen(CIVIC.station.cost) },
-      { tool: 'line:erail', name: '高架鉄道の線路', note: `${yen(LINES.erail.cost)}/マス` },
-      { tool: 'plop:el_station', name: CIVIC.el_station.name, note: yen(CIVIC.el_station.cost) },
-      { tool: 'estop', name: '高架鉄道の駅（線路の上だけ・線路をタップ）', note: yen(ESTOP_COST) },
-      { tool: 'line:mono', name: 'モノレールの線路', note: `${yen(LINES.mono.cost)}/マス` },
-      { tool: 'plop:mono_station', name: CIVIC.mono_station.name, note: yen(CIVIC.mono_station.cost) },
-      { tool: 'line:sub', name: '地下鉄の線路', note: `${yen(LINES.sub.cost)}/マス` },
-      { tool: 'plop:sub_station', name: CIVIC.sub_station.name, note: yen(CIVIC.sub_station.cost) },
-      { tool: 'plop:freight_st', name: CIVIC.freight_st.name, note: yen(CIVIC.freight_st.cost) },
-      { tool: 'plop:ferry_p', name: CIVIC.ferry_p.name, note: yen(CIVIC.ferry_p.cost) },
-      { tool: 'plop:ferry_c', name: CIVIC.ferry_c.name, note: yen(CIVIC.ferry_c.cost) },
-      { tool: 'plop:seaport', name: CIVIC.seaport.name, note: yen(CIVIC.seaport.cost) },
-      { tool: 'plop:seaport_l', name: `${CIVIC.seaport_l.name}（12×16・水辺）`, note: yen(CIVIC.seaport_l.cost) },
-      { tool: 'plop:airport_s', name: `${CIVIC.airport_s.name}（11×44）`, note: yen(CIVIC.airport_s.cost) },
-      { tool: 'plop:airport_l', name: `${CIVIC.airport_l.name}（17×80）`, note: yen(CIVIC.airport_l.cost) },
-    ],
-  },
-  {
-    id: 'terrain', name: '地形', icon: 'terrain', items: [
-      { tool: 'terrain:raise', name: '地面を上げる', note: `${TERRAIN_STEP}m ずつ` },
-      { tool: 'terrain:lower', name: '地面を下げる', note: `${TERRAIN_STEP}m ずつ` },
-      { tool: 'terrain:level', name: '平らにする', note: '始点の高さにそろえる' },
-      { tool: 'reclaim:1', name: '埋め立て・岸壁（コンクリート）', note: `${yen(RECLAIM_COST)}/マス` },
-      { tool: 'reclaim:2', name: '埋め立て・親水護岸（遊歩道）', note: `${yen(RECLAIM_COST)}/マス` },
-      { tool: 'trees', name: '木を植える', note: `${yen(TREE_COST)}/マス` },
-    ],
-  },
-  { id: 'bulldoze', name: '取り壊し', icon: 'bulldoze', tool: 'bulldoze' },
-  { id: 'query', name: '情報', icon: 'query', tool: 'query' },
-];
+export type { ToolItem, ToolGroup, ToolSection } from './menu';
 
 export interface DragState {
   x0: number;

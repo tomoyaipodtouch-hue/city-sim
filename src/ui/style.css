@@ -60,23 +60,50 @@ button:disabled { opacity: 0.38; cursor: default; }
 .tbtn svg { width: 19px; height: 19px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .tbtn.on { color: var(--fg); background: rgba(79, 179, 246, 0.2); border-left-color: var(--accent); }
 .sub {
+  --th: 56px;
   position: absolute; left: calc(var(--sl) + var(--tool)); top: var(--st); max-height: calc(100% - var(--bar) - var(--news) - var(--sb) - var(--st));
   border-bottom: 1px solid var(--line); border-radius: 0 0 12px 0;
-  width: max-content; min-width: 200px; max-width: min(340px, 55vw); background: var(--bg2); border-right: 1px solid var(--line); overflow-y: auto; overflow-x: hidden; padding: 6px;
+  width: min(330px, 58vw); background: var(--bg2); border-right: 1px solid var(--line); overflow-y: auto; overflow-x: hidden; padding: 0 6px 6px;
+  overscroll-behavior: contain; -webkit-overflow-scrolling: touch; scrollbar-width: thin;
 }
-.sub h3 { margin: 2px 4px 6px; font-size: var(--fs-s); color: var(--fg2); font-weight: 600; }
+.sub h3 { margin: 7px 6px 1px; font-size: var(--fs-l); color: var(--fg); font-weight: 700; }
+/* 見出し：一覧を下へ送っても、いま見ている見出しが上に残る */
+.sub .ssec {
+  position: sticky; top: 0; z-index: 1; margin: 0 -6px 2px; padding: 7px 12px 4px; font-size: var(--fs-s); font-weight: 600; color: var(--fg2);
+  letter-spacing: 0.04em; background: #1f2e40; border-bottom: 1px solid var(--line);
+}
 .sitem {
-  display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 8px 8px; border-radius: 8px;
-  text-align: left; gap: 6px; margin-bottom: 2px;
+  display: flex; align-items: center; width: 100%; padding: 4px 6px; border-radius: 10px; text-align: left; gap: 10px; margin-bottom: 1px;
 }
-.sitem .nm { font-size: var(--fs-m); white-space: nowrap; }
-.sitem .l { display: flex; align-items: center; min-width: 0; }
-.sitem .nt { margin-left: 14px; }
-.sitem .nt { font-size: var(--fs-s); color: var(--fg2); white-space: nowrap; }
+.sitem .th {
+  flex: 0 0 auto; width: var(--th); height: var(--th); border-radius: 9px; overflow: hidden; position: relative;
+  background: radial-gradient(120% 90% at 50% 15%, #c3d8e8 0%, #8fb0c9 60%, #7896ad 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+.sitem .th img, .sitem .th svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.sitem .th img { opacity: 0; transition: opacity 0.25s; }
+.sitem .th.ready img { opacity: 1; }
+/* 絵を描いているあいだの下地（地面の台の形） */
+.sitem .th:not(.ready):has(img)::after {
+  content: ''; position: absolute; left: 22%; right: 22%; top: 38%; height: 30%; background: rgba(255, 255, 255, 0.22);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); animation: thpulse 1.2s ease-in-out infinite alternate;
+}
+@keyframes thpulse { from { opacity: 0.35; } to { opacity: 0.9; } }
+.sitem .tx { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.sitem .nm { font-size: var(--fs-m); font-weight: 600; line-height: 1.25; }
+.sitem .mt { font-size: var(--fs-s); color: var(--fg2); font-variant-numeric: tabular-nums; line-height: 1.35; }
+/* 費用・維持費・大きさは、区切りのところでだけ折り返す */
+.sitem .mt span { white-space: nowrap; display: inline-block; }
+.sitem .mt span + span::before { content: '・'; margin: 0 0.35em; opacity: 0.7; }
+.sitem .rq { font-size: var(--fs-xs); color: var(--warn); line-height: 1.3; }
 .sitem.on { background: var(--accent2); }
-.sitem.on .nt { color: #dcefff; }
-.sitem .sw { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; margin-right: 6px; }
-.sitem .l { display: flex; align-items: center; }
+.sitem.on .mt { color: #dcefff; }
+.sitem.on .th { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14), 0 0 0 2px rgba(255, 255, 255, 0.85); }
+/* 建てられない項目：文字を薄く、絵は色を落として出す */
+.sitem.off .tx { opacity: 0.5; }
+.sitem.off .th img { filter: grayscale(0.85) brightness(0.9); }
+.sitem.off .th.ready img { opacity: 0.6; }
+.sitem.off .rq { opacity: 1; }
 
 /* ---- 下のバー ---- */
 .bar {
@@ -277,7 +304,8 @@ html.portrait .bar > .grow { order: 2; flex: 0 0 100%; height: 0; }
 html.portrait .bar > .speed { order: 3; margin-right: auto; }
 html.portrait .news { left: 0; bottom: calc(var(--tool) + var(--sb) + var(--bar)); height: var(--news); padding: 0 calc(var(--sr) + 10px) 0 calc(var(--sl) + 10px); }
 html.portrait .sub {
-  left: 0; right: 0; top: auto; bottom: var(--stack); width: auto; max-width: none; max-height: 48%;
+  --th: 52px;
+  left: 0; right: 0; top: auto; bottom: var(--stack); width: auto; max-width: none; max-height: 52%;
   border-radius: 12px 12px 0 0; border-top: 1px solid var(--line); border-bottom: 0;
 }
 html.portrait .info { left: 8px; bottom: calc(var(--stack) + 8px); max-height: calc(100% - var(--stack) - var(--st) - 20px); }
