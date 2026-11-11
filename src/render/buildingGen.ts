@@ -30,6 +30,74 @@ const fxFlare = (mb: MeshBuilder, x: number, y: number, z: number, s = 1) => { i
 // トラックの道すじ（敷地の座標の点の列 [x, y, z, ...]）。行って、wait 秒止まって、戻る
 const fxTruck = (mb: MeshBuilder, pts: [number, number, number][], wait = 6, color = 0xf2f2f2) => { if (fxOut) { const o: number[] = []; for (const [x, y, z] of pts) o.push(...mb.world(x, y, z)); fxOut.push({ kind: 'truck', pts: o, wait, color }); } };
 
+// ---- 敷地の池（PBR の水面：parkPond の PondBuilder に渡す。ないときは落ち着いた色の板） ----
+let pondOut: PondBuilder | null = null;
+const WATER_FB = new THREE.Color(0x35545c), POOL_BED = new THREE.Color(0x3a4044), COPING = new THREE.Color(0xcfcac0);
+// 形の決まった水盤（四角）：石の笠木と、PBR の水面
+function formalPool(mb: MeshBuilder, x0: number, z0: number, x1: number, z1: number, y: number, cw = 0.5, cope = COPING) {
+  mb.ground(x0, z0, x1, z1, y - 0.03, POOL_BED);
+  const ix0 = x0 + cw, ix1 = x1 - cw, iz0 = z0 + cw, iz1 = z1 - cw;
+  if (pondOut) {
+    const sd = (x: number, z: number) => Math.min(x - ix0, ix1 - x, z - iz0, iz1 - z);
+    pondOut.addLocal(ix0 - 0.3, iz0 - 0.3, ix1 + 0.3, iz1 + 0.3, y, (x, z) => LAKE_T + 0.012 + sd(x, z) * 0.6, (x, yy, z) => mb.world(x, yy, z), Math.min(1, (ix1 - ix0) / 4, (iz1 - iz0) / 4));
+  } else mb.ground(ix0, iz0, ix1, iz1, y, WATER_FB);
+  const t = y + 0.16;
+  mb.box(x0, 0, z0, x1, t, iz0, cope); mb.box(x0, 0, iz1, x1, t, z1, cope);
+  mb.box(x0, 0, iz0, ix0, t, iz1, cope); mb.box(ix1, 0, iz0, x1, t, iz1, cope);
+}
+// 丸い水盤（噴水）の水面
+function roundPool(mb: MeshBuilder, cx: number, cz: number, r: number, y: number) {
+  if (pondOut) pondOut.addLocal(cx - r - 0.3, cz - r - 0.3, cx + r + 0.3, cz + r + 0.3, y, (x, z) => LAKE_T + 0.012 + (r - Math.hypot(x - cx, z - cz)) * 0.6, (x, yy, z) => mb.world(x, yy, z), Math.max(0.35, r / 6));
+}
+// 自然な形の池：ゆらいだ楕円の岸、砂利と石の岸辺、岸の石、水ぎわの葦、睡蓮の葉。夜は近くの街灯が水面に映る
+function naturalPond(mb: MeshBuilder, tf: TF, rng: Rng, cx: number, cz: number, rx: number, rz: number, y = 0.12) {
+  const p1 = rng.next() * 6.28, p2 = rng.next() * 6.28, p3 = rng.next() * 6.28;
+  const R = (a: number) => 1 + 0.12 * Math.sin(3 * a + p1) + 0.07 * Math.sin(5 * a + p2) + 0.035 * Math.sin(8 * a + p3);
+  const m = Math.min(rx, rz);
+  const sd = (x: number, z: number) => { const dx = (x - cx) / rx, dz = (z - cz) / rz; return (R(Math.atan2(dz, dx)) - Math.hypot(dx, dz)) * m; };
+  // 岸のまわりの点（d = 岸からの距離、正が水の中）
+  const at = (a: number, d: number): [number, number] => { const r = R(a) - d / m; return [cx + Math.cos(a) * rx * r, cz + Math.sin(a) * rz * r]; };
+  const ext = 1.35;
+  if (pondOut) pondOut.addLocal(cx - rx * ext, cz - rz * ext, cx + rx * ext, cz + rz * ext, y, (x, z) => LAKE_T + sd(x, z) * 0.09, (x, yy, z) => mb.world(x, yy, z), 0.8);
+  else {
+    const n = 24;
+    for (let k = 0; k < n; k++) {
+      const a0 = (k / n) * Math.PI * 2, a1 = ((k + 1) / n) * Math.PI * 2;
+      const [x0, z0] = at(a0, 0.4), [x1, z1] = at(a1, 0.4);
+      mb.tri([cx, y, cz], [x1, y, z1], [x0, y, z0], WATER_FB);
+    }
+  }
+  // 岸の石
+  const stone = [C(0x8d8a82), C(0xa39f95), C(0x7a776f)];
+  for (let k = 0; k < 7; k++) {
+    const a = rng.next() * Math.PI * 2, [x, z] = at(a, -0.35 + rng.next() * 0.4), s = 0.35 + rng.next() * 0.45;
+    mb.box(x - s, 0, z - s * 0.8, x + s, 0.2 + s * 0.7, z + s * 0.8, stone[k % 3]);
+  }
+  // 葦（水ぎわの茂み）
+  const reed = [C(0x7d8a45), C(0x6b7a3a), C(0x8f8f52)];
+  for (let k = 0; k < 4; k++) {
+    const a = rng.next() * Math.PI * 2;
+    for (let q = 0; q < 7; q++) {
+      const [x, z] = at(a + (q - 3) * 0.035, 0.15 + rng.next() * 0.7), h = 0.9 + rng.next() * 0.8;
+      mb.box(x - 0.04, y - 0.1, z - 0.04, x + 0.04, y + h, z + 0.04, reed[q % 3]);
+    }
+  }
+  // 睡蓮の葉（ときどき花）
+  for (let k = 0; k < 9; k++) {
+    const a = rng.next() * Math.PI * 2, [x, z] = at(a, 1.0 + rng.next() * Math.max(0.5, m * 0.35)), r = 0.3 + rng.next() * 0.3;
+    mb.cylinder(x, z, y + 0.005, y + 0.03, r, 7, C(0x4d7a3a), C(0x5a8a44));
+    if (k % 3 === 0) mb.box(x - 0.09, y + 0.03, z - 0.09, x + 0.09, y + 0.15, z + 0.09, C(0xf2b8c8));
+  }
+  // 岸の街灯（夜は水面に映る）
+  for (const a of [rng.next() * 6.28, rng.next() * 6.28 + 3.1]) {
+    const [x, z] = at(a, -1.6);
+    mb.box(x - 0.06, 0, z - 0.06, x + 0.06, 3.6, z + 0.06, PALETTE.dark);
+    mb.box(x - 0.18, 3.6, z - 0.18, x + 0.18, 3.95, z + 0.18, C(0xfff2d0), PAT.lit, PALETTE.dark);
+    if (pondOut) { const [wx, wy, wz] = mb.world(x, 3.8, z); pondOut.addLight(wx, wy, wz, 9, 1.0, 0.8, 0.52); }
+  }
+  void tf;
+}
+
 export interface TreeSpot {
   x: number;
   y: number;
@@ -108,6 +176,7 @@ const flatRoof = () => curRoof;
 // port = 港・貨物駅への近さ（0..1、buildingLayer で決める）。倉庫業の建物の形の選び方に使う
 export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, trees: TreeSpot[], isCpark: (x: number, y: number) => boolean = () => false, pond?: PondBuilder, fx?: FxSpot[], port = 0) {
   fxOut = fx ?? null;
+  pondOut = pond ?? null;
   const rng = new Rng(b.seed);
   curRoof = FLAT_ROOFS[b.seed % FLAT_ROOFS.length];
   // 外壁のデザイン（建物ごとに選ぶ）：全面ガラス・横長の連続窓・ふつうの窓、縦ルーバーの有無、マンションのバルコニー
@@ -881,7 +950,7 @@ function park(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, large: boolean) {
   mb.ground(-f.W / 2 + 0.2, -1, f.W / 2 - 0.2, 1, 0.11, PALETTE.pavement);
   if (large) {
     // 池と東屋
-    mb.ground(-f.W / 2 + 4, -f.D / 2 + 4, -4, -4, 0.12, PALETTE.water);
+    naturalPond(mb, tf, rng, -f.W / 4 - 1.5, -f.D / 4 - 1.5, f.W / 4 - 4.6 + rng.next(), f.D / 4 - 5.6 + rng.next());
     mb.box(8, 0, 8, 14, 3, 14, PALETTE.white, PAT.none);
     mb.hip(8, 8, 14, 14, 3, 2, PALETTE.roof[1]);
     for (let k = 0; k < 18; k++) {
@@ -891,7 +960,8 @@ function park(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, large: boolean) {
       tf(x, z, 0.9 + rng.next() * 0.7, rng.next() < 0.3 ? 1 : 0);
     }
   } else {
-    mb.cylinder(0, 0, 0, 0.6, 1.6, 12, PALETTE.white, PALETTE.water);
+    mb.cylinder(0, 0, 0, 0.6, 1.6, 16, PALETTE.white, WATER_FB);
+    roundPool(mb, 0, 0, 1.45, 0.61);
     for (const [x, z] of [[-4.5, -4.5], [4.5, -4.5], [-4.5, 4.5], [4.5, 4.5]]) tf(x, z, 0.8 + rng.next() * 0.4);
   }
   // ベンチ
@@ -901,7 +971,8 @@ function park(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, large: boolean) {
 
 function plaza(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
   mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.09, PALETTE.pavement);
-  mb.cylinder(0, 0, 0, 0.8, 4, 16, PALETTE.white, PALETTE.water);
+  mb.cylinder(0, 0, 0, 0.8, 4, 24, PALETTE.white, WATER_FB);
+  roundPool(mb, 0, 0, 3.8, 0.81);
   mb.cylinder(0, 0, 0.8, 3, 0.4, 8, PALETTE.white, PALETTE.white);
   for (const [x, z] of [[-10, -10], [10, -10], [-10, 10], [10, 10], [0, -11], [0, 11], [-11, 0], [11, 0]]) {
     mb.box(x - 1.2, 0, z - 1.2, x + 1.2, 0.6, z + 1.2, PALETTE.concrete);
@@ -3598,7 +3669,7 @@ function crematorium(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, pond?: Pond
       if (pond) {
         const sd = (x: number, z: number) => Math.min(x - cx0 - 0.6, cx1 - 0.6 - x, z - cz0 - 0.6, cz1 - 0.6 - z);
         pond.addLocal(cx0, cz0, cx1, cz1, 0.14, (x, z) => LAKE_T + 0.012 + sd(x, z) * 0.6, (x, y, z) => mb.world(x, y, z), 0.6);
-      } else mb.ground(cx0 + 0.6, cz0 + 0.6, cx1 - 0.6, cz1 - 0.6, 0.14, PALETTE.water);
+      } else mb.ground(cx0 + 0.6, cz0 + 0.6, cx1 - 0.6, cz1 - 0.6, 0.14, WATER_FB);
       mb.ground(cx0, cz0, cx1, cz0 + 0.6, 0.18, C(0x9c9a95));
       mb.ground(cx0, cz1 - 0.6, cx1, cz1, 0.18, C(0x9c9a95));
       mb.ground(cx0, cz0, cx0 + 0.6, cz1, 0.18, C(0x9c9a95));
@@ -4109,12 +4180,12 @@ function labCampus(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF, den: number) 
   if (alongX) {
     mb.ground(c0 + 0.5, -hd + 2.5, c1 - 0.5, zb, 0.09, PALETTE.lawn);
     mb.ground((c0 + c1) / 2 - 1.2, -hd + 2.5, (c0 + c1) / 2 + 1.2, hd - 10, 0.1, PALETTE.pavement);
-    mb.ground(c0 + 1.2, -hd + 5, (c0 + c1) / 2 - 1.8, -hd + 12, 0.11, PALETTE.water);
+    formalPool(mb, c0 + 1.2, -hd + 5, (c0 + c1) / 2 - 1.8, -hd + 12, 0.12);
     for (let z = -hd + 15; z < zb - 2; z += 7) tf(c1 - 2.2, z, 0.7 + rng.next() * 0.3);
   } else {
     mb.ground(-hw + 2.5, c0 + 0.5, hw - 2.5, c1 - 0.5, 0.09, PALETTE.lawn);
     mb.ground(-1.2, c0 + 0.5, 1.2, hd - 10, 0.1, PALETTE.pavement);
-    mb.ground(-hw + 5, c0 + 1.2, -3, (c0 + c1) / 2 + 1, 0.11, PALETTE.water);
+    formalPool(mb, -hw + 5, c0 + 1.2, -3, (c0 + c1) / 2 + 1, 0.12);
     for (let x = 4; x < hw - 3; x += 6) tf(x, (c0 + c1) / 2, 0.7 + rng.next() * 0.3);
   }
   // ガラスの渡り廊下（2〜3階の高さ）
@@ -4286,7 +4357,7 @@ function techHQ(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
       litSign(mb, cx - 1.6, y - 0.1, cz - 1.6, cx + 1.6, y + 0.35, cz + 1.6, C(0xe8f4ff));
     }
   // 池と木
-  mb.ground(x1 - 12, z0 - 4.5, hw - 1, z0 - 1.5, 0.1, PALETTE.water);
+  formalPool(mb, x1 - 12, z0 - 4.5, hw - 1, z0 - 1.5, 0.12);
   for (let x = -hw + 3; x < hw - 2; x += 8) tf(x, -hd + 2.2, 0.8 + rng.next() * 0.4);
   for (let z = z0 + 4; z < z1 - 2; z += 8) { tf(-hw + 2.2, z, 0.8 + rng.next() * 0.3); tf(hw - 2.2, z, 0.8 + rng.next() * 0.3); }
   ihEntrance(mb, 0, z1 - 0.6, rng.pick(IH_ACCENT));
@@ -4594,7 +4665,7 @@ function modernMuseum(mb: MeshBuilder, f: LotFrame, tf: TF) {
   mb.box(-hw + 10, 12.4, hd * 0.25 - 6.1, hw - 3, 13.4, hd * 0.25 - 5.9, MGL, PAT.fullglass, MGL);
   mb.box(-6, 0, hd * 0.25, 6, 5, hd * 0.25 + 4, MGL, PAT.fullglass, MW);
   mb.box(-8, 5, hd * 0.25, 8, 5.5, hd * 0.25 + 6, MW, PAT.none, MW2);
-  mb.ground(-hw + 4, hd * 0.25 + 7, hw - 4, hd - 3, 0.12, PALETTE.water);
+  formalPool(mb, -hw + 4, hd * 0.25 + 7, hw - 4, hd - 3, 0.12, 0.6);
   tf(-hw + 2.5, hd - 1.5, 0.9);
   tf(hw - 2.5, hd - 1.5, 0.9);
 }
