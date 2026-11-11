@@ -301,8 +301,78 @@ export class MeshBuilder {
     }
   }
 
+  // ---- 敷地の芝生の縁と、木の足元（buildingGen が 1 つの建物を作るあいだだけ lawnFx = true） ----
+  lawnFx = false;
+  lotHW = 0; // 敷地の半分の幅・奥行き（敷地の外周に接する縁は暗くしない）
+  lotHD = 0;
+  private grounds: { x0: number; z0: number; x1: number; z1: number; y: number; c: THREE.Color; lawn: boolean }[] = [];
+  beginLot(hw: number, hd: number) {
+    this.lawnFx = true;
+    this.lotHW = hw;
+    this.lotHD = hd;
+    this.grounds.length = 0;
+  }
+  endLot() {
+    this.lawnFx = false;
+    this.grounds.length = 0;
+  }
+  // 芝生の色か（シェーダーの「草」の判定と同じ）
+  static isLawn(c: THREE.Color) {
+    return (c.g - Math.max(c.r, c.b)) * 14 > 0.5 && c.r * 1.15 - c.b > 0.04;
+  }
+  // 芝生の板：ふちを少し暗く土っぽくする（建物・舗装・縁石との境）。敷地の外周に接するふちはそのまま
+  private lawnGround(x0: number, z0: number, x1: number, z1: number, y: number, c: THREE.Color) {
+    const w = x1 - x0, d = z1 - z0, e = Math.min(1.5, w / 3, d / 3);
+    const onEdge = (v: number, lim: number) => Math.abs(Math.abs(v) - lim) < 0.7;
+    const dl = !onEdge(x0, this.lotHW), dr = !onEdge(x1, this.lotHW), dn = !onEdge(z0, this.lotHD), ds = !onEdge(z1, this.lotHD);
+    const dark = new THREE.Color(c.r * 0.76, c.g * 0.71, c.b * 0.56);
+    const xs = [x0, x0 + (dl ? e : 0), x1 - (dr ? e : 0), x1], zs = [z0, z0 + (dn ? e : 0), z1 - (ds ? e : 0), z1];
+    this.curMat = MAT.ground;
+    const base = this.pos.length / 3;
+    for (let j = 0; j < 4; j++)
+      for (let i = 0; i < 4; i++) {
+        const isDark = (i === 0 && dl) || (i === 3 && dr) || (j === 0 && dn) || (j === 3 && ds);
+        this.vtx(xs[i], y, zs[j], 0, 1, 0, isDark ? dark : c, 0, 0, 0);
+      }
+    const V = (i: number, j: number) => base + j * 4 + i;
+    for (let j = 0; j < 3; j++)
+      for (let i = 0; i < 3; i++) {
+        if (xs[i + 1] - xs[i] < 1e-4 || zs[j + 1] - zs[j] < 1e-4) continue;
+        // 上向き（box の上の面と同じ回り）
+        this.idx.push(V(i, j + 1), V(i + 1, j + 1), V(i + 1, j), V(i, j + 1), V(i + 1, j), V(i, j));
+      }
+  }
+  // 木の足元の陰：その場所でいちばん上にある地面の板が芝生なら、暗い丸を重ねる（ふちは芝生の色に溶ける）
+  treeFoot(x: number, z: number, y: number, s: number) {
+    if (!this.lawnFx) return;
+    let best = -1;
+    for (let k = 0; k < this.grounds.length; k++) {
+      const g = this.grounds[k];
+      if (x < g.x0 || x > g.x1 || z < g.z0 || z > g.z1 || Math.abs(g.y - y) > 1.2) continue;
+      if (best < 0 || g.y >= this.grounds[best].y) best = k;
+    }
+    if (best < 0 || !this.grounds[best].lawn) return;
+    const g = this.grounds[best], c = g.c, r = 1.4 + 1.6 * s, n = 10, yy = g.y + 0.012;
+    const mid = new THREE.Color(c.r * 0.66, c.g * 0.68, c.b * 0.55);
+    this.curMat = MAT.ground;
+    const ic = this.vtx(x, yy, z, 0, 1, 0, mid, 0, 0, 0);
+    const base = this.pos.length / 3;
+    for (let k = 0; k < n; k++) {
+      const a = (k / n) * Math.PI * 2;
+      const px = Math.min(g.x1, Math.max(g.x0, x + Math.cos(a) * r)), pz = Math.min(g.z1, Math.max(g.z0, z + Math.sin(a) * r));
+      this.vtx(px, yy, pz, 0, 1, 0, c, 0, 0, 0);
+    }
+    // 上向きにする（角度の減る向き）
+    for (let k = 0; k < n; k++) this.idx.push(ic, base + ((k + 1) % n), base + k);
+  }
+
   // 地面の板
   ground(x0: number, z0: number, x1: number, z1: number, y: number, color: THREE.Color) {
+    if (this.lawnFx) {
+      const lawn = MeshBuilder.isLawn(color);
+      this.grounds.push({ x0, z0, x1, z1, y, c: color, lawn });
+      if (lawn && !this.abandoned) { this.lawnGround(x0, z0, x1, z1, y, color); return; }
+    }
     const keep = this.matOverride;
     this.matOverride = MAT.ground;
     this.quad([x0, y, z1], [x1, y, z1], [x1, y, z0], [x0, y, z0], color);

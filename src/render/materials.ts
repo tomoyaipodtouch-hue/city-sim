@@ -185,21 +185,39 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
           // 汚れて暗いところは少しざらざら、明るいところは少しなめらか
           gRough = clamp(gRough + (1.0 - det) * 0.25, 0.08, 1.0);
         }
-        // 敷地の芝生：まわりの地面（groundMaterial）と同じ色合いとむらにそろえる（浮いて見えないように）
-        if (mi == 9 && vNy > 0.5) {
+        // 敷地の芝生：まわりの地面（groundMaterial）と同じ色合いとむらにそろえる（浮いて見えないように）。
+        // 地面の板（mi == 9）と、模様のない上向きの緑の面（植え込みの上など）。世界の座標のノイズなので、となりの区画となめらかにつながる
+        if (vNy > 0.5 && (mi == 9 || floor(vPat + 0.5) < 0.5)) {
           vec3 c = diffuseColor.rgb;
-          float grassy = clamp((c.g - max(c.r, c.b)) * 14.0, 0.0, 1.0);
+          // 緑で、青みの強くないもの（人工芝のコートや水色の面は除く）
+          float grassy = clamp((c.g - max(c.r, c.b)) * 14.0, 0.0, 1.0) * clamp((c.r * 1.15 - c.b) * 12.0, 0.0, 1.0);
           if (grassy > 0.01) {
             vec2 p = vWp.xz;
+            vec4 nL = texture2D(uSurf, p * (1.0 / 733.0) + vec2(0.13, 0.71));
             vec4 nM = texture2D(uSurf, mat2(0.8, -0.6, 0.6, 0.8) * p * (1.0 / 151.0));
             vec4 nS = texture2D(uSurf, mat2(0.28, 0.96, -0.96, 0.28) * p * (1.0 / 31.0) + 0.37);
-            vec3 g = mix(vec3(dot(c, vec3(0.3, 0.59, 0.11))), c, 0.86) * vec3(0.95, 0.94, 0.97);
-            float dry = smoothstep(0.5, 0.8, nM.g + (nS.g - 0.5) * 0.6);
-            float lush = smoothstep(0.55, 0.2, nM.a + (nS.g - 0.5) * 0.6);
-            g *= mix(vec3(1.0), vec3(1.12, 1.04, 0.8), dry * 0.6);
-            g *= mix(vec3(1.0), vec3(0.78, 0.9, 0.8), lush * 0.5);
-            g *= 0.86 + 0.28 * nS.g;
+            vec4 nP = texture2D(uSurf, mat2(-0.6, 0.8, -0.8, -0.6) * p * (1.0 / 11.0) + 0.53);
+            vec4 nF = texture2D(uSurf, mat2(0.6, 0.8, -0.8, 0.6) * p * (1.0 / 5.3));
+            float macro = nL.a * 0.6 + nM.g * 0.4;
+            float mid = nS.g;
+            vec3 g = mix(vec3(dot(c, vec3(0.3, 0.59, 0.11))), c, 0.84) * vec3(0.88, 0.86, 0.76);
+            // 乾いた草（黄色っぽい）と、しげった草（深い緑）：地面と同じ式
+            float dry = smoothstep(0.48, 0.78, macro + (mid - 0.5) * 0.6);
+            float lush = smoothstep(0.55, 0.2, nM.a + (mid - 0.5) * 0.6);
+            g *= mix(vec3(1.0), vec3(1.2, 1.07, 0.7), dry * 0.7);
+            g *= mix(vec3(1.0), vec3(0.72, 0.88, 0.76), lush * 0.6);
+            // まだらの色むら（数 m の斑点）：明るい黄緑、少し乾いたオリーブ色、濃い緑
+            float pa = nP.g + (nF.r - 0.5) * 0.35;
+            g *= mix(vec3(1.0), vec3(1.1, 1.12, 0.86), smoothstep(0.58, 0.8, pa) * 0.8);
+            g *= mix(vec3(1.0), vec3(1.06, 0.97, 0.72), smoothstep(0.6, 0.85, nP.a + (nF.g - 0.5) * 0.3) * 0.75);
+            g *= mix(vec3(1.0), vec3(0.8, 0.88, 0.8), smoothstep(0.42, 0.18, pa) * 0.7);
+            // 草むらの明るさのむら（中くらい、細かい）。細かいものは遠くでは消す
+            float ff = 1.0 - smoothstep(0.15, 0.6, length(fwidth(p)));
+            g *= 0.84 + 0.32 * mid;
+            g *= mix(1.0, 0.84 + 0.32 * nF.g, ff);
+            g *= mix(1.0, 0.92 + 0.16 * nF.r, ff);
             diffuseColor.rgb = mix(c, g, grassy);
+            gRough = mix(gRough, 0.95, grassy);
           }
         }
         // 塗った金属（色の濃いもの）は金属らしさを弱め、つやを消す（赤い屋根などが空を映して白っぽくあせないように）

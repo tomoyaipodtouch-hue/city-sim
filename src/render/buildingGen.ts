@@ -125,13 +125,17 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     const cos = Math.cos(a), sin = Math.sin(a);
     const cx = (b.x + b.w / 2) * CELL, cz = (b.y + b.h / 2) * CELL;
     trees.push({ x: lx * cos - lz * sin + cx, y: f.base + ly, z: lx * sin + lz * cos + cz, s, kind, col, shape });
+    feet.push(lx, lz, ly, s);
   };
+  const feet: number[] = []; // 木の足元（敷地の座標 x, z, 高さ, 大きさ）
   if (b.state === BState.Building) {
     construction(mb, f, rng);
     mb.abandoned = false;
     return;
   }
   const dense = b.den > 0 && b.floors > 0;
+  // 芝生の縁を暗くし、木の足元に陰を落とす（この建物のあいだだけ）
+  mb.beginLot(f.W / 2, f.D / 2);
   switch (b.type) {
     case 'R1':
     case 'R2':
@@ -211,6 +215,8 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     case 'future_stadium': futureStadium(mb, f); break;
     case 'ciq': ciqOffice(mb, f, rng, tf); break;
   }
+  for (let k = 0; k < feet.length; k += 4) mb.treeFoot(feet[k], feet[k + 1], feet[k + 2], feet[k + 3]);
+  mb.endLot();
   mb.abandoned = false;
 }
 
