@@ -43,7 +43,7 @@ export class ThumbService {
   private endTimer = 0;
   private canvas: HTMLCanvasElement | null = null;
   // 計測（確認用）
-  stats = { rendered: 0, ms: 0, maxMs: 0, genMs: 0, maxGenMs: 0, fromDb: 0 };
+  stats = { rendered: 0, ms: 0, maxMs: 0, genMs: 0, maxGenMs: 0, slowest: '', fromDb: 0 };
 
   constructor(private getRenderer: () => THREE.WebGLRenderer) {}
 
@@ -179,7 +179,7 @@ export class ThumbService {
       this.stats.ms += ms;
       this.stats.maxMs = Math.max(this.stats.maxMs, ms);
       this.stats.genMs += tr.genMs;
-      this.stats.maxGenMs = Math.max(this.stats.maxGenMs, tr.genMs);
+      if (tr.genMs > this.stats.maxGenMs) { this.stats.maxGenMs = tr.genMs; this.stats.slowest = j.key; }
       this.queue.shift();
       if (px) {
         const blob = await this.toBlob(px);
