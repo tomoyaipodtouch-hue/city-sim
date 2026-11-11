@@ -528,6 +528,13 @@ function collegeNordic(mb: MeshBuilder, f: LotFrame, tf: TF, rng: Rng) {
   bench(mb, 3, 13.5, 7, 14.1);
 }
 
+// 車（alongX = 車の向きが x）
+function car(mb: MeshBuilder, x: number, z: number, alongX: boolean, col: THREE.Color) {
+  const L = 2.15, W = 0.9, g = C(0x26303a);
+  const [hx, hz] = alongX ? [L, W] : [W, L], [cx, cz] = alongX ? [1.1, W - 0.1] : [W - 0.1, 1.1];
+  mb.box(x - hx, 0.3, z - hz, x + hx, 0.95, z + hz, col);
+  mb.box(x - cx, 0.95, z - cz, x + cx, 1.45, z + cz, g, PAT.none, col);
+}
 // ================= 市役所（6×4。古いセーブの 4×3 も敷地の大きさから組み立てる） =================
 // 2つのガラスの四角い棟：背の高い行政棟と、低く横に広い議会棟（上にガラスの議場）。2階の高さのガラスの渡り廊下でつなぐ。前に広場
 export function townHall(mb: MeshBuilder, f: LotFrame, tf: TF) {
@@ -555,7 +562,9 @@ export function townHall(mb: MeshBuilder, f: LotFrame, tf: TF) {
   greenRoof(mb, ax0, az0, ax1, az1, aH + 0.55, false);
   // ---- 議会棟：2階の基壇の上に、前へ張り出すガラスの議場 ----
   const gap = Math.max(6, f.W * 0.09);
-  const cx0 = ax1 + gap, cx1 = hw - 4, cz0 = bz0 + 1, cz1 = bz1 - 3, cH = 8.4;
+  // 右の端は駐車場（大きな敷地は2列、小さな敷地は1列）
+  const twoRows = f.W >= 80, pw = twoRows ? 19 : 12.5;
+  const cx0 = ax1 + gap, cx1 = hw - 3 - pw, cz0 = bz0 + 1, cz1 = bz1 - 3, cH = 8.4;
   mb.box(cx0 + 1, 0, cz0 + 1, cx1 - 1, 4.2, cz1 - 1, gB, PAT.fullglass, ROOF);
   for (const s of sides(cx0, cz0, cx1, cz1)) for (let t = 0.4; t < s.L; t += Math.max(4, s.L / Math.round(s.L / 6))) { const p = s.P(t, -0.4); mb.box(p[0] - 0.25, 0, p[1] - 0.25, p[0] + 0.25, 4.2, p[1] + 0.25, alu); }
   mb.box(cx0, 4.2, cz0, cx1, cH, cz1, gA, PAT.curtain, ROOF);
@@ -577,31 +586,78 @@ export function townHall(mb: MeshBuilder, f: LotFrame, tf: TF) {
   mb.box(ax1, by1, bzA, cx0, by1 + 0.45, bzB, WHITE, PAT.none, WHITE2);
   // 1階の通り抜け（2棟の間の舗装）
   mb.ground(ax1, bz0, cx0, hd - 0.4, 0.09, PAVE2);
-  // ---- 広場 ----
-  mb.ground(-hw + 1, bz1, hw - 1, hd - 0.4, 0.09, PAVE);
-  for (let x = -hw + 5; x < hw - 1; x += 5) mb.ground(x - 0.05, bz1, x + 0.05, hd - 0.4, 0.095, PAVE2);
-  mb.ground(-hw + 1, bz1 + sq * 0.42, hw - 1, bz1 + sq * 0.42 + 0.12, 0.095, PAVE2);
-  // 並木の植え込み（前のふち）とベンチ
-  const nt = Math.max(3, Math.round((f.W - 8) / 11));
+  // ---- 広場（議会棟の前と、2棟の間）----
+  const sqX0 = ax1 - 1, sqX1 = cx1 + 1;
+  mb.ground(-hw + 1, bz1, hw - 1, hd - 0.4, 0.085, LAWN_D);
+  mb.ground(sqX0, bz1, sqX1, hd - 0.4, 0.09, PAVE);
+  for (let x = sqX0 + 5; x < sqX1; x += 5) mb.ground(x - 0.05, bz1, x + 0.05, hd - 0.4, 0.095, PAVE2);
+  mb.ground(sqX0, bz1 + sq * 0.42, sqX1, bz1 + sq * 0.42 + 0.12, 0.095, PAVE2);
+  const nt = Math.max(2, Math.round((sqX1 - sqX0) / 10));
   for (let k = 0; k < nt; k++) {
-    const x = -hw + 4 + ((k + 0.5) * (f.W - 8)) / nt, z = hd - 4.2;
-    if (Math.abs(x - (ax1 + cx0) / 2) < 4) continue;
+    const x = sqX0 + ((k + 0.5) * (sqX1 - sqX0)) / nt, z = hd - 4.2;
     mb.box(x - 2.2, 0, z - 1.6, x + 2.2, 0.45, z + 1.6, C(0xc2bdb2), PAT.none, LAWN_D);
     tf(x, z, 0.85, 0);
     bench(mb, x - 1.8, z - 2.6, x + 1.8, z - 2.0);
   }
-  // 行政棟の前の旗竿（3本）と街灯
-  const fz = az1 + 3.5, fx = (ax0 + ax1) / 2;
+  for (let x = sqX0 + 4; x < sqX1 - 2; x += 12) lamp(mb, x, bz1 + sq * 0.55);
+  // ---- 車寄せ：道路から行政棟の玄関へ U 字の車路、玄関の上の大きなひさし ----
+  const ASP = C(0x4f5256), KERB = C(0xd2cfc8);
+  const ux0 = ax0 + 0.5, ux1 = ax1 - 1.5, lane = 4, rz0 = az1 + 0.6, rz1 = rz0 + lane + 0.6;
+  mb.ground(ux0, rz0, ux1, rz1, 0.1, ASP); // 玄関の前を横切る車路
+  mb.ground(ux0, rz1, ux0 + lane, hd - 0.2, 0.1, ASP); // 入口
+  mb.ground(ux1 - lane, rz1, ux1, hd - 0.2, 0.1, ASP); // 出口
+  // 中の島（縁石、芝、木、旗竿）
+  const ix0 = ux0 + lane, ix1 = ux1 - lane, iz0 = rz1, iz1 = hd - 1.2;
+  mb.box(ix0, 0, iz0, ix1, 0.22, iz1, KERB, PAT.none, LAWN_D);
+  if (ix1 - ix0 > 6) tf(ix0 + 2.5, (iz0 + iz1) / 2 + 1, 0.75);
   [C(0x1f4fa0), C(0xc8102e), C(0xf2c200)].forEach((col, k) => {
-    const x = fx - 3 + k * 3;
-    mb.box(x - 0.07, 0, fz, x + 0.07, 11, fz + 0.14, C(0xe8e8e8));
-    mb.box(x + 0.07, 9.4, fz + 0.05, x + 1.9, 10.8, fz + 0.09, col);
+    const x = (ix0 + ix1) / 2 - 1 + k * 2.4, z = iz0 + 2;
+    mb.box(x - 0.07, 0, z, x + 0.07, 11, z + 0.14, C(0xe8e8e8));
+    mb.box(x + 0.07, 9.4, z + 0.05, x + 1.9, 10.8, z + 0.09, col);
   });
-  for (let x = -hw + 8; x < hw - 4; x += 14) lamp(mb, x, bz1 + sq * 0.55);
-  // 奥：芝と木、職員の駐車場
-  if (az0 - bz0 > 9) {
-    mb.ground(ax0, bz0, ax1, az0 - 2, 0.09, C(0x55585c));
-    for (let x = ax0 + 1.5; x < ax1 - 1; x += 2.6) mb.ground(x, bz0 + 0.5, x + 0.12, bz0 + 5, 0.1, LINE);
+  // 玄関側の歩道の縁石と、矢印の白線
+  mb.box(ax0, 0, az1, ax1, 0.18, rz0, KERB, PAT.none, PAVE);
+  for (const [x, dz] of [[ux0 + lane / 2, -1], [ux1 - lane / 2, 1]] as [number, number][]) {
+    const z = hd - 4;
+    mb.ground(x - 0.12, z - 1.6, x + 0.12, z + 1.6, 0.12, LINE);
+    mb.quad([x - 0.7, 0.12, z + dz * 1.6], [x + 0.7, 0.12, z + dz * 1.6], [x, 0.12, z + dz * 2.6], [x, 0.12, z + dz * 2.6], LINE);
   }
-  tf(-hw + 2, -hd + 2, 1.0); tf(hw - 2, -hd + 2, 0.95); tf(-hw + 1.8, bz1 - 6, 0.9, 1); tf(hw - 1.8, bz1 - 8, 0.9);
+  // ひさし：玄関から車路の上まで（白い薄い板、夜は下面が光る）
+  const kx0 = ux0 + 1.5, kx1 = ux1 - 1.5, kz1 = rz1 + 0.6, kY = 4.8;
+  mb.box(kx0, kY, az1, kx1, kY + 0.45, kz1, WHITE, PAT.none, WHITE2);
+  mb.quad([kx0 + 0.3, kY - 0.01, az1 + 0.3], [kx1 - 0.3, kY - 0.01, az1 + 0.3], [kx1 - 0.3, kY - 0.01, kz1 - 0.3], [kx0 + 0.3, kY - 0.01, kz1 - 0.3], C(0xfff1d6), PAT.lit);
+  for (const x of [kx0 + 0.6, kx1 - 0.6]) mb.box(x - 0.13, 0, kz1 - 0.6, x + 0.13, kY, kz1 - 0.34, alu);
+  // 止まっている車（タクシーと乗用車）
+  car(mb, ux0 + 4.5, (rz0 + rz1) / 2, true, C(0xf2c200));
+  car(mb, ux1 - 6, (rz0 + rz1) / 2, true, C(0x2b2b2b));
+  // ---- 駐車場（右の端）：白線の区画、車、列の間の植え込みと木 ----
+  const px0 = hw - 1.5 - pw, px1 = hw - 1.5, pz0 = bz0 - 1.5, pz1 = hd - 0.2;
+  mb.ground(px0, pz0, px1, bz1 + 2, 0.1, ASP);
+  // 2列：植え込み 1.5 | 区画 5 | 車路 6 | 区画 5 | 植え込み 1.5。1列：植え込み 1.5 | 車路 6 | 区画 5
+  const aisle = twoRows ? px0 + 9.5 : px0 + 4.5; // 車路の中心
+  mb.ground(aisle - 3, bz1 + 2, aisle + 3, pz1, 0.1, ASP); // 道路への出入口
+  const rng = new Rng(Math.round(f.W * 31 + f.D));
+  const CARS = [0xd8d8d8, 0x2b2b2b, 0x9a1d1d, 0x1d3f8a, 0x8a8f96, 0xf2f2f2, 0x3b5d3a, 0x101820, 0x4a6a8a].map(C);
+  const row = (x0: number, x1: number, fill: number) => {
+    for (let z = pz0 + 1; z + 2.5 < bz1 + 0.5; z += 2.5) {
+      mb.ground(x0, z - 0.06, x1, z + 0.06, 0.12, LINE);
+      if (rng.next() < fill) car(mb, (x0 + x1) / 2, z + 1.25, false, rng.pick(CARS));
+    }
+  };
+  const strip = (x0: number) => {
+    mb.box(x0, 0, pz0, x0 + 1.5, 0.35, bz1 + 2, KERB, PAT.none, LAWN_D);
+    for (let z = pz0 + 4; z < bz1 - 1; z += 8) tf(x0 + 0.75, z, 0.75);
+  };
+  strip(px0);
+  if (twoRows) { row(px0 + 1.5, px0 + 6.5, 0.7); row(px1 - 6.5, px1 - 1.5, 0.65); strip(px1 - 1.5); }
+  else row(px1 - 5, px1, 0.7);
+  // 奥：芝と木、職員の駐車場（行政棟の裏）
+  if (az0 - bz0 > 9) {
+    mb.ground(ax0, bz0, ax1, az0 - 2, 0.09, ASP);
+    for (let x = ax0 + 1.5; x < ax1 - 1; x += 2.6) {
+      mb.ground(x, bz0 + 0.5, x + 0.12, bz0 + 5, 0.1, LINE);
+      if (rng.next() < 0.5) car(mb, x + 1.3, bz0 + 2.8, false, rng.pick(CARS));
+    }
+  }
+  tf(-hw + 2, -hd + 2, 1.0); tf(-hw + 1.8, bz1 - 6, 0.9, 1);
 }
