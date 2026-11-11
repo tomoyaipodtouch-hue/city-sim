@@ -15,12 +15,12 @@ import { listORamps, orampGround, orampHw, orampSide, ORampSpec } from '../sim/o
 export const OR_HALF = 3.0; // ランプの路面の半分の幅（車線 3.5m と路肩、6m）
 export const OR_LANE = 1.75; // ランプの車線の半分の幅
 const PAR = 0.25; // 欄干の厚さ
-const DIV = 16; // 本線から分かれて、横に出るまでの長さ
+const DIV = 22; // 本線から分かれて、横に出るまでの長さ
 const GROUND_RUN = 4; // 一般道の高さで走る長さ（一般道の側の端）
 const MOVE = 26; // 高架の横から、一般道の車線へ横にずれる長さ
 const MOVE_END = 14; // 横にずれ終わる所（一般道の側の端から）。そのあとは車線の上をまっすぐ下りる
 const EASE = 0.2; // 坂の始まりと終わりの、勾配が変わる部分の割合
-const HS = 3; // 本線から分かれて、下り始めるまでの長さ
+const HS = 6; // 本線から分かれて、下り始めるまでの長さ
 
 export interface ORGeo {
   r: ORampSpec;

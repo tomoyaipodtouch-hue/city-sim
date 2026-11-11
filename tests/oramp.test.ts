@@ -307,3 +307,35 @@ describe('overlay ramp: refusals', () => {
     expect(r.ok).toBe(false);
   });
 });
+
+describe('overlay ramp: drawn shape', () => {
+  it('descends smoothly (about 15% at most) and meets the highway lane and the road lane', async () => {
+    const { findORamps, orAt } = await import('../src/render/oramp');
+    for (const [under, hw] of [[RoadType.Avenue, E], [RoadType.Road, E], [RoadType.OneWay, E1]] as const) {
+      const w = scene(under, hw);
+      expect(w.exec({ t: 'oramp', mode: 'set', x: T, y: Y }).ok).toBe(true);
+      const list = findORamps(w.g, 0.3);
+      expect(list.length).toBeGreaterThanOrEqual(2);
+      for (const G of list) {
+        let maxG = 0, maxTurn = 0, prev = orAt(G, 0), prevDir = Math.atan2(prev.tz, prev.tx);
+        const p0 = { ...prev };
+        for (let k = 1; k <= 160; k++) {
+          const p = orAt(G, (G.len * k) / 160);
+          const ds = Math.hypot(p.x - prev.x, p.z - prev.z);
+          maxG = Math.max(maxG, Math.abs(p.h - prev.h) / ds);
+          const dir = Math.atan2(p.tz, p.tx);
+          maxTurn = Math.max(maxTurn, Math.abs(Math.atan2(Math.sin(dir - prevDir), Math.cos(dir - prevDir))));
+          prev = { ...p };
+          prevDir = dir;
+        }
+        expect(maxG).toBeLessThan(0.17);
+        expect(maxTurn).toBeLessThan(0.05); // 0.5m ごとに 3° 未満（角ばった折れ目がない）
+        // 本線の側の端は本線の車線、一般道の側の端は一般道の車線
+        const hwEnd = G.r.entry ? prev : p0, gEnd = G.r.entry ? p0 : prev;
+        expect(Math.abs(hwEnd.o - G.Lh)).toBeLessThan(0.05);
+        expect(Math.abs(gEnd.o - G.Lg)).toBeLessThan(0.05);
+        expect(hwEnd.h).toBeGreaterThan(gEnd.h + 7);
+      }
+    }
+  });
+});

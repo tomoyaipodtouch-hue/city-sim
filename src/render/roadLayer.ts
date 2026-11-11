@@ -3399,6 +3399,7 @@ export class RoadLayer {
     onGround = false;
     liftCur = 0;
     const orFoot: [number, number, number][] = []; // ランプの路面の点と、まわりの木をよける半径
+    const SIGN_GREEN = new THREE.Color(0x1d7a46);
     for (const G of ors) {
       const { q0, qg } = orEdges(G);
       const entry = G.r.entry, len = G.len, sg = G.sg;
@@ -3483,8 +3484,10 @@ export class RoadLayer {
         return { x: p.x, z: p.z, h: p.h, nx, nz, e: [p.half, p.half], hs, para };
       });
       via(V, VIA_RAMP);
-      // 橋脚：地面から 4〜8m の所で、下の道路の車道の上ではない所に1本
-      for (let q = 8; q < len * 0.7; q += 1) {
+      // 橋脚：地面から 3.5〜8m の所で、下の道路の車道の上ではない所に、20m 以上あけて2本まで（1本柱）
+      let piers = 0, lastQ = -99;
+      for (let q = 8; q < len * 0.8 && piers < 2; q += 1) {
+        if (q - lastQ < 20) continue;
         const s2 = sOf(q);
         orAt(G, s2, orPt);
         const gnd = g.groundAt(orPt.x, orPt.z), bot = orPt.h - FAS - VIA_RAMP.depth;
@@ -3502,7 +3505,20 @@ export class RoadLayer {
         const top = bot + 0.15, gw = OR_HALF + PAR_T - VIA_RAMP.over - VIA_RAMP.depth * SL_T;
         pier(orPt.x, orPt.z, orPt.tx, orPt.tz, [[gnd - 0.6, 0.65, 0.85, 2], [top - 1.6, 0.65, 0.85, 2], [top - 0.7, 0.7, 1.1, 2.4], [top, 0.74, Math.min(1.4, gw - 0.2), 3]], COL.pier);
         footing(orPt.x, orPt.z, orPt.tx, orPt.tz, 1.0, 1.2, gnd);
-        break;
+        piers++;
+        lastQ = q;
+      }
+      // 照明柱：ランプの外側の欄干の上に、25m ごと（高架の部分だけ）。ランプの上へ腕をのばす
+      for (let q = Math.max(qg, 10); q < qe - 6; q += 25) {
+        const s2 = sOf(q);
+        orAt(G, s2, orPt);
+        let nx = -orPt.tz, nz = orPt.tx;
+        if (nx * G.rx * sg + nz * G.rz * sg < 0) { nx = -nx; nz = -nz; }
+        const hf = orHalf(G, q), px = orPt.x + nx * (hf + 0.12), pz = orPt.z + nz * (hf + 0.12), base = orPt.h + 0.9, top = orPt.h + 9;
+        O.box(px - 0.1, base - 0.9, pz - 0.1, px + 0.1, top, pz + 0.1, COL.signal);
+        const ax = px - nx * 2.2, az = pz - nz * 2.2;
+        quad2([[px, top - 0.12, pz], [px, top, pz], [ax, top, az], [ax, top - 0.12, az]], COL.signal);
+        O.box(ax - 0.3, top - 0.22, az - 0.3, ax + 0.3, top - 0.02, az + 0.3, COL.signal);
       }
       // ---- 一般道の上の線 ----
       // ランプの車線の内側（本線の車線の側）への向き
@@ -3542,8 +3558,12 @@ export class RoadLayer {
       line(runPts(sIn * OR_LANE, qe, len), () => 0, COL.white, 0.15);
       {
         const pts: RP[] = [];
-        for (let q = qn; q <= len + ext + 0.01; q += 1) { const P0 = W(sAt(q), TE); pts.push({ x: P0[0], z: P0[2], h: P0[1], hw: 0, sw: 0, t: RoadType.Ramp }); }
+        for (let q = qn; q <= len + 0.01; q += 1) { const P0 = W(sAt(q), TE); pts.push({ x: P0[0], z: P0[2], h: P0[1], hw: 0, sw: 0, t: RoadType.Ramp }); }
         line(pts, () => 0, COL.white, 0.15);
+        // 合流（分流）の区間：導流帯の先は、車線を変えてよい破線
+        const dsh: RP[] = [];
+        for (let q = len; q <= len + ext + 18.01; q += 1) { const P0 = W(sAt(q), TE); dsh.push({ x: P0[0], z: P0[2], h: P0[1], hw: 0, sw: 0, t: RoadType.Ramp }); }
+        line(dsh, () => 0, COL.white, 0.15, true);
       }
       // しま：内側の線と境の線の間に、45° の斜めの線を 2m ごと
       const median = G.r.median;
@@ -3566,6 +3586,24 @@ export class RoadLayer {
         for (let k = 0; k < pts.length; k++) {
           const A = pts[k], B = pts[(k + 1) % pts.length];
           O.wall(A[0], A[2], A[1] - 0.05, A[1] + 0.16, B[0], B[2], B[1] - 0.05, B[1] + 0.16, COL.curb);
+        }
+      }
+      // 入口の案内標識（首都高のように、緑の板に白い矢印）：上り始める手前の歩道の側、車の来る向きに向ける
+      if (entry) {
+        const sS = -6, lat = G.Lg + (sg > 0 ? 1 : -1) * Math.max(3.4, Math.abs(G.Lb - G.Lg) * 0.5) * Math.sign(G.Lb - G.Lg || sg);
+        const [bx, by, bz] = W(sS, lat);
+        const cx3 = Math.floor(bx / CELL), cz3 = Math.floor(bz / CELL);
+        const onLane = g.inb(cx3, cz3) && g.road[cz3 * n + cx3] && Math.abs((bx - (cx3 + 0.5) * CELL) * G.rx + (bz - (cz3 + 0.5) * CELL) * G.rz) < drawWidth(g.road[cz3 * n + cx3]) / 2 + 0.3;
+        if (!onLane) {
+          O.box(bx - 0.08, by, bz - 0.08, bx + 0.08, by + 4.2, bz + 0.08, COL.signal);
+          const F = (r: number, y: number, d = 0): number[] => [bx + G.rx * r - G.ux * d, by + y, bz + G.rz * r - G.uz * d];
+          const y0 = 3.2, y1 = 4.8, w2 = 1.3;
+          quad2([F(-w2, y0), F(w2, y0), F(w2, y1), F(-w2, y1)], SIGN_GREEN);
+          quad2([F(-w2 + 0.08, y0 + 0.08, 0.03), F(w2 - 0.08, y0 + 0.08, 0.03), F(w2 - 0.08, y1 - 0.08, 0.03), F(-w2 + 0.08, y1 - 0.08, 0.03)], SIGN_GREEN);
+          // 白い矢印（上向き = まっすぐ進んでランプへ）と、白い縁
+          quad2([F(-0.13, y0 + 0.25, 0.05), F(0.13, y0 + 0.25, 0.05), F(0.13, y0 + 0.95, 0.05), F(-0.13, y0 + 0.95, 0.05)], COL.white);
+          quad2([F(-0.45, y0 + 0.95, 0.05), F(0.45, y0 + 0.95, 0.05), F(0.0, y0 + 1.42, 0.05), F(0.0, y0 + 1.42, 0.05)], COL.white);
+          quad2([F(-w2 + 0.1, y1 - 0.18, 0.05), F(w2 - 0.1, y1 - 0.18, 0.05), F(w2 - 0.1, y1 - 0.12, 0.05), F(-w2 + 0.1, y1 - 0.12, 0.05)], COL.white);
         }
       }
       // 矢印：一般道の車線の上（出口は降りた先、入口は上る手前）。進む向き
