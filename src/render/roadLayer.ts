@@ -58,6 +58,8 @@ const COL = {
   hedge: new THREE.Color(0x3d6a2c), // 分離帯の低い植え込み（サツキなど）
   signGreen: new THREE.Color(0x1d7046), // 高速道路の案内標識（緑の板）
   steel: new THREE.Color(0x8e9398), // 標識の門型の柱と梁（灰色の鋼）
+  drum: new THREE.Color(0xe6b01e), // クッションドラム（黄色）
+  drumRed: new THREE.Color(0xc4262a), // クッションドラムの反射シート（赤と白の市松）
 };
 const VIA_COLS = new Set([COL.parapet, COL.groove, COL.soffit, COL.girder, COL.pier, COL.wall, COL.footing]);
 const AUX0: [number, number, number, number] = [0, 0, 0, 0];
@@ -1718,6 +1720,31 @@ export class RoadLayer {
       }
     };
 
+    // クッションドラム（分かれ目の先端の前に置く、黄色の樽）：直径 0.9m、高さ 1.0m、上の方に赤と白の市松の反射シート。
+    // (x, z) = 分かれ目の先端、h = 路面の高さ、(ux, uz) = 上流（来る車の側）の向き。先端の前に 3本（前に1本、後ろに2本）
+    const drums = (x: number, z: number, h: number, ux: number, uz: number) => {
+      const SEG = 10, R = 0.45, y0 = h - ROAD_LIFT + 0.02, px = -uz, pz = ux;
+      const one = (cx: number, cz: number) => {
+        const P = (q: number): [number, number] => [cx + Math.cos((q / SEG) * Math.PI * 2) * R, cz + Math.sin((q / SEG) * Math.PI * 2) * R];
+        for (let q = 0; q < SEG; q++) {
+          const [ax, az] = P(q), [bx, bz] = P(q + 1);
+          O.wall(bx, bz, y0, y0 + 0.62, ax, az, y0, y0 + 0.62, COL.drum);
+          // 市松の帯（2段、互いちがい）
+          O.wall(bx, bz, y0 + 0.62, y0 + 0.74, ax, az, y0 + 0.62, y0 + 0.74, q & 1 ? COL.drumRed : COL.white);
+          O.wall(bx, bz, y0 + 0.74, y0 + 0.86, ax, az, y0 + 0.74, y0 + 0.86, q & 1 ? COL.white : COL.drumRed);
+          O.wall(bx, bz, y0 + 0.86, y0 + 1.0, ax, az, y0 + 0.86, y0 + 1.0, COL.drum);
+        }
+        const c = O.v(cx, y0 + 1.0, cz, COL.drum);
+        for (let q = 0; q < SEG; q++) {
+          const [ax, az] = P(q), [bx, bz] = P(q + 1);
+          O.tri(c, O.v(bx, y0 + 1.0, bz, COL.drum), O.v(ax, y0 + 1.0, az, COL.drum));
+        }
+      };
+      one(x + ux * 1.2, z + uz * 1.2);
+      one(x + ux * 0.65 + px * 0.5, z + uz * 0.65 + pz * 0.5);
+      one(x + ux * 0.65 - px * 0.5, z + uz * 0.65 - pz * 0.5);
+    };
+
     // 路面の矢印（2車線分）
     const arrow = (x0: number, z0: number, h: number, ux: number, uz: number, w: number) => {
       const px = -uz, pz = ux;
@@ -2375,6 +2402,7 @@ export class RoadLayer {
     for (const C of jchains) for (const v of C.nodes) if ((v >= NC ? g.up[v - NC] : g.road[v]) === RoadType.Ramp) jNodes.add(v);
     // 本線のそばの部分：ランプと本線のすきまを路面でうめる帯（加速・減速車線）と、その範囲の本線の欄干を切る
     const jFills: { pts: RP[]; gore: boolean[]; elev: boolean; M: JMain }[] = [];
+    const jDrums: [number, number, number, number, number][] = []; // クッションドラムを置く分かれ目の先端（x, z, 路面の高さ, 上流の向き）
     const jEnds: { M: JMain; diverge: boolean; nose: [number, number, number] | null; rampAt: number; C: JChain; dead: boolean }[] = [];
     const jCuts = new Map<number, { x0: number; z0: number; x1: number; z1: number; vx: number; vz: number }[]>();
     const jDraw = new Map<JChain, [number, number]>();
@@ -2437,6 +2465,12 @@ export class RoadLayer {
         if (!fromStart) { fill.reverse(); fg.reverse(); }
         if (fill.length >= 2) jFills.push({ pts: fill, gore: fg, elev: M.node >= NC || g.deck[M.node] > 0, M });
         jEnds.push({ M, diverge: fromStart, nose, rampAt: drawAt, C, dead: false });
+        // 分かれ目の先端（ランプの内側の欄干の始まり）の前に、クッションドラム
+        if (fromStart && fill.length >= 2) {
+          const P = jAt(C, drawAt, { x: 0, z: 0, h: 0, tx: 1, tz: 0 });
+          const ix = P.x + P.tz * jHalf(C, drawAt), iz = P.z - P.tx * jHalf(C, drawAt);
+          jDrums.push([ix, iz, P.h, -P.tx, -P.tz]);
+        }
         if (fromStart) d0 = Math.max(d0, drawAt); else d1 = Math.min(d1, drawAt);
         // 本線のマス（前後）の欄干を切る
         if (aMax > aMin) {
@@ -3233,7 +3267,16 @@ export class RoadLayer {
           const s0 = atStart(C) ? C.bound[0] : sOf(C, kG), s1 = atStart(C) ? sOf(C, kG) : C.bound[C.bound.length - 1];
           (gore.get(C) ?? gore.set(C, []).get(C)!).push({ side: right ? 1 : 0, s0, s1 });
         }
+        // ランプの分かれ目（合わさり目には置かない）：2本の内側の欄干が始まるところの前に、クッションドラム
+        if (key[0] === 'f') {
+          jAt(A, sOf(A, kG), qa);
+          jAt(B, sOf(B, kG), qb);
+          const tx = qa.tx + qb.tx, tz = qa.tz + qb.tz, tl = Math.hypot(tx, tz) || 1;
+          jDrums.push([(qa.x + qb.x) / 2, (qa.z + qb.z) / 2, (qa.h + qb.h) / 2, -tx / tl, -tz / tl]);
+        }
       }
+      for (const [x, z, h, ux, uz] of jDrums) drums(x, z, h, ux, uz);
+      (globalThis as { __jctDrums?: unknown }).__jctDrums = jDrums; // 確かめる用（クッションドラムの位置）
       const q: JPt = { x: 0, z: 0, h: 0, tx: 1, tz: 0 };
       for (const C of jchains) {
         const [d0, d1] = jDraw.get(C)!;
@@ -3597,6 +3640,8 @@ export class RoadLayer {
         }
         const yb = hb - FAS, yt = hb + PAR_H;
         for (let q = 0; q < SEG; q++) O.wall(ring[q][0], ring[q][1], yb, yt, ring[q + 1][0], ring[q + 1][1], yb, yt, COL.parapet);
+        // 出口の分かれ目の先端の前（来る車の側）に、クッションドラム（入口には置かない）
+        if (!entry) drums(cxN + ux * rw * 0.9, czN + uz * rw * 0.9, hb, ux, uz);
         // 上流側のふた
         O.wall(ring[0][0], ring[0][1], yb, yt, ring[SEG][0], ring[SEG][1], yb, yt, COL.parapet);
         const top = ring.map(([x, z]) => O.v(x, yt, z, COL.parapet));
