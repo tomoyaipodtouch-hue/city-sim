@@ -5,7 +5,7 @@
 import { Grid, Ctl, JF } from './grid';
 import { CELL, DX, DY, isDiag } from './constants';
 import { orampLength, ORAMP_SPEED } from './oramp';
-import { BUS_WAIT, JCT_RAMP_SPEED, LINES, LineKind, ROADS, RoadType, isHighway } from './defs';
+import { BUS_WAIT, JCT_RAMP_SPEED, LINES, LineKind, ROADS, RoadType, ZoneType, isHighway } from './defs';
 
 const START_OVERHEAD_MIN = 2; // 家を出て駐車場まで等
 // パーク&ライド：駅に面した道路で車を降り、駐車して改札まで歩く時間（分）
@@ -264,6 +264,25 @@ export function edgeMinutes(g: Grid, from: number, d: number, congestion: Float3
   return base * congestion[from];
 }
 
+// ---------------- 貨物（トラック） ----------------
+// トラック1台を乗用車何台分の交通量として数えるか（乗用車換算。箱型トラックとトレーラーの平均）
+export const TRUCK_PCE = 2.5;
+// トラックが経路を選ぶときの、道路の種類ごとの重み（移動時間にかける）。幹線道路（大通り・一般道）と高速道路・ランプを好み、
+// 街路と住宅地に面した道路を避ける。重みは経路選びだけに使い、輸送時間は実際の時間で数える
+export const TRUCK_STREET = 2.5; // 街路
+export const TRUCK_RESIDENTIAL = 1.6; // 住宅地に面した道路（さらにかける）
+export function truckRoadFactor(g: Grid, node: number) {
+  const t = g.nodeType(node);
+  if (t !== RoadType.Street && t !== RoadType.Road && t !== RoadType.OneWay) return 1;
+  const n = g.n, c = node % (n * n), x = c % n, y = (c / n) | 0;
+  let res = false;
+  for (let d = 0; d < 8 && !res; d += 2) {
+    const nx = x + DX[d], ny = y + DY[d];
+    if (nx >= 0 && ny >= 0 && nx < n && ny < n && g.zone[ny * n + nx] === ZoneType.R) res = true;
+  }
+  return (t === RoadType.Street ? TRUCK_STREET : 1) * (res ? TRUCK_RESIDENTIAL : 1);
+}
+
 export interface TripOptions {
   externalCap: number; // 隣の都市で受け入れられる数
   externalOnly?: boolean; // 目的地は隣の都市だけ（貨物）
@@ -272,6 +291,8 @@ export interface TripOptions {
   weight: number; // 交通量に加えるときの重み（トラックは大きい）
   parkRide?: boolean; // 駅（鉄道・高架鉄道・モノレール・地下鉄）に車で行き、駐車して乗り換えられる（通勤）
   carArrive?: Float32Array; // 道路マス（地上）ごと：車で目的地に着いたときの駐車の時間（分）。高密度の街ほど長い
+  truck?: boolean; // トラック：幹線道路・高速道路を好み、街路と住宅地の道路を避ける（RoadGraph.truckMin で経路を選ぶ）
+  extExtra?: number; // 隣の都市へ出るときに足す時間（分、経路選びだけ）。港・貨物駅へ運ぶ荷物で、近ければ港・貨物駅を選ぶように
 }
 
 // ---------------- 公共交通 ----------------
@@ -343,6 +364,7 @@ export interface RoadGraph {
   dir: Int8Array;
   min: Float32Array; // 道路の移動時間（分）
   carMin: Float32Array; // 車が経路を選ぶときの移動時間（分）。ひどく混む道路は、遅れが読めないので実際より長く感じる
+  truckMin: Float32Array; // トラックが経路を選ぶときの移動時間（分）：carMin に道路の種類の重み（truckRoadFactor）をかけたもの
   jslot: Int32Array; // 交差点のマス → 待ち時間の表の番号（-1 = 交差点ではない）
   jdel: Float32Array; // [slot*64 + 入ってきた向き*8 + 出ていく向き] の待ち時間（-1 = 通れない）
   edge: Uint8Array; // マップの端のマス
@@ -379,16 +401,20 @@ export function buildRoadGraph(g: Grid, congestion: Float32Array, junctions: Jun
   for (let v = 0; v < M; v++) extPen[v] = isHighway(g.nodeType(v)) ? 6 : 14;
   const urban = new Uint8Array(M);
   for (let v = 0; v < M; v++) { const t = g.nodeType(v); urban[v] = isUrbanHighway(t) ? 1 : t === RoadType.Ramp ? 2 : 0; }
-  const min = Float32Array.from(tmpMin), carMin = new Float32Array(min.length);
+  const min = Float32Array.from(tmpMin), carMin = new Float32Array(min.length), truckMin = new Float32Array(min.length);
   for (let u = 0; u < M; u++) {
     const f = perceivedCongestion(congestion[u]);
-    for (let e = off[u]; e < off[u + 1]; e++) carMin[e] = min[e] * f;
+    const tf = off[u + 1] > off[u] ? truckRoadFactor(g, u) : 1;
+    for (let e = off[u]; e < off[u + 1]; e++) {
+      carMin[e] = min[e] * f;
+      truckMin[e] = carMin[e] * tf;
+    }
   }
-  return { off, to: Int32Array.from(tmpTo), dir: Int8Array.from(tmpDir), min, carMin, jslot, jdel, edge, extPen, urban };
+  return { off, to: Int32Array.from(tmpTo), dir: Int8Array.from(tmpDir), min, carMin, truckMin, jslot, jdel, edge, extPen, urban };
 }
 
 // 探索に使う作業用の配列（毎回作り直さない）
-let work: { size: number; dist: Float32Array; prev: Int32Array; inDir: Int8Array; walkFrom: Float32Array; stamp: Int32Array; done: Int32Array; gen: number } | null = null;
+let work: { size: number; dist: Float32Array; real: Float32Array; prev: Int32Array; inDir: Int8Array; walkFrom: Float32Array; stamp: Int32Array; done: Int32Array; gen: number } | null = null;
 const heap = new MinHeap();
 // 混雑度（実際の時間の倍率）→ 車の経路選びで感じる追加の倍率。容量を大きく超えて混む道路（倍率 1.5 以上）だけ、
 // 遅れが読めないぶん避けたくなる。急すぎると月ごとに経路がゆれるので、ゆるやかにする（最大 1.8 倍）
@@ -397,7 +423,7 @@ export function perceivedCongestion(c: number) {
 }
 function getWork(size: number) {
   if (!work || work.size !== size)
-    work = { size, dist: new Float32Array(size), prev: new Int32Array(size), inDir: new Int8Array(size), walkFrom: new Float32Array(size), stamp: new Int32Array(size), done: new Int32Array(size), gen: 0 };
+    work = { size, dist: new Float32Array(size), real: new Float32Array(size), prev: new Int32Array(size), inDir: new Int8Array(size), walkFrom: new Float32Array(size), stamp: new Int32Array(size), done: new Int32Array(size), gen: 0 };
   return work;
 }
 
@@ -416,13 +442,17 @@ export function assignTrips(
   const EXT = NN;
   const PARK = NN + 1; // PARK + マス = 車で目的地に着いて駐車し終えた（駐車の時間のための仮のノード）
   const G = graph ?? buildRoadGraph(g, congestion, junctions);
-  const { off, to, dir, min: emin, carMin, jslot, jdel } = G;
+  const { off, to, dir, min: emin, jslot, jdel } = G;
+  // トラックは道路の種類の重みをかけた時間で経路を選ぶ。輸送時間（time・avgTime）は、実際の時間（real）で数える
+  const truck = !!opt.truck;
+  const carMin = truck ? G.truckMin : G.carMin;
+  const extExtra = opt.extExtra ?? 0;
   const volume = new Float32Array(NN);
   const served = new Map<number, number>();
   const time = new Map<number, number>();
   const filled = new Map<number, number>();
   const W = getWork(NN + 1 + N);
-  const { dist, prev, inDir, walkFrom, stamp, done } = W;
+  const { dist, real, prev, inDir, walkFrom, stamp, done } = W;
   const modes: ModeStats = { car: 0, transit: 0, walk: 0, parkRide: 0 };
   const useWalk = !opt.carOnly && !!transit;
   const carArrive = opt.carArrive;
@@ -462,10 +492,12 @@ export function assignTrips(
 
   let gen = W.gen;
   let sumTime = 0, sumTrips = 0;
-  const relax = (v: number, nt: number, u: number, d: number, wf: number) => {
+  // rt = 実際の時間（トラックのときだけ使う。ほかは nt と同じ）
+  const relax = (v: number, nt: number, u: number, d: number, wf: number, rt = nt) => {
     if (stamp[v] !== gen || nt < dist[v]) {
       stamp[v] = gen;
       dist[v] = nt;
+      real[v] = rt;
       prev[v] = u;
       inDir[v] = d;
       walkFrom[v] = wf;
@@ -497,7 +529,9 @@ export function assignTrips(
       const u = heap.pop();
       if (done[u] === gen) continue;
       done[u] = gen;
-      if (t > maxMin) break;
+      // トラックは重みをかけた時間で進むので、実際の時間で上限を見る（重みは最大 TRUCK_STREET × TRUCK_RESIDENTIAL 倍）
+      if (truck ? t > maxMin * TRUCK_STREET * TRUCK_RESIDENTIAL : t > maxMin) break;
+      if (truck && real[u] > maxMin) continue;
       const parked = u > EXT;
       const layer = u === EXT ? -1 : parked ? 0 : (u / N) | 0;
       const cell = parked ? u - PARK : u - layer * N;
@@ -524,7 +558,7 @@ export function assignTrips(
         remaining -= take;
         totalFree -= take;
         got += take;
-        timeAcc += take * t;
+        timeAcc += take * (truck ? real[u] : t);
         // 経路に人数を加え、交通手段を数える
         let c = u >= EXT ? prev[u] : u;
         const w = take * opt.weight;
@@ -557,9 +591,13 @@ export function assignTrips(
             if (jd < 0) continue;
           } else if (din >= 0 && ((d - din + 8) & 7) === 4) continue; // Uターンはしない
           else if (urban[u] === 1 && (urban[to[e]] === 2 || (prev[u] >= 0 && prev[u] < 2 * N && urban[prev[u]] === 2)) && !urbanTurnOk(din, d)) continue;
-          relax(to[e], t + carMin[e] + jd, u, d, 0);
+          if (truck) relax(to[e], t + carMin[e] + jd, u, d, 0, real[u] + emin[e] + jd);
+          else relax(to[e], t + carMin[e] + jd, u, d, 0);
         }
-        if (extFree > 0 && edge[cell]) relax(EXT, t + extPen[u], u, -1, 0);
+        if (extFree > 0 && edge[cell]) {
+          if (truck) relax(EXT, t + extPen[u] + extExtra, u, -1, 0, real[u] + extPen[u]);
+          else relax(EXT, t + extPen[u] + extExtra, u, -1, 0);
+        }
         if (transit && u < N) {
           // カーフェリー
           const fl = transit.carLinks.size ? transit.carLinks.get(u) : undefined;

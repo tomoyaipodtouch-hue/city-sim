@@ -18,7 +18,7 @@ import { erailStationCells, HWR_MSG_STATION, isElevHighway, levelHighwaysOverRai
 import { ADVISORS, Advice, computeRating, Loan, LOAN_AMOUNTS, loanRate, makeAdvice, MAX_LOANS, newLoan, ordinanceCost, ordinanceEffects, OrdinanceEffects, OrdinanceId, ORDINANCES, payLoan, rewardUnlocked, REWARD_REQ } from './governance';
 import { defaultServiceState, facilityEffect, makeServiceMaps, ServiceMaps, ServiceState, updateServices } from './services';
 import { Ages, agesOf, FuneralState, taxFactor, updatePopulation, WORK_RATE, workersOf } from './population';
-import { isJctRamp, assignTrips, buildJunctions, buildRoadGraph, buildTransitModel, congestionFactor, Destination, junctionGroup, LAYER, normalizeAvenueJunctions, Origin, parkingMinutes } from './traffic';
+import { isJctRamp, assignTrips, buildJunctions, buildRoadGraph, buildTransitModel, congestionFactor, Destination, junctionGroup, LAYER, normalizeAvenueJunctions, Origin, parkingMinutes, TRUCK_PCE } from './traffic';
 
 export enum BState {
   Building = 0,
@@ -195,6 +195,13 @@ const IL_WANT_PORT_FLAT = 100;
 const IL_PORT_SHARE = 0.5;
 // 港・貨物駅への近さが 0.3 以上なら、港の分の需要も使える（それより遠いと少しずつ減る）
 const ilPortMix = (near: number) => Math.min(1, near / 0.3);
+// 貨物：1日に出すトラックの台数（雇用 1 人あたり）。倉庫業は荷物の出し入れが多く、ハイテク産業と農業は少ない
+export const FREIGHT_RATE: Partial<Record<GrowKind, number>> = { IA: 0.05, ID: 0.1, IM: 0.1, IL: 0.18, IH: 0.06 };
+export const freightTrips = (b: { type: string; occ: number }) => Math.max(1, Math.round(b.occ * (FREIGHT_RATE[b.type as GrowKind] ?? 0.1)));
+// 港・貨物駅があるとき、遠くへ運ぶ荷物（船・鉄道に積みかえる）の割合。残りは近くの都市へトラックで運ぶ（道路・高速道路でマップの端へ）。
+// 遠くへの荷物は、マップの端より FREIGHT_TERMINAL_PREF 分以上遠くなければ港・貨物駅へ運ぶ
+export const FREIGHT_LONG = 0.6;
+const FREIGHT_TERMINAL_PREF = 30;
 // CIQ庁舎のまわり：需要が足りないときでも、毎日これだけの回数は倉庫業が建つのをためす。種類を選ぶときの需要の下限
 const CIQ_TRIES = 2;
 const CIQ_DEMAND = 0.6;
@@ -205,6 +212,20 @@ const CIQ_REDEV_AGE = 180;
 const CIQ_REDEV_PICK = 3;
 
 const emptyKinds = (v: number) => Object.fromEntries(GROW_KINDS.map((k) => [k, v])) as Record<GrowKind, number>;
+
+// 2回に分けて計算した貨物の結果を合わせる（交通量・運べた数・輸送時間）
+function mergeTrips(a: ReturnType<typeof assignTrips>, b: ReturnType<typeof assignTrips>) {
+  const volume = a.volume.slice();
+  for (let i = 0; i < volume.length; i++) volume[i] += b.volume[i];
+  const served = new Map(a.served), time = new Map<number, number>();
+  for (const [id, k] of b.served) served.set(id, (served.get(id) || 0) + k);
+  for (const id of served.keys()) {
+    const ka = a.served.get(id) || 0, kb = b.served.get(id) || 0;
+    time.set(id, ka + kb > 0 ? ((a.time.get(id) || 0) * ka + (b.time.get(id) || 0) * kb) / (ka + kb) : 0);
+  }
+  const na = [...a.served.values()].reduce((s, k) => s + k, 0), nb = [...b.served.values()].reduce((s, k) => s + k, 0);
+  return { volume, served, time, external: a.external + b.external, avgTime: na + nb > 0 ? (a.avgTime * na + b.avgTime * nb) / (na + nb) : 0 };
+}
 
 export class World {
   g: Grid;
@@ -1646,7 +1667,7 @@ export class World {
           for (const c of acc) if (park > carArrive[c]) carArrive[c] = park;
         }
         if (b.type === 'CS1' || b.type === 'CS2' || b.type === 'CS3') addDest(shopsAt, acc, { id: b.id, free: b.cap * 6 });
-        if (def.zone === ZoneType.I || def.zone === ZoneType.F) addOrigin(trucks, cell, b.id, Math.max(1, Math.round(b.occ * (b.type === 'IA' ? 0.05 : 0.12))));
+        if (def.zone === ZoneType.I || def.zone === ZoneType.F) addOrigin(trucks, cell, b.id, freightTrips(b));
       }
     }
     const pop = this.population();
@@ -1763,8 +1784,15 @@ export class World {
     this.transitRiders = Math.round(rc.modes.transit + rs.modes.transit);
     const tot = Math.max(1, rc.modes.car + rc.modes.transit + rc.modes.walk);
     this.modeShare = { car: rc.modes.car / tot, transit: rc.modes.transit / tot, walk: rc.modes.walk / tot, parkRide: rc.modes.parkRide / tot };
-    // 貨物：隣の都市（道路・高速道路）、港、貨物駅のうち近いところへ
-    const rf = assignTrips(g, [...trucks.values()], freightAt, cong, junctions, rnd, { externalCap: 1e9, externalOnly: freightAt.size === 0, carOnly: true, maxMinutes: 90, weight: 2.5 }, undefined, graph);
+    // 貨物：トラックは幹線道路・高速道路を通る（街路・住宅地の道路を避ける）。
+    // 近くの都市への荷物は隣の都市へ（マップの端）。港・貨物駅があれば、遠くへの荷物（FREIGHT_LONG）はそこで船・鉄道に積みかえる
+    const truckOrigins = [...trucks.values()];
+    const term = freightAt.size > 0;
+    const part = (k: number): Origin[] => truckOrigins.map((o) => ({ cell: o.cell, trips: o.trips * k, buildings: o.buildings.map((b) => ({ id: b.id, trips: b.trips * k })) }));
+    const truckOpt = { externalCap: 1e9, carOnly: true, maxMinutes: 90, weight: TRUCK_PCE, truck: true };
+    const rfR = assignTrips(g, term ? part(1 - FREIGHT_LONG) : truckOrigins, freightAt, cong, junctions, rnd, { ...truckOpt, externalOnly: true }, undefined, graph);
+    const rfL = term ? assignTrips(g, part(FREIGHT_LONG), freightAt, cong, junctions, rnd, { ...truckOpt, extExtra: FREIGHT_TERMINAL_PREF }, undefined, graph) : null;
+    const rf = rfL ? mergeTrips(rfR, rfL) : rfR;
     // 交通量と混雑度（前の月と平均してなめらかにする）。重ねランプが車線をふさぐマスは容量が小さい
     const orCap = orampCapScale(g);
     for (let v = 0; v < 2 * N; v++) {
@@ -1802,14 +1830,15 @@ export class World {
         }
         if (def.zone === ZoneType.I || def.zone === ZoneType.F) {
           const shipped = rf.served.get(b.id);
-          b.freight = shipped === undefined ? 1 : Math.min(1, shipped / Math.max(1, Math.round(b.occ * 0.12)));
+          b.freight = shipped === undefined ? 1 : Math.min(1, shipped / freightTrips(b));
           b.freightTime = rf.time.get(b.id) || 0;
         }
       }
     }
     this.employedTotal = employed;
     this.avgCommute = rc.avgTime;
-    this.tripStats = { shopping: Math.round(rs.avgTime * 10) / 10, freight: Math.round(rf.avgTime * 10) / 10, trucks: Math.round([...trucks.values()].reduce((a, o) => a + o.trips, 0)) };
+    const truckTrips = truckOrigins.reduce((a, o) => a + o.trips, 0);
+    this.tripStats = { shopping: Math.round(rs.avgTime * 10) / 10, freight: Math.round(rf.avgTime * 10) / 10, trucks: Math.round(truckTrips), truckExt: Math.round(rf.external) };
     // マスごとの通勤時間（近くの空き地の魅力に使う）
     const cm = new Float32Array(N);
     const cnt = new Float32Array(N);
@@ -1846,7 +1875,7 @@ export class World {
   private freightBoost = 0; // 貨物駅（倉庫業の需要）
   modeShare: { car: number; transit: number; walk: number; parkRide?: number } = { car: 0, transit: 0, walk: 0, parkRide: 0 };
   static readonly CTL_AUTO = Ctl.Auto;
-  tripStats = { shopping: 0, freight: 0, trucks: 0 };
+  tripStats = { shopping: 0, freight: 0, trucks: 0, truckExt: 0 }; // truckExt = マップの端（隣の都市）へ走るトラック（1日）
 
   // ---------------- 需要 ----------------
   private updateDemand() {
