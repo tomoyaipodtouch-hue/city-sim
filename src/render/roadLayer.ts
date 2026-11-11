@@ -10,7 +10,7 @@
 //   大通りの交差点（交差点のマスのかたまり）は、まとめて1つの交差点として描く。行き止まりは2本の車線で1つの転回場にする。
 // 路面、白線・黄線、歩道や壁などの立体物は、それぞれ別のメッシュにまとめる。
 import * as THREE from 'three';
-import { createMarkMaterial, createRoadSolidMaterial, createRoadSurfaceMaterial, SOLID, SURF, surfCode } from './roadMaterials';
+import { createMarkMaterial, createRoadSolidMaterial, createRoadSurfaceMaterial, SOLID, SURF, SURF_BLEND, surfCode } from './roadMaterials';
 import { Grid } from '../sim/grid';
 import { CELL, DX, DY, dirOf, isDiag, opp } from '../sim/constants';
 import { ROADS, RoadType, isHighway, isUrbanElevated } from '../sim/defs';
@@ -445,7 +445,15 @@ export class RoadLayer {
     // いまのマスの円の路面の模様の種類と、坂の傾き（地面に合わせない円を、腕の坂に合わせて傾ける）
     let discCode = 0, gradX = 0, gradZ = 0;
     // 高速道路とランプはコンクリートの路面にする
-    const isConc = (t: number) => isHighway(t) || t === RoadType.Ramp;
+    // 都市高速のランプ（1×5）の真ん中のマス（地上で一般道へつながる）は、つながる一般道と同じアスファルト（あとで決める）
+    const urMidAsph = new Set<number>();
+    const isConc = (t: number) => (isHighway(t) || t === RoadType.Ramp) && !(t === RoadType.Ramp && urMidAsph.has(S.owner));
+    // 道ごとの乱数（帯と同じ式：まっすぐな線ごとに同じ）
+    const lineSeed = (px: number, pz: number, ux: number, uz: number) => {
+      let tx = ux, tz = uz;
+      if (tx < -1e-3 || (Math.abs(tx) <= 1e-3 && tz < 0)) { tx = -tx; tz = -tz; }
+      return { seed: hashInt(Math.round((pz * tx - px * tz) / 4), Math.round(Math.atan2(tz, tx) * 4)), tx, tz };
+    };
     const surfCol = (t: number, conc: boolean) => (conc ? COL.slab : t === RoadType.Street ? COL.asphaltStreet : COL.asphalt);
     // 地上の道路は、路面・歩道・線の高さを地面（造成した地形）に合わせる。
     // マスの中心の高さだけで描くと、坂道や、坂道どうしの交差点で地面が路面より上に出てしまうため
@@ -2371,6 +2379,7 @@ export class RoadLayer {
     const urHwCells = new Map<number, URamp[]>(); // ランプが分かれる・合わさる本線のマス（その側の欄干を切る）
     for (const U of uramps) {
       U.cells.forEach((c, k) => (k === 2 ? urMid.set(c, U) : urSkip.add((U.level ? NC : 0) + c)));
+      if (U.level) urMidAsph.add(U.cells[2]);
       for (const k of [0, 1, 5, 6]) {
         const nd = (U.level ? NC : 0) + U.hw[k];
         (urHwCells.get(nd) ?? urHwCells.set(nd, []).get(nd)!).push(U);
@@ -3451,15 +3460,20 @@ export class RoadLayer {
       // 路面（進む向きの右の向き。点の並びは s の増える向き）
       const rx0 = -urampAt(U, 0, P).tz, rz0 = P.tx;
       const outRight = rx0 * U.sx + rz0 * U.sz > 0; // 右がランプの外側
-      const code = surfCode(lanesOf(RoadType.Ramp), SURF.concrete, false, hashInt(U.cells[0], 5));
+      // 真ん中のマス（地上）に近づくにつれて、コンクリートから、真ん中のマスと同じアスファルトへ少しずつ移す（境目を作らない）
+      const midS = lineSeed((mid % n + 0.5) * CELL, (((mid / n) | 0) + 0.5) * CELL, U.ax, U.az);
+      const code = surfCode(lanesOf(RoadType.Ramp), SURF.concrete, false, midS.seed);
+      const urCol = new THREE.Color();
       let along = 0;
       const ids: [number, number][] = [];
       L.forEach((q, k) => {
         if (k) along += Math.hypot(q.x - L[k - 1].x, q.z - L[k - 1].z);
-        S.aux = [-q.half, along, q.half, code];
-        const a = S.v(q.x - q.nx * q.half, q.hi, q.z - q.nz * q.half, COL.slab);
-        S.aux = [q.half, along, q.half, code];
-        const b = S.v(q.x + q.nx * q.half, q.ho, q.z + q.nz * q.half, COL.slab);
+        const u = Math.max(0, Math.min(1, (Math.abs(q.s) - 8) / 26)), bl = U.level ? 1 - u * u * (3 - 2 * u) : 0;
+        const cc = U.level ? urCol.copy(COL.slab).lerp(COL.asphalt, bl) : COL.slab;
+        S.aux = [-q.half, along, q.half, code + SURF_BLEND * bl];
+        const a = S.v(q.x - q.nx * q.half, q.hi, q.z - q.nz * q.half, cc);
+        S.aux = [q.half, along, q.half, code + SURF_BLEND * bl];
+        const b = S.v(q.x + q.nx * q.half, q.ho, q.z + q.nz * q.half, cc);
         ids.push([a, b]);
       });
       S.aux = AUX0;
@@ -3582,43 +3596,32 @@ export class RoadLayer {
       }
       // 路面：高架の部分は本線と同じコンクリート（同じ色・同じ道ごとの乱数・同じ目地の位置）、
       // 地面に近い部分は下の一般道と同じアスファルト（同じ乱数）。境には伸縮継手
-      const lineSeed = (px: number, pz: number, ux: number, uz: number) => {
-        let tx = ux, tz = uz;
-        if (tx < -1e-3 || (Math.abs(tx) <= 1e-3 && tz < 0)) { tx = -tx; tz = -tz; }
-        return { seed: hashInt(Math.round((pz * tx - px * tz) / 4), Math.round(Math.atan2(tz, tx) * 4)), tx, tz };
-      };
       const hwS = lineSeed(G.ox, G.oz, G.ux, G.uz);
       const gx0 = G.ox + G.rx * G.gOff, gz0 = G.oz + G.rz * G.gOff;
       const gS = lineSeed(gx0, gz0, G.ux, G.uz);
       const gt = G.gType;
-      const codeC = surfCode(lanesOf(g.up[G.r.start]), SURF.concrete, false, hwS.seed);
-      const codeA = surfCode(lanesOf(gt), gt === RoadType.Avenue ? SURF.avenue : SURF.asphalt, sidewalkOf(gt) > 0 && !hasBarrier(gt), gS.seed);
+      // 路面の模様：全体を1つの番号にして、コンクリート（本線と同じ）から下の道路のアスファルト（同じ乱数・同じ縁石ぞいの側溝）へ、
+      // ランプに沿って 25〜30m かけて少しずつ移す（色・板の目地・粒の粗さ）。横に切った境目は作らない
+      const groundCurb = sidewalkOf(gt) > 0 && !hasBarrier(gt);
+      const code = surfCode(lanesOf(gt), gt === RoadType.Avenue ? SURF.concreteToAvenue : SURF.concrete, groundCurb, gS.seed);
       const gHalf = drawWidth(gt) / 2;
-      const isA = (p: OS) => (entry ? p.q >= qa - 0.01 : p.q >= qa - 0.01);
-      const vtx = (p: OS, sd: number, asph: boolean) => {
+      const qb0 = Math.max(qg, qa - 14), qb1 = Math.max(qb0 + 20, qe - 2);
+      const blendOf = (q: number) => { const u = Math.max(0, Math.min(1, (q - qb0) / (qb1 - qb0))); return u * u * (3 - 2 * u); };
+      const colTmp = new THREE.Color();
+      const vtx = (p: OS, sd: number) => {
         const x = p.x + sd * p.nx * p.half, z = p.z + sd * p.nz * p.half, y = sd < 0 ? p.hi : p.ho;
-        if (asph) {
-          // 一般道の帯と同じ：横は一般道の中心線から、縦は一般道に沿った長さ
-          const lat = (x - gx0) * -gS.tz + (z - gz0) * gS.tx;
-          S.aux = [lat, x * gS.tx + z * gS.tz, gHalf, codeA];
-          return S.v(x, y, z, COL.asphalt);
-        }
-        S.aux = [(x - G.ox) * -hwS.tz + (z - G.oz) * hwS.tx, x * hwS.tx + z * hwS.tz, G.hwHalf, codeC];
-        return S.v(x, y, z, COL.slab);
+        const bl = blendOf(p.q);
+        // 横の位置と道路の半分の幅も、本線の中心線から一般道の中心線へ少しずつ移す（縁石ぞいの汚れが一般道の路面と続くように）
+        const latC = (x - G.ox) * -hwS.tz + (z - G.oz) * hwS.tx, latG = (x - gx0) * -gS.tz + (z - gz0) * gS.tx;
+        S.aux = [lerp(latC, latG, bl), x * gS.tx + z * gS.tz, lerp(G.hwHalf, gHalf, bl), code + SURF_BLEND * bl];
+        return S.v(x, y, z, colTmp.copy(COL.slab).lerp(COL.asphalt, bl));
       };
+      const vids = L.map((p) => [vtx(p, -1), vtx(p, 1)]);
       for (let k = 0; k + 1 < L.length; k++) {
-        const A = L[k], B = L[k + 1];
-        const asph = isA(A) && isA(B);
-        const a0 = vtx(A, -1, asph), a1 = vtx(A, 1, asph), b0 = vtx(B, -1, asph), b1 = vtx(B, 1, asph);
-        S.tri(a0, a1, b1);
-        S.tri(a0, b1, b0);
+        S.tri(vids[k][0], vids[k][1], vids[k + 1][1]);
+        S.tri(vids[k][0], vids[k + 1][1], vids[k + 1][0]);
       }
       S.aux = AUX0;
-      // 伸縮継手（床版と土の部分の境）：細い黒い線
-      {
-        const J = L.find((p) => Math.abs(p.q - qa) < 0.15);
-        if (J && qa < qe - 1) seg2(J.x - J.nx * J.half, J.z - J.nz * J.half, J.x + J.nx * J.half, J.z + J.nz * J.half, Math.max(J.hi, J.ho), COL.groove, 0.12);
-      }
       // 分かれ目の先端：本線の欄干とランプの内側の欄干を、丸い頭の壁でつなぐ（すき間をふさぐ）
       {
         orAt(G, sOf(qg), orPt);

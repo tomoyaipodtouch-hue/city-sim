@@ -8,7 +8,9 @@ import { AO_DECL, aoExpr, aoUniforms } from './ao';
 import { AMB_IRR_GLSL, AMB_IRR_PARS, ambUniforms } from './materials';
 
 // avenue：大通り（車線が 3.25m と狭いので、縁石ぞいの側溝を細くする）
-export const SURF = { asphalt: 0, concrete: 1, avenue: 2 } as const;
+export const SURF = { asphalt: 0, concrete: 1, avenue: 2, concreteToAvenue: 3 } as const;
+// ランプの床版：コンクリート（高架）から、下の道路のアスファルトへ少しずつ変える割合を、aRd.w の小数部に入れる（0..1 → +0..0.4）
+export const SURF_BLEND = 0.4;
 // 歩道・壁などの種類（aRd.w）。grass・hedge は大通りの中央分離帯の芝と植え込み
 export const SOLID = { plain: 0, walk: 2, curb: 3, concrete: 4, grass: 5, hedge: 6 } as const;
 
@@ -41,15 +43,17 @@ function inject(m: THREE.Material, key: string, ao: number, body: string, decl =
 // コンクリートの路面（高速道路・高架）は、板の目地と板ごとの色の違い
 export function createRoadSurfaceMaterial() {
   const m = new THREE.MeshLambertMaterial({ vertexColors: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
-  return inject(m, 'road-surface-5', 0.32, `
+  return inject(m, 'road-surface-6', 0.32, `
     vec2 p = vRw.xz;
     float code = floor(vRd.w + 0.5);
+    // コンクリートから下の道路のアスファルトへの移りかわり（ランプの床版。ふつうの道路は 0）
+    float bl = clamp((vRd.w - code) / 0.4, 0.0, 1.0);
     float lanes = mod(code, 4.0);
-    float conc = mod(floor(code / 4.0), 4.0);
-    float av = step(1.5, conc); // 大通り
-    conc *= 1.0 - av;
-    float gw = mix(0.42, 0.25, av); // 縁石ぞいの側溝の幅
-    float curb = mod(floor(code / 16.0), 2.0);
+    float kd = mod(floor(code / 4.0), 4.0);
+    float av = step(1.5, kd) * step(kd, 2.5); // 大通り
+    float conc = (step(0.5, kd) * step(kd, 1.5) + step(2.5, kd)) * (1.0 - bl); // コンクリートらしさ（板の目地・色）
+    float gw = mix(0.42, 0.25, max(av, step(2.5, kd) * bl)); // 縁石ぞいの側溝の幅
+    float curb = mod(floor(code / 16.0), 2.0) * (kd > 0.5 && kd < 1.5 || kd > 2.5 ? bl : 1.0);
     float seed = floor(code / 32.0);
     float lat = vRd.x;
     // 交差点など（車線なし）は、世界の座標で模様を置く
@@ -75,7 +79,7 @@ export function createRoadSurfaceMaterial() {
     // 道ごとの色の違い（舗装した時期の違い）
     float sv = sHash(vec2(seed * 0.37 + 0.11, 7.1));
     // コンクリートの床版（高架・ランプ）はつなぎ目で色が変わって見えないよう、道ごとの違いをごく小さくする（板ごとの違いは下で）
-    float rv = conc > 0.5 ? 0.15 : 1.0;
+    float rv = mix(1.0, 0.15, conc);
     c *= 1.0 + (0.1 * sv - 0.05) * rv;
     c *= mix(vec3(1.0), vec3(1.035, 1.0, 0.95), sHash(vec2(seed * 0.53 + 0.7, 3.3)) * rv);
     // 広いむらと汚れ
@@ -92,14 +96,14 @@ export function createRoadSurfaceMaterial() {
       float var = 0.55 + 0.9 * nM.a;
       trk = (1.0 - smoothstep(0.1, 0.45 + fl, abs(abs(lc) - 0.85))) * inside * var * fine;
       oil = (1.0 - smoothstep(0.05, 0.35 + fl, abs(lc))) * inside * var * smoothstep(0.35, 0.65, nC.g) * fine;
-      if (conc > 0.5) {
-        // コンクリートの板：4.5m ごとの目地と、車線の境目の目地。板ごとに少し色が違う
+      if (conc > 0.01) {
+        // コンクリートの板：4.5m ごとの目地と、車線の境目の目地。板ごとに少し色が違う（アスファルトへ移るところでは薄くする）
         float ja = (fract(alg / 4.5 + 0.5) - 0.5) * 4.5;
         float jl = (fract(x / lw + 0.5) - 0.5) * lw;
         float joint = max(sLine(ja, 0.05, fa), sLine(jl, 0.04, fl) * inside);
         float slab = sHash(vec2(floor(alg / 4.5), floor(x / lw)) + seed * 0.07);
-        c *= 1.0 + (slab - 0.5) * 0.09 * fine;
-        c *= 1.0 - joint * 0.4 * fine;
+        c *= 1.0 + (slab - 0.5) * 0.09 * fine * conc;
+        c *= 1.0 - joint * 0.4 * fine * conc;
       }
     }
     // 交差点の中：車の止まる真ん中ほど油で黒ずみ、むらがある
@@ -118,7 +122,7 @@ export function createRoadSurfaceMaterial() {
         float pt = sBox(a0, a0 + len, u, fa) * sBox(b0, b0 + wid, v, fl);
         float inner = sBox(a0 + 0.07, a0 + len - 0.07, u, fa) * sBox(b0 + 0.07, b0 + wid - 0.07, v, fl);
         float fresh = step(0.07, h); // 新しい継ぎはぎは黒く、古いものは明るい
-        c = mix(c, c * (fresh > 0.5 ? 0.84 : 1.08), pt * (conc > 0.5 ? 0.5 : 1.0));
+        c = mix(c, c * (fresh > 0.5 ? 0.84 : 1.08), pt * mix(1.0, 0.5, conc));
         c *= 1.0 - (pt - inner) * 0.35;
         trk *= 1.0 - pt * 0.6;
       }
@@ -126,19 +130,20 @@ export function createRoadSurfaceMaterial() {
     // 細いひび（古い舗装のところだけ）
     float crack = nC.b * smoothstep(0.5, 0.7, nM.a + (sv - 0.5) * 0.3) * fine;
     // 縁石ぞいの側溝（コンクリートの帯）と、ごみのたまる黒ずみ。縁石のない道は路肩の汚れ
-    if (curb > 0.5) {
-      float gut = 1.0 - smoothstep(gw, gw + fw, de);
+    if (curb > 0.01) {
+      float gut = (1.0 - smoothstep(gw, gw + fw, de)) * curb;
       c = mix(c, vec3(0.2, 0.196, 0.186) * (0.9 + 0.2 * nM.g), gut * 0.9);
-      c *= 1.0 - sLine(de - gw, 0.04, fw) * 0.5;
-      c *= 1.0 - (1.0 - smoothstep(gw, 1.0, de)) * (1.0 - gut) * 0.12 * (0.6 + 0.8 * nC.g);
+      c *= 1.0 - sLine(de - gw, 0.04, fw) * 0.5 * curb;
+      c *= 1.0 - (1.0 - smoothstep(gw, 1.0, de)) * (1.0 - gut) * 0.12 * (0.6 + 0.8 * nC.g) * curb;
       trk *= 1.0 - gut;
       crack *= 1.0 - gut;
-    } else {
-      c *= 1.0 - (1.0 - smoothstep(0.0, 0.7, de)) * 0.13 * (0.6 + 0.8 * nC.g);
+    }
+    if (curb < 0.99) {
+      c *= 1.0 - (1.0 - smoothstep(0.0, 0.7, de)) * 0.13 * (0.6 + 0.8 * nC.g) * (1.0 - curb);
     }
     // 骨材の粒（近くで見えるざらつき）。車輪のあとはすり減ってなめらか
     float grain = (nF.r - 0.5) * fine;
-    c *= 1.0 + grain * (conc > 0.5 ? 0.16 : 0.42) * (1.0 - trk * 0.5);
+    c *= 1.0 + grain * mix(0.42, 0.16, conc) * (1.0 - trk * 0.5);
     c *= 1.0 - trk * 0.16 - oil * 0.1;
     c *= 1.0 - crack * 0.3;
     diffuseColor.rgb = c;`);
