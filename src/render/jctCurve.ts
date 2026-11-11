@@ -38,8 +38,12 @@ export const JR_GROW = 24;
 export function jHalf(C: JChain, s: number) {
   const hf = (m: JMain | null) => (m ? m.half / 2 : JR_HALF);
   let w = JR_HALF;
-  if (C.dead0) { const t = Math.max(0, Math.min(1, (s - C.bound[0]) / JR_GROW)); w = Math.min(w, hf(C.main0) + (JR_HALF - hf(C.main0)) * t * t * (3 - 2 * t)); }
-  if (C.dead1) { const t = Math.max(0, Math.min(1, (C.bound[C.bound.length - 1] - s) / JR_GROW)); w = Math.min(w, hf(C.main1) + (JR_HALF - hf(C.main1)) * t * t * (3 - 2 * t)); }
+  // 広げる長さは、反対の端（描く範囲の終わり）までに広げ終わるように（短い鎖でも、となりの鎖と幅がそろう）
+  const span = Math.max(4, C.draw1 - C.draw0);
+  const G = Math.min(JR_GROW, span);
+  const ease = (t: number) => t * t * (3 - 2 * t);
+  if (C.dead0) { const t = Math.max(0, Math.min(1, (s - C.bound[0]) / G)); w = Math.min(w, hf(C.main0) + (JR_HALF - hf(C.main0)) * ease(t)); }
+  if (C.dead1) { const t = Math.max(0, Math.min(1, (C.bound[C.bound.length - 1] - s) / G)); w = Math.min(w, hf(C.main1) + (JR_HALF - hf(C.main1)) * ease(t)); }
   // Y字の分かれ目のとなりの曲線と重ならない幅まで
   if (C.lim) {
     const k = Math.round(C.dead0 ? s - C.bound[0] : C.bound[C.bound.length - 1] - s);
@@ -61,8 +65,10 @@ function limitPair(a: JChain, aStart: boolean, b: JChain, bStart: boolean) {
     for (const q of Q) d = Math.min(d, Math.hypot(p.x - q.x, p.z - q.z));
     return Math.max(1.6, d / 2);
   });
-  a.lim = lim(pa, pb);
-  b.lim = lim(pb, pa);
+  // 分かれ目から離れるほど広がるだけ（ゆらがない）：先のどこよりも広くしない
+  const mono = (l: number[]) => { for (let k = l.length - 2; k >= 0; k--) l[k] = Math.min(l[k], l[k + 1]); return l; };
+  a.lim = mono(lim(pa, pb));
+  b.lim = mono(lim(pb, pa));
 }
 export interface JPt { x: number; z: number; h: number; tx: number; tz: number }
 
@@ -96,77 +102,131 @@ export function jAt(C: JChain, s: number, out: JPt = { x: 0, z: 0, h: 0, tx: 1, 
 
 const CORR = 0.4 * CELL; // 曲線がマスの中心線から離れてよい長さ（となりのマスの道路や柱に重ならない）
 const H_CORR = 1.0; // 高さを動かしてよい幅（m）。立体交差の下の空きは 6m より十分に大きい
-const FSTEP = 4; // ならすときの点の間隔（m）
+const FSTEP = 1; // ならすときの点の間隔（m）。1m ごとの点をそのまま解く（間を補う曲線のゆらぎが出ない）
 
 // 曲率の変化が小さい曲線（自然なスプラインに近い）を、帯の中で求める。pinA..pinZ の外（延長と端の点）は動かさない
 // wideA / wideZ：Y字の分かれ目の端。そこから DEAD_R m のあいだは帯を広げて（本線の向きから、ランプの向きへ、ゆっくり曲がれるように）
 const CORR_DEAD = 0.9 * CELL, DEAD_R = 64;
-function fair(xs: number[], zs: number[], hs: number[], pinA: number, pinZ: number, wideA = false, wideZ = false) {
+function fair(xs: number[], zs: number[], hs: number[], pinA: number, pinZ: number, wideA = 0, wideZ = 0) {
   const m = xs.length;
   const idx: number[] = [];
   for (let i = 0; i < m; i += FSTEP) idx.push(i);
   if (idx[idx.length - 1] !== m - 1) idx.push(m - 1);
-  for (const q of [pinA, pinZ]) if (!idx.includes(q)) idx.push(q);
+  // 動かさない点の境（pinA, pinZ）も点にする。近すぎる点は除く（点の間隔がふぞろいだと、曲線がふくらんだり折れたりする）
+  for (const q of [pinA, pinZ]) {
+    for (let k = idx.length - 1; k >= 0; k--) if (idx[k] !== q && Math.abs(idx[k] - q) < FSTEP * 0.6 && idx[k] !== 0 && idx[k] !== m - 1) idx.splice(k, 1);
+    if (!idx.includes(q)) idx.push(q);
+  }
   idx.sort((a, b) => a - b);
   const K = idx.length;
   const ox = idx.map((i) => xs[i]), oz = idx.map((i) => zs[i]), oh = idx.map((i) => hs[i]);
   const pin = idx.map((i) => i <= pinA || i >= pinZ);
-  // はじめは少しならした形から
-  const g = (a: number[], sig: number) => Array.from(smooth(Float64Array.from(a), sig, true));
-  const cx = g(ox, 2), cz = g(oz, 2), ch = g(oh, 3);
-  for (let k = 0; k < K; k++) if (pin[k]) { cx[k] = ox[k]; cz[k] = oz[k]; ch[k] = oh[k]; }
-  // 4階差分（曲がりの変化）を小さくする。ガウス・ザイデル法で、毎回帯の中へ戻す
-  const lam = 0.12;
-  for (let it = 0, nIt = wideA || wideZ ? 3000 : 900; it < nIt; it++) {
-    for (let k = 2; k < K - 2; k++) {
+  // 曲がり（2階差分）の2乗の和が最小の曲線を、帯の中で求める（自然な3次スプラインと同じ形）。
+  // 帯からはみ出した点は、帯の縁へ引き寄せる重みをつけて解き直す（数回）
+  const crOf = (k: number) => {
+    let cr = CORR;
+    if (wideA) cr = Math.max(cr, CORR_DEAD * Math.max(0, 1 - (idx[k] - pinA) / wideA));
+    if (wideZ) cr = Math.max(cr, CORR_DEAD * Math.max(0, 1 - (pinZ - idx[k]) / wideZ));
+    return cr;
+  };
+  const wt: number[] = pin.map((p) => (p ? 1e6 : 1e-4));
+  const tx = ox.slice(), tz = oz.slice();
+  let cx = ox.slice(), cz = oz.slice();
+  for (let round = 0; round < 10; round++) {
+    cx = fairSolve(wt, tx);
+    cz = fairSolve(wt, tz);
+    let moved = false;
+    for (let k = 0; k < K; k++) {
       if (pin[k]) continue;
-      const fx = cx[k - 2] - 4 * cx[k - 1] + 6 * cx[k] - 4 * cx[k + 1] + cx[k + 2];
-      const fz = cz[k - 2] - 4 * cz[k - 1] + 6 * cz[k] - 4 * cz[k + 1] + cz[k + 2];
-      const fh = ch[k - 2] - 4 * ch[k - 1] + 6 * ch[k] - 4 * ch[k + 1] + ch[k + 2];
-      cx[k] -= lam * fx;
-      cz[k] -= lam * fz;
-      ch[k] -= lam * fh;
-      const dx = cx[k] - ox[k], dz = cz[k] - oz[k], d = Math.hypot(dx, dz);
-      let cr = CORR;
-      if (wideA) cr = Math.max(cr, CORR_DEAD * Math.max(0, 1 - (idx[k] - pinA) / DEAD_R));
-      if (wideZ) cr = Math.max(cr, CORR_DEAD * Math.max(0, 1 - (pinZ - idx[k]) / DEAD_R));
-      if (d > cr) { cx[k] = ox[k] + (dx * cr) / d; cz[k] = oz[k] + (dz * cr) / d; }
-      ch[k] = Math.max(oh[k] - H_CORR, Math.min(oh[k] + H_CORR, ch[k]));
+      const dx = cx[k] - ox[k], dz = cz[k] - oz[k], d = Math.hypot(dx, dz), cr = crOf(k);
+      if (d > cr) {
+        tx[k] = ox[k] + (dx * cr * 0.98) / d;
+        tz[k] = oz[k] + (dz * cr * 0.98) / d;
+        wt[k] = Math.min(WCAP, wt[k] < 0.01 ? 0.05 : wt[k] * 2);
+        moved = true;
+      }
     }
+    if (!moved) break;
   }
-  // 1m ごとの点へ（Catmull-Rom）
+  // 高さも同じ（帯は ±H_CORR）
+  const wh: number[] = pin.map((p) => (p ? 1e6 : 1e-4)), th = oh.slice();
+  let ch = oh.slice();
+  for (let round = 0; round < 10; round++) {
+    ch = fairSolve(wh, th);
+    let moved = false;
+    for (let k = 0; k < K; k++) {
+      if (pin[k]) continue;
+      if (Math.abs(ch[k] - oh[k]) > H_CORR) {
+        th[k] = oh[k] + Math.sign(ch[k] - oh[k]) * H_CORR * 0.98;
+        wh[k] = Math.min(1e3, wh[k] < 1 ? 0.5 : wh[k] * 4);
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+  // 1m ごとの点へ（3次エルミート）。接線はふつう前後の点から求めるが、動かさない区間との境の点では、動かさない側の向き
+  // （本線・幹の向き）にそろえる（そこで折れないように）
+  const tan = (c: number[], k: number) => {
+    const pk = pin[k];
+    if (k === 0) return c[1] - c[0];
+    if (k === K - 1) return c[K - 1] - c[K - 2];
+    const hPrev = idx[k] - idx[k - 1], hNext = idx[k + 1] - idx[k];
+    // 1m あたりの変化
+    if (pk && !pin[k + 1]) return (c[k] - c[k - 1]) / hPrev;
+    if (pk && !pin[k - 1]) return (c[k + 1] - c[k]) / hNext;
+    return (c[k + 1] - c[k - 1]) / (hPrev + hNext);
+  };
   const X = new Float64Array(m), Z2 = new Float64Array(m), Hh = new Float64Array(m);
+  const tX = cx.map((_, k) => tan(cx, k)), tZ = cz.map((_, k) => tan(cz, k)), tH = ch.map((_, k) => tan(ch, k));
+  // 端の点（k = 0, K-1）の接線は1区間の差なので、1m あたりに直す
+  for (const k of [0, K - 1]) { const h = k ? idx[K - 1] - idx[K - 2] : idx[1] - idx[0]; tX[k] /= h; tZ[k] /= h; tH[k] /= h; }
   for (let k = 0; k + 1 < K; k++) {
-    const i0 = idx[k], i1 = idx[k + 1];
-    const a = Math.max(0, k - 1), b = Math.min(K - 1, k + 2);
+    const i0 = idx[k], i1 = idx[k + 1], h = i1 - i0 || 1;
     for (let i = i0; i <= i1; i++) {
-      const u = (i - i0) / (i1 - i0 || 1), u2 = u * u, u3 = u2 * u;
-      const cr = (p0: number, p1: number, p2: number, p3: number) => 0.5 * (2 * p1 + (-p0 + p2) * u + (2 * p0 - 5 * p1 + 4 * p2 - p3) * u2 + (-p0 + 3 * p1 - 3 * p2 + p3) * u3);
-      X[i] = cr(cx[a], cx[k], cx[k + 1], cx[b]);
-      Z2[i] = cr(cz[a], cz[k], cz[k + 1], cz[b]);
-      Hh[i] = cr(ch[a], ch[k], ch[k + 1], ch[b]);
+      const u = (i - i0) / h, u2 = u * u, u3 = u2 * u;
+      const h00 = 2 * u3 - 3 * u2 + 1, h10 = u3 - 2 * u2 + u, h01 = -2 * u3 + 3 * u2, h11 = u3 - u2;
+      const herm = (c: number[], t: number[]) => h00 * c[k] + h10 * h * t[k] + h01 * c[k + 1] + h11 * h * t[k + 1];
+      X[i] = herm(cx, tX);
+      Z2[i] = herm(cz, tZ);
+      Hh[i] = herm(ch, tH);
     }
   }
   return { X, Z2, Hh };
 }
 
-function smooth(a: Float64Array, sig: number, fixedEnds: boolean) {
-  const m = a.length, out = new Float64Array(m), W = Math.ceil(sig * 3);
-  const wt: number[] = [];
-  for (let k = -W; k <= W; k++) wt.push(Math.exp((-k * k) / (2 * sig * sig)));
-  for (let i = 0; i < m; i++) {
-    let s = 0, ws = 0;
-    for (let k = -W; k <= W; k++) {
-      const j = i + k;
-      if (j < 0 || j >= m) continue;
-      s += a[j] * wt[k + W];
-      ws += wt[k + W];
+// (a2·D2ᵀD2 + a3·D3ᵀD3 + diag(w)) x = w t を解く（D2・D3 = 2階・3階差分）。
+// 3階差分（曲がり具合の変わり方）を小さくすると、曲がり具合が少しずつ変わる（クロソイドに近い）曲線になる。7重対角の帯つきのガウスの消去法
+// 点の間隔 FSTEP に合わせた重み（4m 間隔で FA2 = 0.15、FA3 = 1 と同じなめらかさ）
+const FA2 = 0.15 * Math.pow(4 / FSTEP, 4), FA3 = Math.pow(4 / FSTEP, 6), WCAP = 0.6;
+function fairSolve(w: number[], t: number[]): number[] {
+  const K = t.length, B = 3;
+  if (K < 4) return t.slice();
+  const A: number[][] = [];
+  for (let i = 0; i < K; i++) { const r = new Array(2 * B + 1).fill(0); r[B] = w[i]; A.push(r); }
+  const addStencil = (cols: number[], v: number[], a: number) => {
+    for (let p = 0; p < cols.length; p++) for (let q = 0; q < cols.length; q++) A[cols[p]][B + cols[q] - cols[p]] += a * v[p] * v[q];
+  };
+  for (let r = 1; r < K - 1; r++) addStencil([r - 1, r, r + 1], [1, -2, 1], FA2);
+  for (let r = 1; r < K - 2; r++) addStencil([r - 1, r, r + 1, r + 2], [-1, 3, -3, 1], FA3);
+  const y = t.map((v, i) => v * w[i]);
+  for (let i = 0; i < K; i++) {
+    const piv = A[i][B];
+    for (let j = 1; j <= B && i + j < K; j++) {
+      const f = A[i + j][B - j] / piv;
+      if (!f) continue;
+      for (let c = 0; c <= B; c++) if (i + c < K) A[i + j][B - j + c] -= f * A[i][B + c];
+      y[i + j] -= f * y[i];
     }
-    out[i] = s / ws;
   }
-  if (fixedEnds) { out[0] = a[0]; out[m - 1] = a[m - 1]; }
-  return out;
+  const x = new Array<number>(K).fill(0);
+  for (let i = K - 1; i >= 0; i--) {
+    let sum = y[i];
+    for (let c = 1; c <= B && i + c < K; c++) sum -= A[i][B + c] * x[i + c];
+    x[i] = sum / A[i][B];
+  }
+  return x;
 }
+
 
 export function findJctChains(g: Grid, lift: number): JChain[] {
   const n = g.n, N = n * n;
@@ -305,9 +365,13 @@ function build(g: Grid, nodes: number[], lift: number, preds: Map<number, number
   // 合わさり目から出ていく幹は、合わさり目のマスの出口まで、分かれ目へ入る幹は、分かれ目のマスの入口から先を動かさない
   // （そのマスは枝の側の曲線で走るので、境の点が枝の曲線と同じ所になるように）
   const joinA = !mainA && (preds.get(A)?.length ?? 0) > 1, forkZ = !mainZ && (succs.get(Z)?.length ?? 0) > 1;
-  const pinA = joinA ? Math.round((at[3] + at[4]) / 2) : at[3];
-  const pinZ = forkZ ? Math.round((at[P.length - 5] + at[P.length - 4]) / 2) : at[P.length - 4];
-  const { X, Z2, Hh } = fair(xs, zs, hs, pinA, pinZ, dead0, dead1);
+  // 本線の端は、マスの入口（出口）まで動かさない。マスの中では、本線の向きから少しずつ曲がりはじめる（分かれ・合流の始まりがなめらか）
+  // （分かれ目のランプも同じ：分かれ目のマスの入口までは幹の向き、マスの中で分かれていく）
+  const pinA = joinA ? Math.round((at[3] + at[4]) / 2) : at[2];
+  const pinZ = forkZ ? Math.round((at[P.length - 5] + at[P.length - 4]) / 2) : at[P.length - 3];
+  // 帯を広げる長さ：Y字の分かれ目は長く、ランプどうしの分かれ目・合わさり目は短く（幹の向きへ、接するように寄っていけるように）
+  const forkA = !mainA && (preds.get(A)?.length ?? 0) === 1, joinZ = !mainZ && (succs.get(Z)?.length ?? 0) === 1;
+  const { X, Z2, Hh } = fair(xs, zs, hs, pinA, pinZ, dead0 ? DEAD_R : forkA ? 36 : 0, dead1 ? DEAD_R : joinZ ? 36 : 0);
   // 曲線の長さ
   const m = X.length, S = new Float32Array(m);
   for (let k = 1; k < m; k++) S[k] = S[k - 1] + Math.hypot(X[k] - X[k - 1], Z2[k] - Z2[k - 1]);

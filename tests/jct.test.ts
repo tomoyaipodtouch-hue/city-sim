@@ -329,3 +329,49 @@ describe('junction Y-splits do not stack decks', () => {
       if (ta !== G1 && tb !== G1) expect(pairs).toBeGreaterThanOrEqual(1);
     });
 });
+
+// ---- 描いたランプの縁（路面の縁と欄干）がなめらかに続くか：急な折れ、段、となりの曲線とのずれがない ----
+describe('junction ramp edges are smooth and continuous', () => {
+  const cases: [string, 'x' | 't', number, number, boolean, boolean, JctForm][] = [];
+  for (const [ln, ta, tb] of LEVELS) for (const [gn, da, db] of GEOMS) cases.push([`tee ${ln}, ${gn}`, 't', ta, tb, da, db, 'tee']);
+  for (const form of ['semi', 'clover', 'turbine'] as JctForm[]) cases.push([`${form} mixed axis`, 'x', G, E, false, false, form], [`${form} ground diagonal`, 'x', G, G, false, true, form]);
+  for (const [name, kind, ta, tb, da, db, form] of cases)
+    it(name, { timeout: 60000 }, () => {
+      const { w } = build(kind, ta, tb, da, db, form);
+      const chains = findJctChains(w.g, 0);
+      const ang = (ax: number, az: number, bx: number, bz: number) => Math.abs(Math.atan2(ax * bz - az * bx, ax * bx + az * bz)) * (180 / Math.PI);
+      const ends: { x: number; z: number; tx: number; tz: number; w: number }[] = [];
+      for (const C of chains) {
+        if (C.draw1 - C.draw0 < 2) continue;
+        // 縁の点（1m ごと）
+        const L: [number, number][] = [], R: [number, number][] = [];
+        for (let s = C.draw0; s <= C.draw1 + 1e-6; s += 1) {
+          const q = jAt(C, Math.min(s, C.draw1)), hw = jHalf(C, Math.min(s, C.draw1));
+          L.push([q.x + q.tz * hw, q.z - q.tx * hw]);
+          R.push([q.x - q.tz * hw, q.z + q.tx * hw]);
+        }
+        for (const P of [L, R])
+          for (let k = 1; k + 1 < P.length; k++) {
+            const a = ang(P[k][0] - P[k - 1][0], P[k][1] - P[k - 1][1], P[k + 1][0] - P[k][0], P[k + 1][1] - P[k][1]);
+            expect(a, `edge turns ${a.toFixed(1)}° within 1 m (chain of ${C.nodes.length} nodes, at ${k}/${P.length} m, ${P === L ? 'left' : 'right'} edge, dead ${C.dead0}/${C.dead1}, main ${!!C.main0}/${!!C.main1}, w ${jHalf(C, C.draw0 + k).toFixed(2)})`).toBeLessThan(7);
+          }
+        for (const s of [C.draw0, C.draw1]) { const q = jAt(C, s); ends.push({ x: q.x, z: q.z, tx: q.tx, tz: q.tz, w: jHalf(C, s) }); }
+        // Y字の分かれ目：外側の縁は本線の縁に重なり、向きは本線と同じ
+        for (const [M, s, dead] of [[C.main0, C.bound[0], C.dead0], [C.main1, C.bound[C.bound.length - 1], C.dead1]] as const) {
+          if (!M || !dead) continue;
+          const q = jAt(C, s);
+          expect(ang(q.tx, q.tz, M.ux, M.uz) % 180, 'ramp leaves the branch tangentially').toBeLessThan(3);
+          const o = Math.abs(-(q.x - M.x) * M.uz + (q.z - M.z) * M.ux) + jHalf(C, s);
+          expect(Math.abs(o - M.half), 'outer edge continues the branch edge').toBeLessThan(0.4);
+        }
+      }
+      // となりの曲線どうし（分かれ目・合わさり目のマスで、幹と枝）の端がそろう：同じ点で終わる・始まるなら、向きと幅が同じ
+      for (let i = 0; i < ends.length; i++)
+        for (let j = i + 1; j < ends.length; j++) {
+          const a = ends[i], b = ends[j];
+          if (Math.hypot(a.x - b.x, a.z - b.z) > 0.3) continue;
+          expect(ang(a.tx, a.tz, b.tx, b.tz) % 180, 'heading matches where curves meet').toBeLessThan(4);
+          expect(Math.abs(a.w - b.w), 'width matches where curves meet').toBeLessThan(0.15);
+        }
+    });
+});
