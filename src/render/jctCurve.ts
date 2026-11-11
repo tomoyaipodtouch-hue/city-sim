@@ -192,8 +192,26 @@ function build(g: Grid, nodes: number[], lift: number, preds: Map<number, number
   // T字・Y字の合わさる側の本線の端では、ランプが本線にまっすぐ続くこともある
   const isMainNode = (v: number) => { const t = g.nodeType(v); return t !== RoadType.Ramp && !!ROADS[t]?.highway; };
   const turnAbs = (a: number, b: number) => { const t = (b - a + 8) & 7; return t > 4 ? 8 - t : t; };
-  if (mainA) for (const p of preds.get(A) ?? []) { const d = dirTo(g, p, A); if (d >= 0 && isMainNode(p) && turnAbs(d, d0) <= 1) { tA = d; break; } }
-  if (mainZ) for (const q of succs.get(Z) ?? []) { const d = dirTo(g, Z, q); if (d >= 0 && isMainNode(q) && turnAbs(dl, d) <= 1) { tZ = d; break; } }
+  // （まっすぐ続く向きを先に選ぶ）
+  if (mainZ) {
+    const outs: number[] = [];
+    g.forEachOut(Z, (q, d) => { if (isMainNode(q) && turnAbs(dl, d) <= 1) outs.push(d); });
+    if (outs.length) tZ = outs.includes(dl) ? dl : outs.includes((dl + 1) & 7) ? (dl + 1) & 7 : outs[0];
+  }
+  if (mainA) {
+    const ins: number[] = [];
+    const c = A % N, x = c % n, y = (c / n) | 0;
+    for (let d = 0; d < 8; d++) {
+      const px = x - DX[d], py = y - DY[d];
+      if (!g.inb(px, py)) continue;
+      for (const L of [0, 1]) {
+        const p = L * N + py * n + px;
+        if (!isMainNode(p) || turnAbs(d, d0) > 1) continue;
+        g.forEachOut(p, (q, dd) => { if (q === A && dd === d) ins.push(d); });
+      }
+    }
+    if (ins.length) tA = ins.includes(d0) ? d0 : ins.includes((d0 + 7) & 7) ? (d0 + 7) & 7 : ins[0];
+  }
   if (!mainA) { const p = preds.get(A)?.[0]; tA = p !== undefined && (preds.get(A)?.length ?? 0) === 1 ? dirTo(g, p, A) : d0; }
   if (!mainZ) { const s = succs.get(Z)?.[0]; tZ = s !== undefined && (succs.get(Z)?.length ?? 0) === 1 ? dirTo(g, Z, s) : dl; }
   const unit = (d: number): [number, number] => { const l = Math.hypot(DX[d], DY[d]); return [DX[d] / l, DY[d] / l]; };
