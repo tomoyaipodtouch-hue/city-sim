@@ -135,7 +135,7 @@ export const TOOL_GROUPS: ToolGroup[] = [
       {
         title: 'ランプ・インターチェンジ', items: [
           { tool: 'ramp', name: 'ランプ（出入口）', thumb: { k: 'icon', icon: 'ramp' }, cost: RAMP_COST, desc: '高速道路と一般の道路をつなぐ出入口' },
-          { tool: 'uramp', name: '都市高速のランプ', thumb: { k: 'icon', icon: 'uramp' }, cost: RAMP_COST * 3, size: '1×5', desc: '都市高速と一般の道路をつなぐ坂道' },
+          { tool: 'uramp', name: 'ランプ（都市高速）', thumb: { k: 'icon', icon: 'uramp' }, cost: RAMP_COST * 3, size: '1×5', desc: '都市高速と一般の道路をつなぐ坂道' },
           { tool: 'diamond', name: 'ダイヤモンド型インターチェンジ', thumb: { k: 'icon', icon: 'diamond' }, hint: '高速道路をタップ' },
           { tool: 'clover', name: 'クローバー型インターチェンジ', thumb: { k: 'icon', icon: 'clover' }, hint: '高速道路の交差点をタップ' },
         ],
@@ -189,10 +189,11 @@ export const TOOL_GROUPS: ToolGroup[] = [
       {
         title: '公園', items: [
           civ('park_s'), civ('park_l'), civ('plaza'), civ('playground'), civ('greenway'), civ('sports'), civ('garden'),
-          civ('cpark_a', '大公園（正方形）', { hint: 'つなげられる' }), civ('cpark_b', '大公園（長方形）', { hint: 'つなげられる' }),
+          civ('cpark_a', undefined, { hint: 'つなげられる' }), civ('cpark_b', undefined, { hint: 'つなげられる' }),
         ],
       },
-      { title: '安全（警察・消防）', items: [civ('police_s'), civ('police_l'), civ('fire_s'), civ('fire_l')] },
+      { title: '警察', items: [civ('police_s'), civ('police_l')] },
+      { title: '消防', items: [civ('fire_s'), civ('fire_l')] },
       { title: '医療', items: [civ('clinic'), civ('hospital')] },
       { title: '教育', items: [civ('school_e'), civ('school_h'), civ('college'), civ('library')] },
       { title: 'ごみ処理', items: [civ('landfill'), civ('incinerator'), civ('incinerator_l'), civ('recycling')] },
@@ -211,9 +212,9 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { title: '鉄道', items: [line('rail', '鉄道の線路', 'rail'), civ('station'), civ('freight_st')] },
       {
         title: '高架鉄道', items: [
-          line('erail', '高架鉄道の線路', 'erail'),
+          line('erail', '鉄道の線路（高架）', 'erail'),
           civ('el_station'),
-          { tool: 'estop', name: '線路の上の駅', thumb: { k: 'icon', icon: 'estop' }, cost: ESTOP_COST, upkeep: ESTOP_UPKEEP, size: `線路${ESTOP_LEN}マス`, hint: '線路をタップ', desc: '高架鉄道の線路の上だけに作る駅' },
+          { tool: 'estop', name: '鉄道の駅（高架・線路の上）', thumb: { k: 'icon', icon: 'estop' }, cost: ESTOP_COST, upkeep: ESTOP_UPKEEP, size: `線路${ESTOP_LEN}マス`, hint: '線路をタップ', desc: '高架鉄道の線路の上だけに作る駅' },
         ],
       },
       { title: 'モノレール', items: [line('mono', 'モノレールの線路', 'mono'), civ('mono_station')] },
