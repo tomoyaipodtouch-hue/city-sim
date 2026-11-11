@@ -293,7 +293,11 @@ function planLane(
 
   // 高速道路の端を、一般の道路（地上）に直接つなぐ場所
   const localRoad = (t: number) => t !== 0 && !isHighway(t) && t !== RoadType.Ramp;
-  const joinsLocal = (k: number) => def.highway && (k === 0 || k === last) && localRoad(g.road[cells[k]]) && !g.up[cells[k]] && g.deck[cells[k]] <= 0;
+  // 端のマスの一般道が、線に沿って隣のマス（線の内側）へ続いているときは、道路の上を並んで走っている（大通りの真上の高架など）。
+  // 道路に突き当たって終わるのではないので、つながない（つなぐのはランプだけ）
+  const runsAlong = (k: number) => last > 0 && (g.conn[cells[k]] & (1 << (k === 0 ? dirAt(0) : opp(dirAt(last - 1))))) !== 0;
+  const joinsLocal = (k: number) =>
+    def.highway && (k === 0 || k === last) && localRoad(g.road[cells[k]]) && !g.up[cells[k]] && g.deck[cells[k]] <= 0 && !runsAlong(k);
   // 階層を決める
   const levels = cells.map((i, k) => {
     const end = k === 0 || k === last;
@@ -2529,6 +2533,8 @@ export function linkUrbanEnds(g: Grid) {
     const m = g.conn1[c];
     if (!m || m & (m - 1)) continue; // つながりが1つだけ（行き止まり）
     const b = 31 - Math.clz32(m);
+    // 下の一般道が高架に沿って内側へ続いている（大通りの真上を走る高架など）なら、つながない
+    if (g.conn[c] & (1 << b)) continue;
     const px = (c % n) + DX[b], py = ((c / n) | 0) + DY[b];
     if (!g.inb(px, py)) continue;
     const p = g.idx(px, py);
@@ -2558,6 +2564,49 @@ export function linkUrbanEnds(g: Grid) {
       if (next < 0) break;
       from = cur;
       cur = next;
+    }
+  }
+}
+
+// 以前の版：一般道（大通りなど）の真上に沿って引いた高架の高速道路の端が、下の道路に降りてつながっていた。
+// 端のマスを高架に戻し（降りていた坂も元の高さへ）、下の道路の流れを元に戻す
+export function unjoinAlongEnds(g: Grid) {
+  const n = g.n;
+  const local = (t: number) => t !== 0 && !isHighway(t) && t !== RoadType.Ramp;
+  for (let c = 0; c < n * n; c++) {
+    if (!local(g.road[c]) || g.up[c]) continue;
+    const x = c % n, y = (c / n) | 0;
+    for (let b = 0; b < 8; b++) {
+      if (!g.inb(x + DX[b], y + DY[b])) continue;
+      const p = g.idx(x + DX[b], y + DY[b]), o = opp(b), ut = g.up[p];
+      if (!isHighway(ut) || !ROADS[ut].elevated || !local(g.road[p])) continue;
+      // 高架 p から地上の c へ降りるつながりと、地上の道路どうしの p - c のつながりが両方ある
+      if (!(g.conn1[p] & (1 << o)) || !(g.conn[p] & (1 << o)) || !(g.conn[c] & (1 << b))) continue;
+      const out = (g.flow1[p] & (1 << o)) !== 0;
+      g.up[c] = ut;
+      g.conn1[c] = 1 << b;
+      g.flow1[c] = !ROADS[ut].oneWay || !out ? 1 << b : 0;
+      // 地上の道路の c → p の流れ（一方通行の車線は、p → c の流れがなければ c → p）
+      if (!ROADS[g.road[c]].oneWay || !(g.flow[p] & (1 << o))) g.flow[c] |= 1 << b;
+      else g.flow[c] &= ~(1 << b);
+      // 端に向かって下げてあった高架を、元の高さに戻す
+      const lift = ROADS[ut].lift ?? 9;
+      let cur = c, from = -1;
+      for (let k = 0; k < 16 && cur >= 0; k++) {
+        const cx = cur % n, cy = (cur / n) | 0;
+        const h = Math.max(g.cellH(cx, cy), WATER_LEVEL) + lift;
+        if (cur !== c && g.upH[cur] >= h - 0.05) break;
+        g.upH[cur] = Math.max(g.upH[cur], h);
+        let next = -1;
+        for (let d = 0; d < 8; d++) {
+          if (!(g.conn1[cur] & (1 << d)) || !g.inb(cx + DX[d], cy + DY[d])) continue;
+          const j = g.idx(cx + DX[d], cy + DY[d]);
+          if (j !== from && g.up[j] === ut) { next = j; break; }
+        }
+        from = cur;
+        cur = next;
+      }
+      break;
     }
   }
 }

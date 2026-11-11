@@ -9,7 +9,7 @@ import {
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
 import {
-  applyCloverleaf, applyDiamond, applyTerrain, applyReclaim, planReclaim, applyURamp, linkURampMiddles, linkUrbanEnds, planTrees, planEStop, estopGroup, estopRoads, platformCells, planURamp, planTerrain, TerrainOp, applyRamp, planRoadCmd, levelAvenueDecks, applyTransitLine, levelViaductsOverWater, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planZone,
+  applyCloverleaf, applyDiamond, applyTerrain, applyReclaim, planReclaim, applyURamp, linkURampMiddles, linkUrbanEnds, unjoinAlongEnds, planTrees, planEStop, estopGroup, estopRoads, platformCells, planURamp, planTerrain, TerrainOp, applyRamp, planRoadCmd, levelAvenueDecks, applyTransitLine, levelViaductsOverWater, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planZone,
 } from './plan';
 import { CELL } from './constants';
 import { applyJct, JctForm, planJct } from './jct';
@@ -367,6 +367,7 @@ export class World {
     w.loans = (d.loans ?? []).map((l) => ({ ...l }));
     w.nextLoanId = Math.max(1, ...w.loans.map((l) => l.id + 1));
     w.rating = d.rating ?? 55;
+    unjoinAlongEnds(g); // 以前の版で、一般道の真上に沿って引いた高架の端が、下の道路につながっていた
     linkUrbanEnds(g);
     pruneORamps(g);
     linkURampMiddles(g); // 以前の版で、ランプの横に後から引いた一般道がつながっていなかった

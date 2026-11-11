@@ -199,11 +199,12 @@ function build(g: Grid, nodes: number[], lift: number, preds: Map<number, number
   // 折れ線：前の延長（2マス）、端、途中のマスの中心、端、後ろの延長
   const P: [number, number, number][] = [];
   const hA = H(A), hZ = H(Z);
-  for (const k of [2, 1.5, 0.5]) P.push([pA[0] - ax * CELL * k, pA[1] - az * CELL * k, hA]);
+  // 延長はマスの1歩（斜めは √2 マス）ごと。マスの境（入口・出口）は、車が通るマスの境（斜めはマスの角）と同じ所にする
+  for (const k of [2, 1.5, 0.5]) P.push([pA[0] - DX[tA] * CELL * k, pA[1] - DY[tA] * CELL * k, hA]);
   P.push([pA[0], pA[1], hA]);
   for (let i = 1; i < nodes.length - 1; i++) { const [x, z] = cen(nodes[i]); P.push([x, z, H(nodes[i])]); }
   P.push([pZ[0], pZ[1], hZ]);
-  for (const k of [0.5, 1.5, 2]) P.push([pZ[0] + zx * CELL * k, pZ[1] + zz * CELL * k, hZ]);
+  for (const k of [0.5, 1.5, 2]) P.push([pZ[0] + DX[tZ] * CELL * k, pZ[1] + DY[tZ] * CELL * k, hZ]);
   // 1m ごとに区切る。元の折れ線の点（端の入口・各ノード・境）の位置を覚えておく
   const xs: number[] = [], zs: number[] = [], hs: number[] = [], at: number[] = [];
   for (let i = 0; i + 1 < P.length; i++) {
@@ -216,7 +217,12 @@ function build(g: Grid, nodes: number[], lift: number, preds: Map<number, number
   xs.push(P[P.length - 1][0]); zs.push(P[P.length - 1][1]); hs.push(P[P.length - 1][2]);
   // 曲がり具合（曲率）がなるべく小さく、少しずつ変わる曲線にする：マスの中心線から ±CORR m の帯の中で、
   // 4m おきの点の「曲がりの変化」を減らすようにくり返し動かす（両端の延長は本線・幹の向きのまま動かさない）。高さも同じ
-  const { X, Z2, Hh } = fair(xs, zs, hs, at[3], at[P.length - 4]);
+  // 合わさり目から出ていく幹は、合わさり目のマスの出口まで、分かれ目へ入る幹は、分かれ目のマスの入口から先を動かさない
+  // （そのマスは枝の側の曲線で走るので、境の点が枝の曲線と同じ所になるように）
+  const joinA = !mainA && (preds.get(A)?.length ?? 0) > 1, forkZ = !mainZ && (succs.get(Z)?.length ?? 0) > 1;
+  const pinA = joinA ? Math.round((at[3] + at[4]) / 2) : at[3];
+  const pinZ = forkZ ? Math.round((at[P.length - 5] + at[P.length - 4]) / 2) : at[P.length - 4];
+  const { X, Z2, Hh } = fair(xs, zs, hs, pinA, pinZ);
   // 曲線の長さ
   const m = X.length, S = new Float32Array(m);
   for (let k = 1; k < m; k++) S[k] = S[k - 1] + Math.hypot(X[k] - X[k - 1], Z2[k] - Z2[k - 1]);

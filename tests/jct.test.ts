@@ -158,3 +158,85 @@ describe('junction refusals', () => {
     expect(planJct(w.g, 'semi', 5, 5).ok).toBe(false);
   });
 });
+
+// ---- 車の道すじ（carLayer と同じ形）：ジャンクションのランプの曲線と、ふつうのマスの道すじがつながっているか ----
+import { findJctChains, jAt, jctSegs, jKey } from '../src/render/jctCurve';
+import { CELL, DX as DXc, DY as DYc } from '../src/sim/constants';
+import { ROADS as RD } from '../src/sim/defs';
+import { isUrbanHighway as isUH } from '../src/sim/traffic';
+
+// 車がマス（ノード u、入る向き din、出る向き d）の中の t にいるときの位置（carLayer.place と同じ。ふつうのマスは右の車線の位置）
+function carPos(g: Grid, segs: ReturnType<typeof jctSegs>, u: number, din: number, d: number, t: number) {
+  const N = g.n * g.n, c = u % N, n = g.n;
+  const s = segs.get(jKey(u, din, d));
+  if (s) {
+    const q = jAt(s.C, s.s0 + (s.s1 - s.s0) * t);
+    return { x: q.x, z: q.z, seg: true };
+  }
+  const cx = ((c % n) + 0.5) * CELL, cz = (((c / n) | 0) + 0.5) * CELL;
+  const ax = cx - DXc[din] * CELL * 0.5, az = cz - DYc[din] * CELL * 0.5, bx = cx + DXc[d] * CELL * 0.5, bz = cz + DYc[d] * CELL * 0.5;
+  const p0 = (1 - t) * (1 - t), p1 = 2 * t * (1 - t), p2 = t * t;
+  let x = p0 * ax + p1 * cx + p2 * bx, z = p0 * az + p1 * cz + p2 * bz;
+  const tx = 2 * (1 - t) * (cx - ax) + 2 * t * (bx - cx), tz = 2 * (1 - t) * (cz - az) + 2 * t * (bz - cz), tl = Math.hypot(tx, tz) || 1;
+  const def = RD[g.nodeType(u)];
+  // 両方向の道路は右の車線（一方通行の2車線は、どちらの車線でもよいので真ん中）
+  const lane = def && !def.oneWay ? (def.width / 2) * 0.48 : 0;
+  x += (-tz / tl) * lane;
+  z += (tx / tl) * lane;
+  return { x, z, seg: false };
+}
+
+// ジャンクションのまわりで車が通れるすべての「マス → 次のマス」で、道すじが途切れない（跳ばない）か
+function carPathGaps(g: Grid) {
+  const N = g.n * g.n;
+  const segs = jctSegs(g, findJctChains(g, 0));
+  const isRamp = (v: number) => g.nodeType(v) === RoadType.Ramp;
+  // 入ってくる向き：前のノードからの向き
+  const ins = new Map<number, Set<number>>();
+  for (let u = 0; u < 2 * N; u++) {
+    if (!g.nodeType(u)) continue;
+    g.forEachOut(u, (v, d) => { (ins.get(v) ?? ins.set(v, new Set()).get(v)!).add(d); });
+  }
+  const ok = (u: number, din: number, d: number, v: number, prevRamp: boolean) => {
+    if (((d - din + 8) & 7) === 4) return false;
+    if (isUH(g.nodeType(u)) && (isRamp(v) || prevRamp) && !urbanTurnOk(din, d)) return false;
+    return true;
+  };
+  const bad: string[] = [];
+  let checked = 0;
+  for (let u = 0; u < 2 * N; u++) {
+    const tu = g.nodeType(u);
+    if (!tu || !(isRamp(u) || RD[tu]?.highway)) continue;
+    for (const din of ins.get(u) ?? []) {
+      // u に din で入ったときの、前のノードがランプか
+      const pc = (u % N) - DXc[din] - DYc[din] * g.n;
+      const prevRamp = pc >= 0 && (g.road[pc] === RoadType.Ramp || g.up[pc] === RoadType.Ramp);
+      g.forEachOut(u, (v, d) => {
+        if (!ok(u, din, d, v, prevRamp)) return;
+        g.forEachOut(v, (w, d2) => {
+          if (!ok(v, d, d2, w, isRamp(u))) return;
+          const a = carPos(g, segs, u, din, d, 1), b = carPos(g, segs, v, d, d2, 0);
+          if (!a.seg && !b.seg) return;
+          checked++;
+          const gap = Math.hypot(a.x - b.x, a.z - b.z);
+          if (gap > 3) bad.push(`${u}(${din}->${d})${a.seg ? "S" : ""}[${g.nodeType(u)}] → ${v}(${d}->${d2})${b.seg ? "S" : ""}[${g.nodeType(v)}] gap ${gap.toFixed(1)}m`);
+        });
+      });
+    }
+  }
+  return { bad, checked };
+}
+
+describe('junction car paths are continuous (carLayer follows the drawn curves without jumps)', () => {
+  const cases: [string, 'x' | 't', number, number, boolean, boolean, JctForm][] = [];
+  for (const [ln, ta, tb] of LEVELS) for (const [gn, da, db] of GEOMS) cases.push([`tee ${ln}, ${gn}`, 't', ta, tb, da, db, 'tee']);
+  cases.push(['tee one-way branch', 't', G, G1, false, false, 'tee'], ['tee one-way through', 't', E1, E, false, false, 'tee']);
+  for (const form of ['semi', 'clover', 'turbine'] as JctForm[]) cases.push([`${form} mixed axis`, 'x', G, E, false, false, form], [`${form} elevated diagonal`, 'x', E, E, false, true, form]);
+  for (const [name, kind, ta, tb, da, db, form] of cases)
+    it(name, { timeout: 60000 }, () => {
+      const { w } = build(kind, ta, tb, da, db, form);
+      const r = carPathGaps(w.g);
+      expect(r.checked).toBeGreaterThan(4);
+      expect(r.bad, r.bad.slice(0, 6).join('\n')).toEqual([]);
+    });
+});
