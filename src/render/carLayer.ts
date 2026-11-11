@@ -16,6 +16,8 @@ import { BOGIE, boxTruck, cityBus, garbageTruck, TRAIN_SPEC, TrainKind, hatchbac
 import { createVehicleMaterial, vehicleUniforms } from './vehicleMaterial';
 
 const MAX_CARS = 1500;
+// 車線に車がいないとき（毎コマ、車ごとに空の配列を作らない）
+const NO_LANE: readonly { c: Car; t: number; r: number; L: number }[] = [];
 // 重ねランプのつながり（ノード → ORAMP_LEN マス先のノード）の、車が走る長さ。cellLen で使う
 const OR_LENS = new Map<number, number>();
 const OR_LANE_KEY = 1 << 25; // 重ねランプを走る車の、間隔を調べる車線の番号（本線の車と分ける）
@@ -42,6 +44,8 @@ const CL_YIELD = 7;
 const BUS_DWELL = 4.5; // バス停に止まる秒数（後ろの車が待ちくたびれて重ならない長さ）
 // 道路の混み具合の上限：車線に並べられる台数（車線の長さ ÷ CAR_SPACE m）のうち、出す車の割合
 const ROAD_FILL = 0.35, CAR_SPACE = 7.5;
+// 出すトラックの台数の割合（シミュレーションのトラックの台数に対して。乗用車は 1）
+const TRUCK_DRAW = 0.6;
 // 止まったまま動けない車を消す秒数（前の車の列で・交差点の手前で）。消した分は空いている場所に出し直す
 const STUCK = 30, STUCK_HOLD = 40;
 
@@ -862,14 +866,14 @@ export class CarLayer {
       carGot += f.target;
     }
     // トラック：箱型が多く、トレーラーは港・貨物駅・倉庫業のまわりから出てくる。
-    // 貨物の交通量は乗用車換算（1台 TRUCK_PCE 台分）なので、1台あたりは乗用車と同じ割合で出す。
-    // 乗用車が台数の上限で減るときは、トラックも同じ割合で減らす（トラックの割合がシミュレーションと同じになるように）
+    // 貨物の交通量は乗用車換算（1台 TRUCK_PCE 台分）なので台数に直し、乗用車の TRUCK_DRAW 倍の割合で出す
+    // （トラックは道路を乗用車の 2〜3 台分ふさぐので、少なめに見せる）。乗用車が台数の上限で減るときは、トラックも同じ割合で減らす
     const fr = freight.map((v, i) => v * clip[i]);
     const tv = this.trailerVol(g, fr);
     const kCar = carWant > 0 ? Math.min(1, carGot / carWant) : 1;
     this.trucks.forEach((f, k) => {
       const want = k ? build(f, tv, 0.012 / TRUCK_PCE, fr) : build(f, fr, 0.012 / TRUCK_PCE);
-      f.target = Math.min(f.max, Math.round(want * kCar));
+      f.target = Math.min(f.max, Math.round(want * TRUCK_DRAW * kCar));
     });
     // ゴミ収集車：ゴミの多い場所の一般の道路を回る。処理施設があって、処理できている分だけ走る
     if (garbage && garbageLeft) {
@@ -1657,7 +1661,7 @@ export class CarLayer {
         const key = (c.from * 8 + c.d) * 2 + laneOf(c);
         if (c.off !== undefined && edgeUsed.has(key)) continue;
         let ok = true;
-        for (const o of lanes.get((c.from * 8 + c.d) * 2 + laneOf(c)) ?? [])
+        for (const o of lanes.get((c.from * 8 + c.d) * 2 + laneOf(c)) ?? NO_LANE)
           if (o.t * o.L > s - me - 3 && o.t * o.L - o.r < s + f.halfLen + 3) {
             ok = false;
             break;
@@ -1733,7 +1737,7 @@ export class CarLayer {
             if ((c.off += speed * dt) > CELL) c.alive = false;
           } else {
             let free = true;
-            for (const o of lanes.get((c.from * 8 + c.d) * 2 + laneOf(c)) ?? []) if (o.c !== c && (o.c.off ?? 0) >= 0 && o.t * o.L - o.r < f.halfLen + 3) free = false;
+            for (const o of lanes.get((c.from * 8 + c.d) * 2 + laneOf(c)) ?? NO_LANE) if (o.c !== c && (o.c.off ?? 0) >= 0 && o.t * o.L - o.r < f.halfLen + 3) free = false;
             if (free && (c.off += speed * dt) >= 0) c.off = undefined;
             // 入口が長くふさがっていれば、入るのをやめる
             if (!free && (c.wait = (c.wait ?? 0) + dt) > STUCK) drop(c);
@@ -1823,7 +1827,7 @@ export class CarLayer {
           // 前の車（同じマスの先、または次のマス）との間をあける。いちばん近い前の車 lim も覚えておく
           const lb = laneOf(c), me = f.halfLen;
           let gap = Infinity, lim: Car | null = null, v = 0;
-          for (const o of lanes.get((c.from * 8 + c.d) * 2 + lb) ?? []) if (o.c !== c && o.t > c.t && (v = (o.t - c.t) * len - o.r - me) < gap) {
+          for (const o of lanes.get((c.from * 8 + c.d) * 2 + lb) ?? NO_LANE) if (o.c !== c && o.t > c.t && (v = (o.t - c.t) * len - o.r - me) < gap) {
             gap = v;
             lim = o.c;
           }
@@ -1832,7 +1836,7 @@ export class CarLayer {
           if (inBox(c.from))
             for (let d = 0; d < 8; d++) {
               if (d === c.d) continue;
-              for (const o of lanes.get((c.from * 8 + d) * 2 + lb) ?? []) if (o.c !== c && o.c.din === c.din && o.t > c.t && o.t < 0.6 && (v = (o.t - c.t) * len - o.r - me) < gap) {
+              for (const o of lanes.get((c.from * 8 + d) * 2 + lb) ?? NO_LANE) if (o.c !== c && o.c.din === c.din && o.t > c.t && o.t < 0.6 && (v = (o.t - c.t) * len - o.r - me) < gap) {
                 gap = v;
                 lim = o.c;
               }
@@ -1845,11 +1849,11 @@ export class CarLayer {
           // マップの端のマスを通りぬけて外へ出ていく車（c.to = c.from）は、この先に車はいない
           // 両方向の高速道路（都市高速の片側1車線）とランプのマスでは、反対向きから入ってきた車（反対車線から右へ分かれる車など）は
           // 反対車線を走っているので、前の車とみなさない（分かれ目・合わさり目で、反対車線の車を待って止まらないように）
-          const twoWayHw = !box && c.from !== c.to && (() => { const t = g.nodeType(c.to); return (isHighway(t) && !ROADS[t].oneWay) || t === RoadType.Ramp; })();
+          const tTo = g.nodeType(c.to), twoWayHw = !box && c.from !== c.to && ((isHighway(tTo) && !ROADS[tTo].oneWay) || tTo === RoadType.Ramp);
           if (gap === Infinity && c.from !== c.to)
             for (let d = 0; d < 8; d++) {
               if (d === opp(c.d)) continue;
-              for (const o of lanes.get((c.to * 8 + d) * 2 + lb) ?? [])
+              for (const o of lanes.get((c.to * 8 + d) * 2 + lb) ?? NO_LANE)
                 if (o.c !== c && (!box || d === ex || (o.c.din === c.d && o.t < 0.6)) && !(twoWayHw && CarLayer.oppose(o.c.din, c.d)) && (v = (1 - c.t) * len + o.t * o.L - o.r - me) < gap) {
                   gap = v;
                   lim = o.c;
@@ -1873,7 +1877,7 @@ export class CarLayer {
             const E = this.planExit(f, c);
             if (E) {
               let free = CELL * 1.5, blk: Car | null = null;
-              for (const o of lanes.get(exitKey(c)) ?? []) {
+              for (const o of lanes.get(exitKey(c)) ?? NO_LANE) {
                 if ((o.c.v ?? 0) > 2) continue;
                 const s = o.t * o.L - o.r;
                 if (s < free) {
@@ -1888,7 +1892,7 @@ export class CarLayer {
                 if (g.inb(ex2, ey2)) {
                   const nx2 = E[0] - e0 + ey2 * n + ex2, L0 = CELL * (E[1] & 1 ? Math.SQRT2 : 1);
                   for (let d = 0; d < 8; d++)
-                    for (const o of lanes.get((nx2 * 8 + d) * 2 + laneAt(c, nx2)) ?? []) {
+                    for (const o of lanes.get((nx2 * 8 + d) * 2 + laneAt(c, nx2)) ?? NO_LANE) {
                       if ((o.c.v ?? 0) > 2 || o.c.din !== E[1]) continue;
                       const s = L0 + o.t * o.L - o.r;
                       if (s < free) {

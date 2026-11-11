@@ -197,7 +197,10 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
             vec4 nM = texture2D(uSurf, mat2(0.8, -0.6, 0.6, 0.8) * p * (1.0 / 151.0));
             vec4 nS = texture2D(uSurf, mat2(0.28, 0.96, -0.96, 0.28) * p * (1.0 / 31.0) + 0.37);
             vec4 nP = texture2D(uSurf, mat2(-0.6, 0.8, -0.8, -0.6) * p * (1.0 / 11.0) + 0.53);
-            vec4 nF = texture2D(uSurf, mat2(0.6, 0.8, -0.8, 0.6) * p * (1.0 / 5.3));
+            // 細かいむら（5m）：遠くて1画素が 2.5m を超えると、ならした値（0.5）と見分けがつかないので読まない（遠景の読み出しを1つ減らす）
+            float fl = length(fwidth(p));
+            vec4 nF = vec4(0.5);
+            if (fl < 2.5) nF = mix(texture2D(uSurf, mat2(0.6, 0.8, -0.8, 0.6) * p * (1.0 / 5.3)), vec4(0.5), smoothstep(1.6, 2.5, fl));
             float macro = nL.a * 0.6 + nM.g * 0.4;
             float mid = nS.g;
             vec3 g = mix(vec3(dot(c, vec3(0.3, 0.59, 0.11))), c, 0.84) * vec3(0.88, 0.86, 0.76);
@@ -212,7 +215,7 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
             g *= mix(vec3(1.0), vec3(1.06, 0.97, 0.72), smoothstep(0.6, 0.85, nP.a + (nF.g - 0.5) * 0.3) * 0.75);
             g *= mix(vec3(1.0), vec3(0.8, 0.88, 0.8), smoothstep(0.42, 0.18, pa) * 0.7);
             // 草むらの明るさのむら（中くらい、細かい）。細かいものは遠くでは消す
-            float ff = 1.0 - smoothstep(0.15, 0.6, length(fwidth(p)));
+            float ff = 1.0 - smoothstep(0.15, 0.6, fl);
             g *= 0.84 + 0.32 * mid;
             g *= mix(1.0, 0.84 + 0.32 * nF.g, ff);
             g *= mix(1.0, 0.92 + 0.16 * nF.r, ff);

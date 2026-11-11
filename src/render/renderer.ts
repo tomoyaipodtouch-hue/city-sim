@@ -303,7 +303,7 @@ export class CityRenderer {
     }
     if (this.dirty.grid) {
       // 建物が建つたびに grid は更新されるので、道路に関係する部分が変わったときだけ作り直す
-      const key = this.roadKey(g);
+      const key = this.roadKey(g, heights);
       // 地面の高さが変わっても、道路・線路のまわりの高さが同じなら作り直さない（キーに入っている）
       if (key !== this.lastRoadKey) {
         this.lastRoadKey = key;
@@ -359,7 +359,7 @@ export class CityRenderer {
     for (let i = 0; i < g.estn.length; i++) if (g.estn[i]) out.add(i);
     return out;
   }
-  private roadKey(g: Grid) {
+  private roadKey(g: Grid, heightsChanged = false) {
     let h = 2166136261;
     const mix = (v: number) => { h = Math.imul(h ^ v, 16777619); };
     const N = g.n * g.n;
@@ -370,6 +370,16 @@ export class CityRenderer {
     }
     if (this.roads.jctl.length) for (let i = 0; i < N; i++) if (this.roads.jctl[i]) { mix(i); mix(this.roads.jctl[i]); }
     // 道路・線路・送電線のマスと、そのとなりのマスの地面の高さ（公園や施設を置いて地面をならしても、道路から離れていれば作り直さない）
+    // （高さが変わっていないときは、前に求めた値を使う：建物が建つたびに grid は届くので、毎回は数えない）
+    if (heightsChanged || this.roadHKey === 0) this.roadHKey = this.roadHeightKey(g);
+    mix(this.roadHKey);
+    return h;
+  }
+  private roadHKey = 0;
+  private roadHeightKey(g: Grid) {
+    let h = 2166136261;
+    const mix = (v: number) => { h = Math.imul(h ^ v, 16777619); };
+    const N = g.n * g.n;
     const n = g.n, n1 = n + 1;
     const vm = this.vMark.length === n1 * n1 ? this.vMark.fill(0) : (this.vMark = new Uint8Array(n1 * n1));
     for (let i = 0; i < N; i++) {
@@ -378,7 +388,7 @@ export class CityRenderer {
       for (let vy = Math.max(0, y - 1); vy <= Math.min(n, y + 2); vy++) for (let vx = Math.max(0, x - 1); vx <= Math.min(n, x + 2); vx++) vm[vy * n1 + vx] = 1;
     }
     for (let v = 0; v < vm.length; v++) if (vm[v]) { mix(v); mix(Math.round(g.heights[v] * 64)); }
-    return h;
+    return h | 1;
   }
 
   private loop = () => {

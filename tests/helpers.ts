@@ -1,5 +1,5 @@
 import { World } from '../src/sim/world';
-import { GrowKind, RoadType, ZoneType } from '../src/sim/defs';
+import { CivicId, GrowKind, RoadType, ZoneType } from '../src/sim/defs';
 // 水のない平らな場所を探す
 export function findDryArea(w: World, size: number): [number, number] {
   const g = w.g;
@@ -92,4 +92,72 @@ export function growFreightCity(w: World, days: number) {
     if (d < days - 90) for (const k of kinds) w.demand[k] = Math.max(w.demand[k], 0.8);
     w.stepDay();
   }
+}
+
+// 港町（128×128、東が海）：西に住宅・商業、東の港のそばに工業地区（工場・倉庫）、大型コンテナターミナルと港、
+// 西の端から来る貨物鉄道と貨物駅、西の端から工業地区の北まで来る高架の都市高速（ランプ 2 か所）。
+// 需要を強めて days 日育てる（最後の 240 日はふつうの需要）
+export function portCity(days: number) {
+  const n = 128, V = n + 1;
+  const w = new World(n);
+  w.sandbox = true;
+  w.funds = 1e9;
+  for (let y = 0; y < V; y++) for (let x = 0; x < V; x++) w.g.heights[y * V + x] = x >= 120 ? -4 : 8;
+  const run = (c: Parameters<World['exec']>[0]) => w.exec(c).ok;
+  const tryPlace = (id: CivicId, x0: number, x1: number, y0: number, y1: number) => {
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (w.exec({ t: 'plop', id, x, y }).ok) return true;
+    return false;
+  };
+  // 住宅・商業（西）。隣の都市へは西の端と南の端
+  for (let y = 20; y <= 104; y += 6) run({ t: 'road', x0: 4, y0: y, x1: 56, y1: y, road: y === 62 ? RoadType.Avenue : RoadType.Road });
+  for (let x = 4; x <= 56; x += 6) run({ t: 'road', x0: x, y0: 20, x1: x, y1: 104, road: x === 28 ? RoadType.Avenue : RoadType.Street });
+  run({ t: 'road', x0: 0, y0: 62, x1: 4, y1: 62, road: RoadType.Avenue });
+  run({ t: 'road', x0: 0, y0: 38, x1: 4, y1: 38, road: RoadType.Road });
+  run({ t: 'road', x0: 16, y0: 104, x1: 16, y1: 127, road: RoadType.Road });
+  run({ t: 'zone', x0: 5, y0: 21, x1: 55, y1: 55, zone: ZoneType.R, den: 2 });
+  run({ t: 'zone', x0: 5, y0: 57, x1: 55, y1: 73, zone: ZoneType.C, den: 2 });
+  run({ t: 'zone', x0: 5, y0: 75, x1: 55, y1: 103, zone: ZoneType.R, den: 2 });
+  // 工業地区（東、港のそば）。横は一般道（真ん中は大通り）、縦は街路。高速道路のランプから南へ一般道（x = 80）が通る
+  for (let y = 26; y <= 104; y += 6) run({ t: 'road', x0: 56, y0: y, x1: 106, y1: y, road: y === 62 ? RoadType.Avenue : RoadType.Road });
+  for (let x = 62; x <= 104; x += 6) run({ t: 'road', x0: x, y0: 26, x1: x, y1: 104, road: x === 80 ? RoadType.Road : RoadType.Street });
+  run({ t: 'zone', x0: 57, y0: 27, x1: 105, y1: 103, zone: ZoneType.I, den: 1 });
+  tryPlace('seaport_l', 106, 120, 28, 50);
+  run({ t: 'road', x0: 106, y0: 86, x1: 118, y1: 86, road: RoadType.Road });
+  tryPlace('seaport', 106, 120, 76, 92);
+  run({ t: 'transit', x0: 0, y0: 112, x1: 96, y1: 112, kind: 'rail' });
+  run({ t: 'road', x0: 56, y0: 104, x1: 56, y1: 110, road: RoadType.Road });
+  run({ t: 'road', x0: 56, y0: 109, x1: 100, y1: 109, road: RoadType.Road });
+  run({ t: 'road', x0: 86, y0: 104, x1: 86, y1: 109, road: RoadType.Road });
+  run({ t: 'plop', id: 'freight_st', x: 80, y: 110 });
+  run({ t: 'road', x0: 0, y0: 10, x1: 100, y1: 10, road: RoadType.UrbanHighway });
+  for (const x of [80, 34]) {
+    const x1 = x === 80 ? 70 : 22, y1 = x === 80 ? 26 : 20;
+    run({ t: 'road', x0: x, y0: 12, x1: x, y1: y1, road: RoadType.Road });
+    run({ t: 'road', x0: x, y0: 2, x1: x, y1: 8, road: RoadType.Road });
+    run({ t: 'road', x0: x, y0: 2, x1: x1, y1: 2, road: RoadType.Road });
+    run({ t: 'road', x0: x1, y0: 2, x1: x1, y1: y1, road: RoadType.Road });
+    run({ t: 'uramp', x, y: 11 });
+    run({ t: 'uramp', x, y: 9 });
+  }
+  // 電気・水
+  tryPlace('coal', 40, 60, 112, 124);
+  run({ t: 'road', x0: 4, y0: 104, x1: 4, y1: 120, road: RoadType.Street });
+  run({ t: 'road', x0: 4, y0: 120, x1: 60, y1: 120, road: RoadType.Street });
+  tryPlace('nuclear', 20, 40, 122, 126);
+  tryPlace('nuclear', 26, 60, 122, 126);
+  for (let k = 0; k < 12; k++) tryPlace('pump', 5, 60, 121, 122);
+  run({ t: 'pline', x0: 14, y0: 115, x1: 38, y1: 115 });
+  run({ t: 'pline', x0: 30, y0: 119, x1: 30, y1: 116 });
+  run({ t: 'pline', x0: 41, y0: 112, x1: 41, y1: 105 });
+  run({ t: 'pline', x0: 43, y0: 115, x1: 60, y1: 115 });
+  run({ t: 'pline', x0: 60, y0: 115, x1: 60, y1: 105 });
+  const kinds: GrowKind[] = ['R1', 'R2', 'CS1', 'CS2', 'ID', 'IM', 'IL', 'IH'];
+  for (let d = 0; d < days; d++) {
+    if (d < days - 240) {
+      for (const k of kinds) w.demand[k] = Math.max(w.demand[k], 0.8);
+      (w as unknown as { ilInland: number }).ilInland = 0.8;
+    }
+    w.stepDay();
+  }
+  return w;
 }

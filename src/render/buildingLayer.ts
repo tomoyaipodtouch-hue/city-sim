@@ -197,7 +197,7 @@ export class BuildingLayer {
         this.chunks.delete(c);
         continue;
       }
-      const mb = new MeshBuilder();
+      const parts: PackedGeo[] = [];
       const trees: TreeSpot[] = [];
       const beacons: number[] = [];
       const pb = new PondBuilder();
@@ -210,7 +210,7 @@ export class BuildingLayer {
         const bk = this.buildingKey(g, b, lv[i], cp, cb, cparkIds.size ? isCpark : null);
         const hit = this.bcache.get(b.id);
         if (hit && hit.key === bk) {
-          mb.append(hit.geo);
+          parts.push(hit.geo);
           for (const t of hit.trees) trees.push(t);
           for (const q of hit.fx) fx.push(q);
           if (hit.beacon) beacons.push(...hit.beacon);
@@ -231,13 +231,13 @@ export class BuildingLayer {
         const beacon = top - f.base > 60 ? [tx, top + 0.6, tz] : null;
         if (beacon) beacons.push(...beacon);
         const geo = one.pack();
-        mb.append(geo);
+        parts.push(geo);
         const pond1 = pb.pos.length + pb.lights.length + pb.falls.length + pb.glows.length;
         if (!farm && pond1 === pond0) {
           this.bcache.set(b.id, { key: bk, geo, trees: trees.slice(tr0), fx: fx.slice(fx0), beacon });
         } else this.bcache.delete(b.id);
       }
-      const mesh = new THREE.Mesh(mb.toGeometry(), this.material);
+      const mesh = new THREE.Mesh(MeshBuilder.mergePacked(parts), this.material);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       this.group.add(mesh);

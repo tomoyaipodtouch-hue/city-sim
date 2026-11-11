@@ -421,17 +421,30 @@ export class MeshBuilder {
   pack(): PackedGeo {
     return { pos: Float32Array.from(this.pos), nor: Float32Array.from(this.nor), col: Float32Array.from(this.col), uvm: Float32Array.from(this.uvm), pat: Float32Array.from(this.pat), mat: Float32Array.from(this.mat), idx: Uint32Array.from(this.idx) };
   }
-  append(p: PackedGeo) {
-    const base = this.pos.length / 3;
-    const add = (dst: number[], src: Float32Array) => { for (let i = 0; i < src.length; i++) dst.push(src[i]); };
-    add(this.pos, p.pos);
-    add(this.nor, p.nor);
-    add(this.col, p.col);
-    add(this.uvm, p.uvm);
-    add(this.pat, p.pat);
-    add(this.mat, p.mat);
-    const I = this.idx;
-    for (let i = 0; i < p.idx.length; i++) I.push(p.idx[i] + base);
+  // しまった形をいくつもつなげて、1つのメッシュの形にする（建物の区画）
+  static mergePacked(parts: PackedGeo[]): THREE.BufferGeometry {
+    let nv = 0, ni = 0;
+    for (const p of parts) { nv += p.pos.length / 3; ni += p.idx.length; }
+    const pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3), col = new Float32Array(nv * 3), uvm = new Float32Array(nv * 2), pat = new Float32Array(nv), mat = new Float32Array(nv);
+    const idx = nv > 65535 ? new Uint32Array(ni) : new Uint16Array(ni);
+    let v = 0, k = 0;
+    for (const p of parts) {
+      pos.set(p.pos, v * 3); nor.set(p.nor, v * 3); col.set(p.col, v * 3); uvm.set(p.uvm, v * 2); pat.set(p.pat, v); mat.set(p.mat, v);
+      const I = p.idx;
+      for (let i = 0; i < I.length; i++) idx[k + i] = I[i] + v;
+      v += p.pos.length / 3;
+      k += I.length;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    g.setAttribute('aUvm', new THREE.BufferAttribute(uvm, 2));
+    g.setAttribute('aPat', new THREE.BufferAttribute(pat, 1));
+    g.setAttribute('aMat', new THREE.BufferAttribute(mat, 1));
+    g.setIndex(new THREE.BufferAttribute(idx, 1));
+    g.computeBoundingSphere();
+    return g;
   }
 
   toGeometry(): THREE.BufferGeometry {

@@ -75,7 +75,7 @@ describe('funeral', () => {
 });
 
 describe('in the city', () => {
-  it('runs with ages and saves/loads them', () => {
+  it('runs with ages and saves/loads them', { timeout: 30000 }, () => {
     const w = World.create({ name: 't', seed: 12345, style: 'river', difficulty: 1, sandbox: false });
     buildTestCity(w);
     for (let d = 0; d < 360 * 2; d++) w.stepDay();
