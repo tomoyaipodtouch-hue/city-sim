@@ -9,11 +9,18 @@
 import { CELL, DX, DY, WATER_LEVEL, opp } from './constants';
 
 // 同期・保存の対象になる配列の名前
-export const GRID_U8 = ['road', 'conn', 'flow', 'pline', 'zone', 'zden', 'tree', 'up', 'conn1', 'flow1', 'ictl', 'isplit', 'iflags', 'rail', 'erail', 'mono', 'sub', 'bstop', 'bstyle', 'estn', 'pstyle', 'quay', 'jct'] as const;
+export const GRID_U8 = ['road', 'conn', 'flow', 'pline', 'zone', 'zden', 'tree', 'up', 'conn1', 'flow1', 'ictl', 'isplit', 'iflags', 'rail', 'erail', 'mono', 'sub', 'bstop', 'bstyle', 'estn', 'pstyle', 'quay', 'jct', 'oramp'] as const;
 export const GRID_F32 = ['deck', 'upH', 'lift'] as const;
 export const GRID_I32 = ['bldg'] as const;
 export type GridU8Key = (typeof GRID_U8)[number];
 export type GridF32Key = (typeof GRID_F32)[number];
+
+// 重ねランプの印（grid.oramp）：下位3ビット = 本線の進む向き、ほかはフラグ
+export const ORAMP_LEN = 4; // ランプの長さ（マス）。始まりのマスから ORAMP_LEN マス先のマスへつながる
+export const ORAMP_ENTRY = 8; // 入口（一般道 → 高架）。なければ出口（高架 → 一般道）
+export const ORAMP_MEDIAN = 16; // 道の真ん中（中央分離帯・追い越し車線の側）に降りる。なければ道の端（左端の車線は右側通行なので右の端）
+export const ORAMP_PARTNER = 32; // 一般道の側は、本線のマスの右隣（大通りの反対車線）
+export const ORAMP_ON = 128;
 
 // 交差点の制御方式
 export enum Ctl {
@@ -63,6 +70,8 @@ export class Grid {
   tree: Uint8Array; // 木の量（0..3）
   jct: Uint8Array; // ジャンクション（高速道路どうし）のランプ：1 = 地上のランプ、2 = 上空のランプ（容量と速さが大きい）
   quay: Uint8Array; // 岸壁（水に面した陸のマス）：0 = なし、1 = コンクリートの岸壁、2 = 親水護岸・遊歩道
+  // 重ねランプ（高架の都市高速と、その真下の一般道を結ぶ短いランプ）。ランプの始まりのマス（本線のマス）に印をつける（ORAMP_*）
+  oramp: Uint8Array;
 
   constructor(n: number) {
     this.n = n;
@@ -92,6 +101,7 @@ export class Grid {
     this.zone = new Uint8Array(c);
     this.quay = new Uint8Array(c);
     this.jct = new Uint8Array(c);
+    this.oramp = new Uint8Array(c);
     this.zden = new Uint8Array(c);
     this.bldg = new Int32Array(c);
     this.tree = new Uint8Array(c);
@@ -175,6 +185,54 @@ export class Grid {
       if (lv === 0 && !this.road[j]) continue;
       if (lv === 1 && !this.up[j]) continue;
       cb(lv * N + j, d);
+    }
+    this.forEachORamp(node, cb);
+  }
+
+  // 重ねランプの印から、ランプの両端のノード [from, to] を求める（つながりがなくなっていれば null）
+  orampLink(start: number): [number, number] | null {
+    const v = this.oramp[start];
+    if (!(v & ORAMP_ON)) return null;
+    const n = this.n, N = n * n, a = v & 7;
+    const x = start % n, y = (start / n) | 0;
+    const ex = x + DX[a] * ORAMP_LEN, ey = y + DY[a] * ORAMP_LEN;
+    if (!this.inb(ex, ey)) return null;
+    const end = ey * n + ex;
+    const side = (c: number) => {
+      if (!(v & ORAMP_PARTNER)) return c;
+      const sx = (c % n) + DX[(a + 2) & 7], sy = ((c / n) | 0) + DY[(a + 2) & 7];
+      return this.inb(sx, sy) ? sy * n + sx : -1;
+    };
+    if (v & ORAMP_ENTRY) {
+      const s = side(start);
+      if (s < 0 || !this.road[s] || !this.up[end]) return null;
+      return [s, N + end];
+    }
+    const e = side(end);
+    if (e < 0 || !this.road[e] || !this.up[start]) return null;
+    return [N + start, e];
+  }
+
+  // ノードから重ねランプで進める先（ランプは本線に沿って ORAMP_LEN マス先へつながる。向きは本線の向き）
+  forEachORamp(node: number, cb: (next: number, d: number) => void) {
+    const n = this.n, N = n * n;
+    const level = node >= N ? 1 : 0;
+    const c = node - level * N;
+    const v = this.oramp[c];
+    if (v & ORAMP_ON) {
+      const l = this.orampLink(c);
+      if (l && l[0] === node) cb(l[1], v & 7);
+    }
+    if (level) return;
+    // 大通りの反対車線のマス（ランプの始まりのマスの、進む向きの右隣）から乗る入口
+    const x = c % n, y = (c / n) | 0;
+    for (let d = 0; d < 8; d++) {
+      const sx = x + DX[d], sy = y + DY[d];
+      if (sx < 0 || sy < 0 || sx >= n || sy >= n) continue;
+      const s = sy * n + sx, w = this.oramp[s];
+      if (!(w & ORAMP_ON) || !(w & ORAMP_PARTNER) || !(w & ORAMP_ENTRY) || ((w & 7) + 6) % 8 !== d) continue;
+      const l = this.orampLink(s);
+      if (l && l[0] === node) cb(l[1], w & 7);
     }
   }
 

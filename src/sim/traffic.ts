@@ -4,6 +4,7 @@
 // 経路探索のノードは「階層 × マス」（地上と上空）。最後の番号は「隣の都市」。
 import { Grid, Ctl, JF } from './grid';
 import { CELL, DX, DY, isDiag } from './constants';
+import { orampLength, ORAMP_SPEED } from './oramp';
 import { BUS_WAIT, JCT_RAMP_SPEED, LINES, LineKind, ROADS, RoadType, isHighway } from './defs';
 
 const START_OVERHEAD_MIN = 2; // 家を出て駐車場まで等
@@ -359,7 +360,10 @@ export function buildRoadGraph(g: Grid, congestion: Float32Array, junctions: Jun
     g.forEachOut(u, (v, d) => {
       tmpTo.push(v);
       tmpDir.push(d);
-      tmpMin.push(edgeMinutes(g, u, d, congestion));
+      // 重ねランプ（ORAMP_LEN マス先へのつながり）は、ランプの長さをランプの速さで走る
+      const uc = u % N, vc = v % N;
+      const far = Math.max(Math.abs((uc % n) - (vc % n)), Math.abs(((uc / n) | 0) - ((vc / n) | 0))) > 1;
+      tmpMin.push(far ? (orampLength(d) / ((ORAMP_SPEED * 1000) / 60)) * congestion[u] : edgeMinutes(g, u, d, congestion));
     });
   }
   off[M] = tmpTo.length;

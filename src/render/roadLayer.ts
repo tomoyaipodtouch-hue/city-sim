@@ -16,6 +16,7 @@ import { CELL, DX, DY, dirOf, isDiag, opp } from '../sim/constants';
 import { ROADS, RoadType, isHighway, isUrbanElevated } from '../sim/defs';
 import type { TreeSpot } from './buildingGen';
 import { findJctChains, JChain, jAt, JPt, JR_HALF, mainLocal, JMain } from './jctCurve';
+import { findORamps, orAt, orGroundH, orO, OR_HALF, OR_LANE, ORGeo, ORPt } from './oramp';
 import { findURamps, URamp, UR_END, UR_HALF, urampAt, urampS, urGore, urHw, urStart, UPt } from './uramp';
 
 export const ROAD_LIFT = 0.3;
@@ -2405,6 +2406,33 @@ export class RoadLayer {
       return out;
     };
 
+    // ---- 重ねランプ：本線の欄干を、ランプが分かれる・合わさる範囲で切る ----
+    const ors = findORamps(g, ROAD_LIFT);
+    const orPt: ORPt = { x: 0, z: 0, h: 0, tx: 1, tz: 0, o: 0 };
+    // ランプの q（本線の側からの長さ）で、外側の縁が本線の路面の外へ出るところと、内側の縁が本線の欄干から離れるところ
+    const orEdges = (G: ORGeo) => {
+      let q0 = G.len, qg = G.len;
+      for (let q = 0; q < G.len; q += 0.25) {
+        const o = G.sg * orO(G, q);
+        if (q0 === G.len && o + OR_HALF >= G.hwHalf + 0.05) q0 = q;
+        if (o - OR_HALF - PAR_T >= G.hwHalf + PAR_T + 0.05) { qg = q; break; }
+      }
+      return { q0, qg };
+    };
+    for (const G of ors) {
+      const { q0, qg } = orEdges(G);
+      const s0 = G.r.entry ? G.len - qg : q0, s1 = G.r.entry ? G.len - q0 : qg;
+      const hw = [0, 1, 2, 3, 4].map((k) => {
+        const n0 = G.r.start % n + DX[G.r.a] * k, n1 = ((G.r.start / n) | 0) + DY[G.r.a] * k;
+        return n1 * n + n0;
+      });
+      for (const c of hw) {
+        const nd = NC + c;
+        const e = { x0: G.ox + G.ux * s0, z0: G.oz + G.uz * s0, x1: G.ox + G.ux * s1, z1: G.oz + G.uz * s1, vx: G.rx * G.sg, vz: G.rz * G.sg };
+        (jCuts.get(nd) ?? jCuts.set(nd, []).get(nd)!).push(e);
+      }
+    }
+
     // ---- マス（ノード）ごと ----
     for (let node = 0; node < 2 * NC; node++) {
       const level = node >= NC ? 1 : 0;
@@ -2752,7 +2780,10 @@ export class RoadLayer {
         if (isAv) {
           const fl = g.flow[i] | g.flow1[i];
           med = avRibbon(pts, fl & (1 << b.d) ? true : fl & (1 << a.d) ? false : null, [a, b], undefined, endN);
-        } else ribbon(pts, t, undefined, undefined, 0, { endN, cut: opposite && urHwCells.has(node) ? urCut(node, pts, Math.min(a.w, b.w) / 2) : undefined });
+        } else {
+          const cut = opposite ? [...(urHwCells.has(node) ? urCut(node, pts, Math.min(a.w, b.w) / 2) : []), ...jCut(node, pts)] : [];
+          ribbon(pts, t, undefined, undefined, 0, { endN, cut: cut.length ? cut : undefined });
+        }
         lineEnds = endN ? [endN[0], endN[1]] : null;
         markings(pts, t);
         lineEnds = null;
@@ -3360,6 +3391,190 @@ export class RoadLayer {
           pier(P.x, P.z, P.tx, P.tz, rings, COL.pier);
           footing(P.x, P.z, P.tx, P.tz, 1.1, 1.3, gnd);
         }
+    }
+    // ---- 重ねランプ：高架の横を下りて、真下の一般道の車線へ降りる短いランプ（入口は逆） ----
+    // 路面の帯と、高架の断面（低い所は擁壁）、橋脚1本（車線の上には立てない）。
+    // 一般道の上：ランプの車線の線、本線の車線との間のしま模様の導流帯（道の真ん中に降りるときは、先端に縁石の島）、矢印
+    viaCur = false;
+    onGround = false;
+    liftCur = 0;
+    for (const G of ors) {
+      const { q0, qg } = orEdges(G);
+      const entry = G.r.entry, len = G.len, sg = G.sg;
+      const sOf = (q: number) => (entry ? len - q : q);
+      const owner = -1000 - G.r.start;
+      S.owner = owner;
+      // 帯の終わり（一般道の側）：路面が一般道より 8cm 高いところまで
+      let qe = len;
+      for (let q = len * 0.5; q <= len; q += 0.25) {
+        const s2 = sOf(q);
+        orAt(G, s2, orPt);
+        if (orPt.h - orGroundH(G, s2) < 0.08) { qe = q; break; }
+      }
+      interface OS { x: number; z: number; h: number; nx: number; nz: number; half: number; hi: number; ho: number; pi: boolean; q: number; o: number }
+      const qs: number[] = [];
+      for (let k = 0; k <= 64; k++) qs.push(q0 + ((qe - q0) * k) / 64);
+      qs.push(qg, qg - 6);
+      const L: OS[] = [];
+      for (const q of [...new Set(qs)].filter((q) => q >= q0 && q <= qe).sort((a, b) => (entry ? b - a : a - b))) {
+        if (L.length && Math.abs(L[L.length - 1].q - q) < 0.2) continue;
+        const s2 = sOf(q);
+        orAt(G, s2, orPt);
+        // ランプの外側への横向き
+        let nx = -orPt.tz, nz = orPt.tx;
+        if (nx * G.rx * sg + nz * G.rz * sg < 0) { nx = -nx; nz = -nz; }
+        // 横の位置（ランプの外側が +）。本線の路面と重なるところは、内側の縁を本線の縁で止める
+        const so = sg * orPt.o;
+        const oo = so + OR_HALF, oi = q < qg ? Math.max(so - OR_HALF, G.hwHalf - 0.1) : so - OR_HALF;
+        const m = (oi + oo) / 2 - so, half = (oo - oi) / 2;
+        const x = orPt.x + nx * m, z = orPt.z + nz * m;
+        let hi = orPt.h;
+        // 分かれ目の手前では、本線の側の縁を本線の高さにそろえる
+        const hwH = G.hh[Math.max(0, Math.min(G.hh.length - 1, Math.round(s2 / G.cell + 0.5)))];
+        if (q < qg) hi = orPt.h + (hwH - orPt.h) * (1 - Math.min(1, Math.max(0, (q - qg + 6) / 6)));
+        L.push({ x, z, h: orPt.h + 0.03, nx, nz, half, hi: hi + 0.03, ho: orPt.h + 0.03, pi: q >= qg, q, o: orPt.o });
+      }
+      if (L.length < 2) continue;
+      // 路面
+      const code = surfCode(lanesOf(RoadType.Ramp), SURF.concrete, false, hashInt(G.r.start, 7));
+      let along = 0;
+      const ids: [number, number][] = [];
+      L.forEach((p, k) => {
+        if (k) along += Math.hypot(p.x - L[k - 1].x, p.z - L[k - 1].z);
+        S.aux = [-p.half, along, p.half, code];
+        const a = S.v(p.x - p.nx * p.half, p.hi, p.z - p.nz * p.half, COL.slab);
+        S.aux = [p.half, along, p.half, code];
+        const b = S.v(p.x + p.nx * p.half, p.ho, p.z + p.nz * p.half, COL.slab);
+        ids.push([a, b]);
+      });
+      S.aux = AUX0;
+      for (let k = 0; k + 1 < ids.length; k++) {
+        // 面の向き（上向き）をそろえる
+        const A = L[k], B = L[k + 1];
+        const cr = (B.x - A.x) * A.nz - (B.z - A.z) * A.nx; // 進む向きと外向きの外積の y 成分
+        if (cr < 0) { S.tri(ids[k][0], ids[k][1], ids[k + 1][1]); S.tri(ids[k][0], ids[k + 1][1], ids[k + 1][0]); }
+        else { S.tri(ids[k][0], ids[k + 1][1], ids[k][1]); S.tri(ids[k][0], ids[k + 1][0], ids[k + 1][1]); }
+      }
+      // 路面の両端の白線（本線の側は分かれ目の先から）
+      lineKeep = true;
+      lineZb = true;
+      const edgeLine = (sd: number, ok: (p: OS) => boolean) => {
+        let run: RP[] = [];
+        const flush = () => { if (run.length > 1) line(run, () => 0, COL.white, 0.15); run = []; };
+        for (const p of L) {
+          if (!ok(p)) { flush(); continue; }
+          const o = sd * (p.half - 0.4);
+          run.push({ x: p.x + p.nx * o, z: p.z + p.nz * o, h: sd > 0 ? p.ho : p.hi, hw: 0, sw: 0, t: RoadType.Ramp });
+        }
+        flush();
+      };
+      edgeLine(1, (p) => sg * p.o + p.half - 0.4 > G.hwHalf + 0.15);
+      edgeLine(-1, (p) => p.q >= qg);
+      // 断面（VP の右 = 点の並びの右）
+      const V: VP[] = L.map((p, k) => {
+        const B = L[Math.min(L.length - 1, k + 1)], A = L[Math.max(0, k - 1)];
+        const rxv = -(B.z - A.z), rzv = B.x - A.x;
+        const outRight = rxv * p.nx + rzv * p.nz > 0;
+        const nx = outRight ? p.nx : -p.nx, nz = outRight ? p.nz : -p.nz;
+        const hs: [number, number] = outRight ? [p.hi, p.ho] : [p.ho, p.hi];
+        const para: [boolean, boolean] = outRight ? [p.pi, true] : [true, p.pi];
+        return { x: p.x, z: p.z, h: p.h, nx, nz, e: [p.half, p.half], hs, para };
+      });
+      via(V, VIA_RAMP);
+      // 橋脚：地面から 4〜8m の所で、下の道路の車道の上ではない所に1本
+      for (let q = 8; q < len * 0.7; q += 1) {
+        const s2 = sOf(q);
+        orAt(G, s2, orPt);
+        const gnd = g.groundAt(orPt.x, orPt.z), bot = orPt.h - FAS - VIA_RAMP.depth;
+        if (bot - gnd < 3.5 || bot - gnd > 8) continue;
+        const cx2 = Math.floor(orPt.x / CELL), cz2 = Math.floor(orPt.z / CELL);
+        if (!g.inb(cx2, cz2)) continue;
+        const ci = cz2 * n + cx2;
+        if (g.rail[ci] || g.bldg[ci]) continue;
+        const rt = g.road[ci];
+        if (rt) {
+          // 車道の中心線からの横の長さ
+          const dc = Math.abs((orPt.x - (cx2 + 0.5) * CELL) * G.rx + (orPt.z - (cz2 + 0.5) * CELL) * G.rz);
+          if (dc < drawWidth(rt) / 2 + 1.0) continue;
+        }
+        const top = bot + 0.15, gw = OR_HALF + PAR_T - VIA_RAMP.over - VIA_RAMP.depth * SL_T;
+        pier(orPt.x, orPt.z, orPt.tx, orPt.tz, [[gnd - 0.6, 0.65, 0.85, 2], [top - 1.6, 0.65, 0.85, 2], [top - 0.7, 0.7, 1.1, 2.4], [top, 0.74, Math.min(1.4, gw - 0.2), 3]], COL.pier);
+        footing(orPt.x, orPt.z, orPt.tx, orPt.tz, 1.0, 1.2, gnd);
+        break;
+      }
+      // ---- 一般道の上の線 ----
+      // ランプの車線の内側（本線の車線の側）への向き
+      const sIn = Math.sign(G.Lg - G.Lb) || -sg;
+      const W = (s2: number, o: number, lift = 0.0): [number, number, number] => {
+        const x = G.ox + G.ux * s2 + G.rx * o, z = G.oz + G.uz * s2 + G.rz * o;
+        return [x, Math.max(orGroundH(G, s2), g.groundAt(x, z) + ROAD_LIFT) + lift, z];
+      };
+      const segW = (A: [number, number, number], B: [number, number, number], w: number, c = COL.white) => seg2(A[0], A[2], B[0], B[2], Math.max(A[1], B[1]), c, w);
+      // 車線の線を消す範囲：ランプの車線（一方通行・大通りの車線の境の線もなくなり、下の道路は1車線少なく見える）
+      {
+        const sm = sOf((qe + len) / 2 - 6);
+        const P0 = W(sm, G.Lg);
+        zebra.push({ cx: P0[0], cz: P0[2], ux: G.ux, uz: G.uz, s1: -Math.abs(len - qe) / 2 - 14, s2: Math.abs(len - qe) / 2 + 2, hw: OR_LANE + 0.3 });
+      }
+      // ランプの車線の両側の線（帯の終わりから、一般道の車線に入るまで）と、その先の合流・分流の点
+      const ext = 14; // 一般道の車線の中へのばす長さ
+      const qList: number[] = [];
+      for (let q = qe; q <= len + 0.01; q += 1) qList.push(q);
+      qList.push(len);
+      const latAt = (q: number) => (q <= len ? orO(G, q) : G.Lg);
+      const sAt = (q: number) => (entry ? len - q : q);
+      const runPts = (off: number, qa: number, qb: number): RP[] => {
+        const out: RP[] = [];
+        for (let q = qa; q <= qb + 0.01; q += 1) {
+          const P0 = W(sAt(q), latAt(q) + off);
+          out.push({ x: P0[0], z: P0[2], h: P0[1], hw: 0, sw: 0, t: RoadType.Ramp });
+        }
+        return out;
+      };
+      // 外側の線（ランプの車線の外の縁）は、一般道の車線に入ったら、その車線の縁の線として少し続ける
+      line(runPts(-sIn * OR_LANE, qe, len + 6), () => 0, COL.white, 0.15);
+      // 内側の線と、本線の車線（下の道路）との境の線：その間を、しま模様の導流帯にする
+      const TE = G.Lg + sIn * OR_LANE;
+      const inner = (q: number) => latAt(q) + sIn * OR_LANE;
+      const qn = Math.max(qe, len - 22); // 導流帯の始まり
+      line(runPts(sIn * OR_LANE, qe, len), () => 0, COL.white, 0.15);
+      {
+        const pts: RP[] = [];
+        for (let q = qn; q <= len + ext + 0.01; q += 1) { const P0 = W(sAt(q), TE); pts.push({ x: P0[0], z: P0[2], h: P0[1], hw: 0, sw: 0, t: RoadType.Ramp }); }
+        line(pts, () => 0, COL.white, 0.15);
+      }
+      // しま：内側の線と境の線の間に、45° の斜めの線を 2m ごと
+      const median = G.r.median;
+      const nose = median ? 7 : 0; // 縁石の島の長さ
+      for (let q = qn + nose; q < len - 0.5; q += 2) {
+        const a = inner(q), wdt = (a - TE) * -sIn;
+        if (wdt < 0.4) continue;
+        const dq = Math.min(wdt, 3), A = W(sAt(q), TE), B = W(sAt(q + dq), inner(q + dq));
+        segW(A, B, 0.45);
+      }
+      // 道の真ん中に降りるとき：導流帯の先端に縁石の島（高さ 15cm の三角形）
+      if (median) {
+        const qa = qn, qb = Math.min(len - 1, qn + nose);
+        const pts: [number, number, number][] = [];
+        for (let q = qa; q <= qb + 0.01; q += 1) pts.push(W(sAt(q), inner(q) - sIn * 0.25));
+        for (let q = qb; q >= qa - 0.01; q -= 1) pts.push(W(sAt(q), TE + sIn * 0.15 * ((q - qa) / Math.max(1, qb - qa))));
+        const top = pts.map((p) => O.v(p[0], p[1] + 0.16, p[2], COL.curb));
+        const c0 = top[0];
+        for (let k = 1; k + 1 < top.length; k++) { O.tri(c0, top[k], top[k + 1]); O.tri(c0, top[k + 1], top[k]); }
+        for (let k = 0; k < pts.length; k++) {
+          const A = pts[k], B = pts[(k + 1) % pts.length];
+          O.wall(A[0], A[2], A[1] - 0.05, A[1] + 0.16, B[0], B[2], B[1] - 0.05, B[1] + 0.16, COL.curb);
+        }
+      }
+      // 矢印：一般道の車線の上（出口は降りた先、入口は上る手前）。進む向き
+      {
+        const sA = entry ? -10 : len + 8;
+        const A = W(sA - 2.2, G.Lg), B = W(sA + 2.2, G.Lg);
+        segW(A, B, 0.22);
+        for (const sd of [-1, 1]) segW(W(sA + 0.8, G.Lg + sd * 0.75), W(sA + 2.6, G.Lg), 0.22);
+      }
+      lineKeep = false;
+      lineZb = false;
     }
     // ---- 都市高速の高架の橋脚：まっすぐな区間の、マスの境（偶数番目）ごとに1本（32m）。下の道路・線路をよける ----
     {

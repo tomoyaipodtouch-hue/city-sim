@@ -10,11 +10,15 @@ import { isJctRamp, isUrbanHighway, urbanTurnOk } from '../sim/traffic';
 import { ROAD_LIFT, SIG_STOP, avenueMedianDir, drawWidth } from './roadLayer';
 import { findTurnbacks, Turnback, Island, islandSpread, ISLAND_GAP } from './turnback';
 import { findJctChains, jAt, jctSegs, JSeg, jKey, JPt } from './jctCurve';
+import { findORamps, orAt, orKey, orLen, ORGeo, ORPt } from './oramp';
 import { findURamps, urampAt, urampH, urampS, urampSegs, urKey, URSeg, UPt } from './uramp';
 import { BOGIE, boxTruck, cityBus, garbageTruck, TRAIN_SPEC, TrainKind, hatchback, kei, minivan, person, pickup, sedan, suv, taxi, tractor, trailerBox, trailerTank, trainCar, vc } from './vehicles';
 import { createVehicleMaterial, vehicleUniforms } from './vehicleMaterial';
 
 const MAX_CARS = 1500;
+// 重ねランプのつながり（ノード → ORAMP_LEN マス先のノード）の、車が走る長さ。cellLen で使う
+const OR_LENS = new Map<number, number>();
+const OR_LANE_KEY = 1 << 25; // 重ねランプを走る車の、間隔を調べる車線の番号（本線の車と分ける）
 const MAX_TRUCKS = 300;
 const MAX_PEOPLE = 700;
 const MAX_LIGHTS = (MAX_CARS + MAX_TRUCKS + 200) * 2;
@@ -102,6 +106,7 @@ interface Car extends Cell {
   // 道路の車：マップの端の外を走っている道のり（m）。正 = 端のマスを出て隣の都市へ去っていくところ（CELL 進んだら消す）、
   // 負 = 隣の都市から来て、端のマスへ入る手前（0 になったらふつうに走る）
   off?: number;
+  ol?: number; // 重ねランプに乗ったときの、曲線からの横のずれ
 }
 
 // 走る場所：道路（車・トラック・バス）、歩道、線路（鉄道・高架鉄道・モノレール・地下鉄）
@@ -235,6 +240,8 @@ export class CarLayer {
   private urPt: UPt = { x: 0, z: 0, h: 0, tx: 0, tz: 1, o: 0 };
   private jSegs = new Map<number, JSeg>(); // ジャンクションのランプの、描いた曲線の上を走るマス
   private jPt: JPt = { x: 0, z: 0, h: 0, tx: 1, tz: 0 };
+  private orSegs = new Map<number, ORGeo>(); // 重ねランプ（つながりのキー → 形）
+  private orPt: ORPt = { x: 0, z: 0, h: 0, tx: 1, tz: 0, o: 0 };
   enabled = true;
   drops = 0; // 止まったまま動けずに消した道路の車の数（確かめる用）
   showSubway = false;
@@ -805,6 +812,12 @@ export class CarLayer {
     this.scanAvenues(g);
     this.urSegs = urampSegs(g, findURamps(g, ROAD_LIFT));
     this.jSegs = jctSegs(g, findJctChains(g, ROAD_LIFT));
+    this.orSegs.clear();
+    OR_LENS.clear();
+    for (const G of findORamps(g, ROAD_LIFT)) {
+      this.orSegs.set(orKey(G.from, G.to), G);
+      OR_LENS.set(orKey(G.from, G.to), orLen(G));
+    }
     this.traffic = traffic;
     this.cong = cong;
     this.scanEdges(g, traffic);
@@ -1077,7 +1090,8 @@ export class CarLayer {
         const fromRamp = g.inb(px, py) && (g.road[g.idx(px, py)] === RoadType.Ramp || g.up[g.idx(px, py)] === RoadType.Ramp);
         if (fromRamp || g.nodeType(v) === RoadType.Ramp) return;
       }
-      const w = (tr[v] || 0) + 2;
+      // 重ねランプへは、着く先の道路の交通量の一部だけ（ランプの交通量はノードにないので）
+      const w = (this.orSegs.size && this.orSegs.has(orKey(node, v)) ? Math.min(tr[v] || 0, tr[node] || 0) * 0.3 : tr[v] || 0) + 2;
       // トレーラーは、ほかに行けるところがあれば 135° の急な折り返しを通らない（荷台が大きく振られて、後ろの車輪が横にすべるので）。
       // その先が急な折り返ししかないマスにも入らない
       const turn = (d - din) & 7;
@@ -1414,6 +1428,10 @@ export class CarLayer {
 
   // マスの中の道のり（入口の半分 + 出口の半分）
   private static cellLen(c: Cell) {
+    if (OR_LENS.size) {
+      const l = OR_LENS.get(orKey(c.from, c.to));
+      if (l) return l;
+    }
     return (c.din & 1 ? CELL * 0.707 : CELL * 0.5) + (c.d & 1 ? CELL * 0.707 : CELL * 0.5);
   }
 
@@ -1448,6 +1466,19 @@ export class CarLayer {
         P.tx = q.tx;
         P.tz = q.tz;
       } else if (u) P.h = urampH(u.U, urampS(u.U, P.x, P.z));
+    }
+    // 重ねランプ：1本のつながりを、描いた曲線の上で走る
+    if (f.track === 'road' && this.orSegs.size) {
+      const G = this.orSegs.get(orKey(c.from, c.to));
+      if (G) {
+        const q = orAt(G, G.len * t, this.orPt);
+        P.x = q.x;
+        P.z = q.z;
+        P.h = q.h;
+        P.tx = q.tx;
+        P.tz = q.tz;
+        return;
+      }
     }
     // ジャンクションのランプ：道路の層が描いたなめらかな曲線の上を走る
     if (f.track === 'road' && this.jSegs.size) {
@@ -1519,7 +1550,8 @@ export class CarLayer {
     // トレーラーは荷台が後ろのマスまでのびているので、荷台がかかるマスにも後ろの端を入れておく（後ろの車が荷台にめりこまないように）
     const lanes = new Map<number, { c: Car; t: number; r: number; L: number }[]>();
     // 大通りの交差点のマスでは、入ってきた道路の車線の数で分ける（横切る一般の道路は1本）
-    const laneAt = (c: Car, from: number) => ((ROADS[from < this.avJct.length && this.avJct[from] && c.rt !== undefined ? c.rt : g.nodeType(from)] || ROADS[1]).oneWay ? c.lane : 0);
+    const laneAt = (c: Car, from: number) => (from === c.from && this.orSegs.size && this.orSegs.has(orKey(c.from, c.to)) ? OR_LANE_KEY : laneAt0(c, from));
+    const laneAt0 = (c: Car, from: number) => ((ROADS[from < this.avJct.length && this.avJct[from] && c.rt !== undefined ? c.rt : g.nodeType(from)] || ROADS[1]).oneWay ? c.lane : 0);
     const laneOf = (c: Car) => laneAt(c, c.from);
     const addLane = (key: number, e: { c: Car; t: number; r: number; L: number }) => {
       const a = lanes.get(key);
@@ -1950,7 +1982,8 @@ export class CarLayer {
           }
           c.hist.unshift({ from: c.from, to: c.to, din: c.din, d: c.d, hA: c.hA });
           if (c.hist.length > 8) c.hist.length = 8;
-          c.hA = (this.trackH(f, c.from) + this.trackH(f, c.to)) / 2;
+          // 重ねランプを降りた（上った）ところは、着いたノードの高さから
+          c.hA = this.orSegs.size && this.orSegs.has(orKey(c.from, c.to)) ? this.trackH(f, c.to) : (this.trackH(f, c.from) + this.trackH(f, c.to)) / 2;
           c.from = c.to;
           c.din = c.d;
           c.to = nx[0];
@@ -1985,9 +2018,21 @@ export class CarLayer {
         let lane = walk ? (def.width / 2 + 0.9) * (c.lane ? 1 : -1) : line ? TRACK_GAP : rd.oneWay ? (c.lane ? 1 : -1) * (rt === RoadType.Avenue ? AV_LANE : rd.width * 0.2) : (rd.width / 2) * 0.48;
         // 都市高速のランプでは、描いた曲線（車道の中心）を走る
         if (f.track === 'road' && (this.urSegs.get(urKey(c.from, c.din, c.d))?.lane0 || this.jSegs.has(jKey(c.from, c.din, c.d)))) lane = 0;
+        // 重ねランプ：曲線が車の通る線。乗ったときの車線のずれを、はじめの 20m でなくす。
+        // 降りたあとの車線の位置は、曲線の終わりの位置から（横に跳ばない）
+        const orG = f.track === 'road' && this.orSegs.size ? this.orSegs.get(orKey(c.from, c.to)) : undefined;
+        if (orG) {
+          const q0 = orG.r.entry ? orG.Lg - orG.gOff : orG.Lh, q1 = orG.r.entry ? orG.Lh : orG.Lg - orG.gOff;
+          if (c.ol === undefined) c.ol = (c.lo ?? q0) - q0;
+          const u = Math.min(1, (c.t * orG.len) / 20);
+          lane = c.ol * (1 - u * u * (3 - 2 * u));
+          c.lane = q1 > 0 ? 1 : 0;
+          c.lo = q1;
+          c.ly = 0;
+        } else if (c.ol !== undefined) c.ol = undefined;
         // バス停で止まるバスは、車道の端の停車スペース（縁石から 0.4〜2.8m）に寄せる
         if (stopHere()) lane = drawWidth(g.road[c.from]) / 2 - 1.6;
-        if (!walk && !line) {
+        if (!walk && !line && !orG) {
           // 道路の種類が変わるところ（2車線と1車線など）では、横に跳ばずに少しずつ移る（1 m 進むあいだに 0.3 m まで）
           if (c.lo === undefined) c.lo = lane;
           else {

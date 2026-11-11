@@ -1,4 +1,5 @@
 // 都市のシミュレーション本体（Worker 上で動く）
+import { applyORamp, editORampDir, ORAMP_COST, ORampMode, orampCapScale, planORamp, pruneORamps, setORampSide } from './oramp';
 import { Grid, GRID_U8, GRID_F32, Ctl } from './grid';
 import { Rng } from './rng';
 import { DAYS_PER_MONTH, DX, DY } from './constants';
@@ -175,6 +176,9 @@ export type Command =
   | { t: 'loan'; amount: number }
   | { t: 'repay'; id: number }
   | { t: 'uramp'; x: number; y: number }
+  | { t: 'oramp'; mode: ORampMode; x: number; y: number; fx?: number; fy?: number }
+  | { t: 'orampDir'; T: number; a0: number; a: number; want: number }
+  | { t: 'orampSide'; start: number; median: boolean }
   | { t: 'terrain'; op: TerrainOp; x0: number; y0: number; x1: number; y1: number }
   | { t: 'reclaim'; style: number; x0: number; y0: number; x1: number; y1: number }
   | { t: 'trees'; x0: number; y0: number; x1: number; y1: number };
@@ -364,6 +368,7 @@ export class World {
     w.nextLoanId = Math.max(1, ...w.loans.map((l) => l.id + 1));
     w.rating = d.rating ?? 55;
     linkUrbanEnds(g);
+    pruneORamps(g);
     linkURampMiddles(g); // 以前の版で、ランプの横に後から引いた一般道がつながっていなかった
     levelViaductsOverWater(g); // 高架の高速道路は、川の上でも両岸の高さを保つ（以前の版は水の上で沈んでいた）
     levelAvenueDecks(g); // 大通りの橋は、2本の車線で1枚の床版（以前の版は車線ごとに高さが違った）
@@ -410,6 +415,33 @@ export class World {
         applyURamp(g, plan);
         this.afterGridChange();
         return { ok: true, cost: plan.cost, msg: plan.road < 0 ? '真ん中のマスの外側に一般道をつないでください' : undefined };
+      }
+      case 'oramp': {
+        const plan = planORamp(g, c.mode, c.x, c.y, c.fx, c.fy);
+        if (!plan.ok) return { ok: false, msg: plan.reason };
+        if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
+        applyORamp(g, plan);
+        this.afterGridChange();
+        return { ok: true, cost: plan.cost, msg: plan.note || undefined };
+      }
+      case 'orampDir': {
+        const n = g.n * g.n;
+        if (c.T < 0 || c.T >= n) return { ok: false, msg: '重ねランプが見つかりません' };
+        // まず写しで試して、費用を求める
+        const r = editORampDir(g.clone(), c.T, c.a0 & 3, c.a & 7, c.want & 3);
+        if (!r.ok) return { ok: false, msg: r.reason };
+        const cost = r.added * ORAMP_COST;
+        if (!this.spend(cost)) return { ok: false, msg: '資金が足りません' };
+        editORampDir(g, c.T, c.a0 & 3, c.a & 7, c.want & 3);
+        this.afterGridChange();
+        return { ok: true, cost };
+      }
+      case 'orampSide': {
+        if (c.start < 0 || c.start >= g.n * g.n) return { ok: false, msg: '重ねランプが見つかりません' };
+        const r = setORampSide(g, c.start, c.median);
+        if (!r.ok) return { ok: false, msg: r.reason };
+        this.afterGridChange();
+        return { ok: true };
       }
       case 'trees': {
         const plan = planTrees(g, c.x0, c.y0, c.x1, c.y1);
@@ -672,6 +704,7 @@ export class World {
 
   private afterGridChange() {
     regradeApproaches(this.g);
+    pruneORamps(this.g); // 本線や下の道路がなくなった重ねランプは取り除く
     // 線路がなくなった駅のホームは消す
     for (let i = 0; i < this.g.estn.length; i++) if (this.g.estn[i] && !this.g.erail[i]) this.g.estn[i] = 0;
     this.gridVersion++;
@@ -1710,14 +1743,15 @@ export class World {
     this.modeShare = { car: rc.modes.car / tot, transit: rc.modes.transit / tot, walk: rc.modes.walk / tot, parkRide: rc.modes.parkRide / tot };
     // 貨物：隣の都市（道路・高速道路）、港、貨物駅のうち近いところへ
     const rf = assignTrips(g, [...trucks.values()], freightAt, cong, junctions, rnd, { externalCap: 1e9, externalOnly: freightAt.size === 0, carOnly: true, maxMinutes: 90, weight: 2.5 }, undefined, graph);
-    // 交通量と混雑度（前の月と平均してなめらかにする）
+    // 交通量と混雑度（前の月と平均してなめらかにする）。重ねランプが車線をふさぐマスは容量が小さい
+    const orCap = orampCapScale(g);
     for (let v = 0; v < 2 * N; v++) {
       const t = g.nodeType(v);
       if (!t) { traffic[v] = 0; cong[v] = 1; this.maps.freight[v] = 0; continue; }
       const vol = (rc.volume[v] + rs.volume[v] + rf.volume[v]) * this.fx.traffic;
       traffic[v] = traffic[v] * 0.4 + vol * 0.6;
       this.maps.freight[v] = this.maps.freight[v] * 0.4 + rf.volume[v] * 0.6;
-      const cap = t === RoadType.Ramp && isJctRamp(g, v) ? JCT_RAMP_CAP : ROADS[t].capacity;
+      const cap = (t === RoadType.Ramp && isJctRamp(g, v) ? JCT_RAMP_CAP : ROADS[t].capacity) * (orCap.get(v) ?? 1);
       cong[v] = cong[v] * 0.5 + congestionFactor(traffic[v], cap) * 0.5;
     }
     let employed = 0;

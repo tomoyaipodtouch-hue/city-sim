@@ -14,6 +14,7 @@ import type { NewCityOpts } from '../sim/protocol';
 import { BRIDGE_STYLES } from '../render/bridgeStyles';
 import { platformCells } from '../sim/plan';
 import { junctionGroup } from '../sim/traffic';
+import { decodeORamp, DIR_NAMES, orampAnchor, orampsAt, orampSlots, ORampSpec } from '../sim/oramp';
 import { OrientMode, toApp } from './orient';
 
 const ICONS: Record<string, string> = {
@@ -542,6 +543,12 @@ export class Hud {
       this.junctionOpen = true;
       this.info.append(this.bridgePanel(i));
     }
+    // 重ねランプ（出入口の組の向きごとの設定と、降りる位置）
+    const ors = orampsAt(g, i);
+    if (ors.length) {
+      this.junctionOpen = true;
+      this.info.append(this.orampPanel(ors[0]));
+    }
     if (g.road[i] && !isHighway(g.road[i]) && g.road[i] !== 7) {
       let deg = 0;
       for (let d = 0; d < 8; d++) if (g.conn[i] & (1 << d)) deg++;
@@ -554,6 +561,66 @@ export class Hud {
 
   private junctionOpen = false;
   private facilityId = 0;
+
+  // 重ねランプの設定：向きごとに「出口と入口・出口だけ・入口だけ・なし」と、ランプごとの降りる（上る）位置
+  private orampPanel(ref: ORampSpec): HTMLElement {
+    const g = this.game.grid!;
+    const { T, a0 } = orampAnchor(g, ref);
+    const box = el('div', 'jpanel');
+    box.append(el('h5', '', '重ねランプ'));
+    const slots = orampSlots(g, T, a0);
+    const run = (cmd: Parameters<GameClient['exec']>[0]) => {
+      sfx.click();
+      void this.game.exec(cmd).then((r) => {
+        if (!r.ok) this.showToast(r.msg || 'できませんでした', true);
+        // 地図が届いてから作り直す
+        setTimeout(() => { if (this.infoCell) this.renderInfo(); }, 250);
+      });
+    };
+    for (const a of [...new Set(slots.map((s) => s.a))]) {
+      const mine = slots.filter((s) => s.a === a);
+      const cur = mine.map((s) => {
+        const q = s.start >= 0 ? decodeORamp(g, s.start) : null;
+        return q && q.a === a && q.entry === s.entry ? q : null;
+      });
+      let want = 0;
+      mine.forEach((s, k) => { if (cur[k]) want |= s.entry ? 2 : 1; });
+      box.append(el('p', 'muted', `${DIR_NAMES[a]}の車線`));
+      const seg = el('div', 'seg wrap');
+      ([[3, '出口と入口'], [1, '出口だけ'], [2, '入口だけ'], [0, 'なし']] as const).forEach(([v, name]) => {
+        const b = el('button', want === v ? 'on' : '', name);
+        b.onclick = () => {
+          if (v === want) return;
+          seg.querySelectorAll('button').forEach((x) => x.classList.remove('on'));
+          b.classList.add('on');
+          run({ t: 'orampDir', T, a0, a, want: v });
+        };
+        seg.append(b);
+      });
+      box.append(seg);
+      mine.forEach((s, k) => {
+        const r = cur[k];
+        if (!r) return;
+        const row = el('div', 'jrow');
+        row.append(el('span', '', r.entry ? '入口：上る位置' : '出口：降りる位置'));
+        const s2 = el('div', 'seg');
+        [[false, '道の端'], [true, '道の真ん中']].forEach(([med, name]) => {
+          const b = el('button', r.median === med ? 'on' : '', name as string);
+          b.onclick = () => {
+            if (r.median === med) return;
+            s2.querySelectorAll('button').forEach((x) => x.classList.remove('on'));
+            b.classList.add('on');
+            run({ t: 'orampSide', start: r.start, median: med as boolean });
+          };
+          s2.append(b);
+        });
+        row.append(s2);
+        box.append(row);
+      });
+    }
+    box.append(el('p', 'muted', '出口は手前、入口は先にあります。道の端：右端の車線へ降ります。道の真ん中：中央分離帯の側（追い越し車線）へ降ります。'));
+    return box;
+  }
 
   // 橋の形
   private bridgePanel(cell: number): HTMLElement {

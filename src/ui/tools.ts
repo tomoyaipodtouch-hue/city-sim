@@ -2,6 +2,7 @@
 import { BUS_STOP_COST, CIVIC, CivicId, DENSITY_NAMES, LINES, LineKind, ROADS, RoadType, ZoneType, ZONE_COST, ZONE_NAMES, POWER_LINE_COST, RAMP_COST , ESTOP_COST } from '../sim/defs';
 import { normRect, planBulldoze, planBusStop, planCloverleaf, planTransitLine, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoadCmd, planZone, planURamp, planTerrain, TERRAIN_STEP, TerrainOp, planTrees, TREE_COST, planEStop, planReclaim, RECLAIM_COST } from '../sim/plan';
 import { JCT_FORMS, planJct, JctForm } from '../sim/jct';
+import { ORAMP_COST, ORampMode, orampHw, planORamp } from '../sim/oramp';
 import type { PreviewArrow } from '../render/previewLayer';
 import type { Command } from '../sim/world';
 import type { GameClient } from '../game';
@@ -41,6 +42,9 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { tool: 'road:11', name: ROADS[RoadType.UrbanGroundHighway1W].name, note: `${yen(ROADS[11].cost)}/マス（引いた向きに走る）` },
       { tool: 'ramp', name: 'ランプ（出入口）', note: yen(RAMP_COST) },
       { tool: 'uramp', name: '都市高速のランプ（1×5）', note: yen(RAMP_COST * 3) },
+      { tool: 'oramp:set', name: '重ねランプ（出入口セット）', note: '高架の真下に道路があるマスをタップ' },
+      { tool: 'oramp:exit', name: '重ねランプ（出口だけ：高架→下の道路）', note: yen(ORAMP_COST) },
+      { tool: 'oramp:entry', name: '重ねランプ（入口だけ：下の道路→高架）', note: yen(ORAMP_COST) },
       { tool: 'diamond', name: 'ダイヤモンド型インターチェンジ', note: '高速道路をタップ' },
       { tool: 'clover', name: 'クローバー型インターチェンジ', note: '高速道路の交差点をタップ' },
       { tool: 'jct:tee', name: 'ジャンクション（T字・Y字）', note: '都市高速が合わさるマスをタップ' },
@@ -407,6 +411,24 @@ export class ToolController {
       pv.setPath(g, []);
       return plan.ok ? { text: `都市高速のランプ　${yen(plan.cost)}${plan.road < 0 ? '（真ん中に一般道をつないでください）' : ''}`, bad: false } : { text: plan.reason, bad: true };
     }
+    if (t.startsWith('oramp:')) {
+      const mode = t.split(':')[1] as ORampMode;
+      const plan = planORamp(g, mode, x, y, fx, fy);
+      const bad = new Set(plan.bad);
+      pv.setTiles(g, plan.cells.length ? plan.cells : [g.idx(x, y)], (i) => (plan.ok ? 0x5cc46a : bad.has(i) || !plan.cells.length ? 0xe5534b : 0xf0b429));
+      pv.setPath(g, []);
+      // ランプを走る向きを矢印で見せる（出口は始まりの側、入口は終わりの側）
+      const arrows: PreviewArrow[] = [];
+      for (const r of plan.ramps) {
+        const hw = orampHw(g, r);
+        for (const k of [1, 2, 3]) if (hw[k] >= 0) arrows.push({ cell: hw[k], dir: r.a });
+      }
+      pv.setArrows(g, arrows, plan.ok ? 0x1f6fe0 : 0xffffff);
+      if (!plan.ok) return { text: plan.reason, bad: true };
+      const ex = plan.ramps.filter((r) => !r.entry).length, en = plan.ramps.length - ex;
+      const what = [ex ? `出口${ex > 1 ? ' ' + ex : ''}` : '', en ? `入口${en > 1 ? ' ' + en : ''}` : ''].filter(Boolean).join('・');
+      return { text: `重ねランプ（${what}）　${yen(plan.cost)}${plan.note ? `（${plan.note}）` : ''}`, bad: false };
+    }
     if (t === 'clover') {
       const plan = planCloverleaf(g, x, y);
       pv.setTiles(g, plan.cells.length ? plan.cells : [g.idx(x, y)], (i) => (plan.ok ? 0x5cc46a : plan.bad.has(i) || !plan.cells.length ? 0xe5534b : 0xf0b429));
@@ -464,6 +486,7 @@ export class ToolController {
     else if (t.startsWith('plop:')) cmd = { t: 'plop', id: t.split(':')[1] as CivicId, x: d.x1, y: d.y1 };
     else if (t === 'ramp') cmd = { t: 'ramp', x: d.x1, y: d.y1 };
     else if (t === 'uramp') cmd = { t: 'uramp', x: d.x1, y: d.y1 };
+    else if (t.startsWith('oramp:')) cmd = { t: 'oramp', mode: t.split(':')[1] as ORampMode, x: d.x1, y: d.y1, fx: d.fx1, fy: d.fy1 };
     else if (t === 'busstop') cmd = { t: 'busstop', x: d.x1, y: d.y1 };
     else if (t === 'estop') cmd = { t: 'estop', x: d.x1, y: d.y1 };
     else if (t === 'diamond') cmd = { t: 'diamond', x: d.x1, y: d.y1 };
@@ -472,7 +495,7 @@ export class ToolController {
     if (!cmd) return;
     const res = await this.game.exec(cmd);
     if (res.ok) {
-      if (cmd.t === 'road' || cmd.t === 'pline' || cmd.t === 'ramp' || cmd.t === 'uramp' || cmd.t === 'diamond' || cmd.t === 'clover' || cmd.t === 'jct' || cmd.t === 'transit') sfx.road();
+      if (cmd.t === 'road' || cmd.t === 'pline' || cmd.t === 'ramp' || cmd.t === 'uramp' || cmd.t === 'oramp' || cmd.t === 'diamond' || cmd.t === 'clover' || cmd.t === 'jct' || cmd.t === 'transit') sfx.road();
       else if (cmd.t === 'busstop' || cmd.t === 'estop') sfx.plop();
       else if (cmd.t === 'zone') sfx.zone();
       else if (cmd.t === 'bulldoze' || cmd.t === 'terrain') sfx.bulldoze();
