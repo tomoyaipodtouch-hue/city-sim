@@ -191,6 +191,8 @@ export class Hud {
 
   private openSub(id: string) {
     const g = TOOL_GROUPS.find((x) => x.id === id)!;
+    // 取り壊しモードのまま別のメニューを開いたら、取り壊しモードを終える（しま模様と階層の切り替えも消す）
+    if (this.tools.tool === 'bulldoze') this.selectTool('');
     this.subGroup = id;
     this.sub.innerHTML = '';
     this.sub.append(el('h3', '', g.name));
@@ -263,6 +265,7 @@ export class Hud {
     const data = el('button', 'bbtn', 'データ表示');
     data.onclick = () => {
       sfx.click();
+      if (this.tools.tool === 'bulldoze') this.selectTool('');
       this.toggleChips();
     };
     const budget = el('button', 'bbtn', '予算');
@@ -735,6 +738,7 @@ export class Hud {
   // ---------------- シート ----------------
   openSheet(tab: string) {
     sfx.click();
+    if (this.tools.tool === 'bulldoze') this.selectTool('');
     this.sheetTab = tab;
     this.sheetBg.classList.remove('hidden');
     this.sheet.classList.remove('hidden');
