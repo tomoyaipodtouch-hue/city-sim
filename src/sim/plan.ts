@@ -1146,9 +1146,19 @@ export function applyZone(g: Grid, p: ZonePlan) {
   }
 }
 
+// 取り壊す階層。
+//   ground（地上）：地上の道路（橋・地上のランプ・バス停・交差点の設定を含む）、地上の鉄道、建物、木、送電線
+//   up（高架）：上空の道路（高架の高速道路・都市高速・立体交差の道路・高架のランプ・ジャンクションの上空のランプ）、高架鉄道（駅のホームも）、モノレール
+//   sub（地下）：地下鉄の線路と、地下鉄の駅
+//   all（すべて）：そのマスのものを全部
+export type BulldozeLayer = 'ground' | 'up' | 'sub' | 'all';
+export const BULLDOZE_LAYERS: BulldozeLayer[] = ['ground', 'up', 'sub', 'all'];
+export const TRANSIT_LAYER: Record<'rail' | 'erail' | 'mono' | 'sub', BulldozeLayer> = { rail: 'ground', erail: 'up', mono: 'up', sub: 'sub' };
+
 export interface BulldozePlan {
-  transit: number[];
-  roads: number[];
+  layer: BulldozeLayer;
+  transit: number[]; // 線路を外すマス（layer の階層の線路だけ）
+  roads: number[]; // 道路を外すマス（layer の階層の道路だけ）
   lines: number[];
   buildings: number[];
   trees: number[];
@@ -1156,30 +1166,39 @@ export interface BulldozePlan {
   cells: number[];
 }
 
+// 建物の階層：地下鉄の駅は地下（地上にあるのは入口だけ）、それ以外は地上
+export const buildingLayer = (type: string | undefined): BulldozeLayer => (type === 'sub_station' ? 'sub' : 'ground');
+
 export function planBulldoze(
   g: Grid,
   r: Rect,
-  bInfo: (id: number) => { civic: boolean; w: number; h: number } | undefined,
+  bInfo: (id: number) => { civic: boolean; w: number; h: number; type?: string } | undefined,
+  layer: BulldozeLayer = 'ground',
 ): BulldozePlan {
   const roads: number[] = [], lines: number[] = [], trees: number[] = [], cells: number[] = [], transit: number[] = [];
   const bset = new Set<number>();
+  const all = layer === 'all', ground = all || layer === 'ground', up = all || layer === 'up';
+  const kinds = (['rail', 'erail', 'mono', 'sub'] as const).filter((k) => all || TRANSIT_LAYER[k] === layer);
   let cost = 0;
   for (let y = r.y0; y <= r.y1; y++) {
     for (let x = r.x0; x <= r.x1; x++) {
       const i = g.idx(x, y);
       cells.push(i);
-      if (g.road[i] || g.up[i]) { roads.push(i); cost += g.up[i] && isHighway(g.up[i]) ? 20 : 5; }
-      if (g.pline[i]) { lines.push(i); cost += 1; }
-      if (g.rail[i] || g.erail[i] || g.mono[i] || g.sub[i]) { transit.push(i); cost += 10; }
-      if (g.bldg[i]) bset.add(g.bldg[i]);
-      else if (g.tree[i]) { trees.push(i); cost += 1; }
+      const gr = ground && g.road[i] !== 0, ur = up && g.up[i] !== 0;
+      if (gr || ur) { roads.push(i); cost += ur && isHighway(g.up[i]) ? 20 : 5; }
+      if (ground && g.pline[i]) { lines.push(i); cost += 1; }
+      if (kinds.some((k) => g[k][i])) { transit.push(i); cost += 10; }
+      const b = g.bldg[i];
+      if (b) {
+        if (all || buildingLayer(bInfo(b)?.type) === layer) bset.add(b);
+      } else if (ground && g.tree[i]) { trees.push(i); cost += 1; }
     }
   }
   for (const id of bset) {
     const b = bInfo(id);
     if (b) cost += b.civic ? 50 * b.w * b.h : 15 * b.w * b.h;
   }
-  return { roads, lines, buildings: [...bset], trees, cost, cells, transit };
+  return { layer, roads, lines, buildings: [...bset], trees, cost, cells, transit };
 }
 
 // 送電線
@@ -1422,10 +1441,11 @@ export function applyTransitLine(g: Grid, p: TransitPlan) {
   }
 }
 
-export function removeTransitAt(g: Grid, i: number) {
+export function removeTransitAt(g: Grid, i: number, layer: BulldozeLayer = 'all') {
   const n = g.n;
   const x = i % n, y = (i / n) | 0;
   for (const kind of ['rail', 'erail', 'mono', 'sub'] as const) {
+    if (layer !== 'all' && TRANSIT_LAYER[kind] !== layer) continue;
     const mask = g[kind];
     for (let d = 0; d < 8; d++) {
       if (!(mask[i] & (1 << d))) continue;
