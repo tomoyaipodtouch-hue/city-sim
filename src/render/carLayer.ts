@@ -790,7 +790,7 @@ export class CarLayer {
       const t = traffic[v] > 0 ? g.nodeType(v) : 0;
       if (!t) continue;
       // 一方通行・大通り・高速道路は1マスに同じ向きの2車線、両方向の道路は向きごとに1車線（ランプは1車線）
-      const cap = ((t === RoadType.Ramp ? 1 : 2) * CELL * ((globalThis as any).__fill ?? ROAD_FILL)) / CAR_SPACE; // TMPFILL
+      const cap = ((t === RoadType.Ramp ? 1 : 2) * CELL * ROAD_FILL) / CAR_SPACE;
       const d = traffic[v] * 0.012 * a;
       if (d > cap) clip[v] = cap / d;
     }
@@ -1770,7 +1770,8 @@ export class CarLayer {
           const box = inBox(c.to);
           if (box && !inBox(c.from) && c.nx === undefined) c.nx = this.nextRoad(f, c);
           const ex = c.nx?.[1] ?? c.d;
-          if (gap === Infinity)
+          // マップの端のマスを通りぬけて外へ出ていく車（c.to = c.from）は、この先に車はいない
+          if (gap === Infinity && c.from !== c.to)
             for (let d = 0; d < 8; d++) {
               if (d === opp(c.d)) continue;
               for (const o of lanes.get((c.to * 8 + d) * 2 + lb) ?? [])
