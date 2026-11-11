@@ -10,7 +10,7 @@
 // 道路の階層は2つ（地上 = 0、上空 = 1）しかない。立体交差は次の決まりで作る。
 //   ・本線どうしは、交差点で必ず別の階層にする。同じ階層で交わっているときは、片方の本線を交差点の前後だけ
 //     もう一方の階層へ移す（地上どうしは片方を高架へ持ち上げ、高架どうしは片方を地上へ下ろす）
-//   ・ランプは、マスごとに「地上（高さ 0）」か「上空（高さ = 1.5m × 段）」のどちらかを通る。
+//   ・ランプは、マスごとに「地上（高さ 0）」か「上空（高さ = 2m × 段）」のどちらかを通る。
 //     上空のランプは、低い所（6m 未満）では下の地上のマスが空いていないといけない。6m 以上なら地上の道路やランプをまたげる。
 //     地上のランプは、上空にあるものの下を 6m 以上あけてくぐれる
 //   ・ランプの道筋は「マス・向き・高さの段」の最短経路で探す（向きは 1マスに 45° まで、高さは 1マスに 1段まで）。
@@ -36,16 +36,16 @@ export const JCT_NAMES: Record<JctForm, string> = {
   turbine: '十字・タービン型',
 };
 
-export const JCT_HSTEP = 1.5; // ランプの高さの1段（m）。1マスに1段まで（約 9%）
+export const JCT_HSTEP = 2; // ランプの高さの1段（m）。1マスに1段まで（約 12%。首都高のように急な坂で小さくまとめる）
 export const JCT_CLEAR = 6; // 立体交差で下をあける高さ（m）
-const HMAX = 8; // ランプの高さの段の上限（12m）
+const HMAX = 6; // ランプの高さの段の上限（12m）
 const NH = HMAX + 1;
-const RB = 21; // 探す範囲（交差点から何マスまで）
-const LDEC = 2; // 本線から分かれたあと、本線の横を並んで走るマス数（減速車線）
-const LACC = 3; // 合流の前に、本線の横を並んで走るマス数（加速車線）
-const ARM_MIN = 10; // 本線がまっすぐ続いていないといけない長さ（マス）
+const RB = 20; // 探す範囲（交差点から何マスまで）
+const LDEC = 1; // 本線から分かれたあと、本線の横を並んで走るマス数（減速車線）
+const LACC = 2; // 合流の前に、本線の横を並んで走るマス数（加速車線）
+const ARM_MIN = 8; // 本線がまっすぐ続いていないといけない長さ（マス）
 const MOVE_F = 1; // 本線を別の階層へ移すとき、交差点の前後で高さがそろう長さ（マス）
-const MOVE_S = 6; // 本線を別の階層へ移すときの坂の長さ（マス）
+const MOVE_S = 5; // 本線を別の階層へ移すときの坂の長さ（マス）
 const JCT_CELL_COST = 120;
 const JCT_BASE_COST = 8000;
 
@@ -353,7 +353,7 @@ class Router {
   // 分岐：本線のマス k から右前へ。合流：右後ろのマスから本線のマス k へ
   divergeAt(A: Arm, k: number): PNode[] | null {
     const w = this.w, line = A.line;
-    if (k - LDEC < 2 || k > A.usable - 1) return null;
+    if (k - LDEC < 1 || k > A.usable - 1) return null;
     const m = line.cells[k], Lm = line.lv[k], f = opp(A.dir);
     if (this.attached.has(m) || conn(w, m, Lm) & ~(bit(A.dir) | bit(opp(A.dir)))) return null;
     const dd = (f + 1) & 7;
@@ -373,7 +373,7 @@ class Router {
   }
   mergeAt(B: Arm, k: number): PNode[] | null {
     const w = this.w, line = B.line;
-    if (k - LACC < 2 || k > B.usable - 1) return null;
+    if (k - LACC < 1 || k > B.usable - 1) return null;
     const m = line.cells[k], Lm = line.lv[k], f = B.dir;
     if (this.attached.has(m) || conn(w, m, Lm) & ~(bit(B.dir) | bit(opp(B.dir)))) return null;
     const dm = (f + 7) & 7;
@@ -411,7 +411,7 @@ class Router {
         for (let k = -sl; k <= span + sl; k++) headMask |= bit(f + 16 + k * sg);
       }
     }
-    // 状態：マス・向き・直前に曲がったか（続けては曲がらない = カーブの半径が小さくなりすぎない）・高さの段
+    // 状態：マス・向き・（予備：直前に曲がったか。いまは続けて曲がってよいので常に 0）・高さの段
     const SID = (lc: number, d: number, hs: number, t = 0) => ((lc * 8 + d) * 2 + t) * NH + hs;
     // 出発点：本線から新しく分かれる、または同じ本線から来るランプから分かれる
     interface Start { lc: number; d: number; hs: number; g0: number; prefix: PNode[]; fork: boolean }
@@ -485,7 +485,7 @@ class Router {
       heap.push(s.g0 + H(s.lc), id);
     }
     let best = Infinity, bestId = -1, bestGoal: Goal | null = null, bestJoin: { q: RNode; nd: number } | null = null;
-    const shapeR = 6.5;
+    const shapeR = 4.5;
     let iter = 0;
     while (heap.size) {
       const fk = heap.topKey();
@@ -525,13 +525,13 @@ class Router {
           // 交差点から遠いほど少し高くつく（ランプを本線のそばに寄せて、ジャンクションを小さくまとめる）
           {
             const x = (j % this.n) + 0.5 - this.ox, y = ((j / this.n) | 0) + 0.5 - this.oy;
-            cost += 0.025 * Math.hypot(x, y) * len;
+            cost += 0.09 * Math.hypot(x, y) * len;
           }
           if (E.shape) {
             const x = (j % this.n) + 0.5 - this.ox, y = ((j / this.n) | 0) + 0.5 - this.oy;
             cost += E.shape * Math.abs(Math.hypot(x, y) - shapeR) * len;
           }
-          const nid = SID(lj, nd, h2, nd !== d ? 1 : 0), ng = g0 + cost;
+          const nid = SID(lj, nd, h2, 0), ng = g0 + cost; // 続けて曲がってよい（半径 30〜40m。描くときにならす）
           if (stamp[nid] === gen && dist[nid] <= ng) continue;
           stamp[nid] = gen;
           dist[nid] = ng;
@@ -681,14 +681,16 @@ interface Variant { move: number } // 階層を移す本線（-1 = 移さない�
 
 function endsFor(form: JctForm, kind: Mv['kind'], attempt = 0): Ends {
   // うまく通せないときは、分かれる・合わさる範囲を広げ、ランプどうしの分岐・合流も使う
-  const wide = attempt >= 3 ? 4 : 0;
+  const wide = attempt >= 3 ? 3 : 0;
   const E = (d: [number, number], dp: number, m: [number, number], mp: number, fresh = true, fork = true, join = true, shape = 0): Ends =>
     ({ dRange: [d[0], d[1] + wide], dPref: dp, mRange: [m[0], m[1] + wide], mPref: mp, fresh, fork: fork || wide > 0, join: join || wide > 0, shape: wide ? shape / 2 : shape, slack: wide ? 2 : 1 });
-  if (form === 'tee') return kind === 'R' ? E([3, 9], 3, [4, 10], 5) : E([3, 11], 4, [4, 12], 5);
-  if (form === 'semi') return kind === 'R' ? E([3, 9], 4, [4, 10], 5) : E([4, 12], 5, [5, 12], 6);
-  if (form === 'turbine') return kind === 'R' ? E([3, 12], 4, [4, 12], 5, true, false, false) : E([4, 12], 6, [5, 12], 7, true, false, false, 0.8);
+  if (form === 'tee') return kind === 'R' ? E([2, 6], 2, [3, 6], 3) : E([2, 7], 3, [3, 7], 3);
+  if (form === 'semi') return kind === 'R' ? E([2, 6], 3, [3, 6], 3) : E([3, 8], 4, [3, 8], 4);
+  if (form === 'turbine') return kind === 'R' ? E([2, 8], 3, [3, 8], 3) : E([3, 8], 4, [3, 8], 4, true, true, true, 0.8);
   // クローバー型：集散路は本線の遠くから分かれて、遠くで合流する
-  if (kind === 'CD') return E([9, 13], 10, [10, 14], 11, true, false, false);
+  if (kind === 'CD') return E([7, 11], wide ? 11 : 8, [7, 11], wide ? 11 : 8, true, false, false);
+  // 外側のランプは、集散路から分かれるか、集散路の外側（遠く）で本線から直接分かれる
+  if (kind === 'outer') return E([5, 14], 9, [5, 14], 9, true, false, false);
   return E([0, 0], 0, [0, 0], 0, false, false, false);
 }
 
@@ -768,7 +770,7 @@ function routeAll(g0: Grid, w0: Grid, J: Junction, form: JctForm): JctPlan {
         if (!A.inb) continue;
         const Bo = arms.find((b) => b.hw === A.hw && b !== A && b.outb);
         if (!Bo) continue;
-        const ok = R.route({ from: A, to: Bo, kind: 'CD' }, endsFor(form, 'CD'), A.id, Bo.id, { forkOk: () => false, joinOk: () => false, markCd: true });
+        const ok = R.route({ from: A, to: Bo, kind: 'CD' }, endsFor(form, 'CD', attempt), A.id, Bo.id, { forkOk: () => false, joinOk: () => false, markCd: true });
         if (!ok) { failed = { from: A, to: Bo, kind: 'CD' }; break; }
       }
       if (failed) { markFail(R, failed, bad); return fail('集散路を通す広さがありません（赤いマスのまわりを空けてください）'); }
@@ -786,7 +788,7 @@ function routeAll(g0: Grid, w0: Grid, J: Junction, form: JctForm): JctPlan {
           // 外側のランプは、ループが合わさるより手前の集散路から分かれ、ループが分かれるより先の集散路に合わさる（織り込みは集散路のループの間だけ）
           const lj = Math.min(Infinity, ...[...R.nodes.values()].filter((q) => q.cd >= 0 && q.cd === fromCd && q.ins.length > 1).map((q) => q.s));
           const lf = Math.max(-Infinity, ...[...R.nodes.values()].filter((q) => q.cd >= 0 && q.cdDst === toCd && q.outs.length > 1).map((q) => q.s));
-          ok = R.route(mv, endsFor(form, 'outer'), mv.from.id, mv.to.id, {
+          ok = R.route(mv, endsFor(form, 'outer', attempt), mv.from.id, mv.to.id, {
             forkOk: (p) => p.cd === fromCd && p.s < Math.min(-1.2, lj - 1),
             joinOk: (q) => q.cdDst === toCd && q.s > Math.max(1.2, lf + 1),
           });
@@ -812,6 +814,8 @@ function routeAll(g0: Grid, w0: Grid, J: Junction, form: JctForm): JctPlan {
     }
     // 失敗したランプを先に探して、もう一度
     list = [failed, ...list.filter((m) => m !== failed)];
+    // クローバー型は、ループを先に（外側のランプはループのまわりを回る）。同じ種類の中だけで順番を変える
+    if (form === 'clover') list.sort((a, b) => order(a) - order(b));
   }
   if (failed) {
     const R = new Router(w0, ox, oy);
