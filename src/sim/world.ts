@@ -9,9 +9,10 @@ import {
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
 import {
-  applyCloverleaf, applyDiamond, applyTerrain, applyReclaim, planReclaim, applyURamp, linkURampMiddles, linkUrbanEnds, unjoinAlongEnds, planTrees, planEStop, estopGroup, estopRoads, platformCells, planURamp, planTerrain, TerrainOp, applyRamp, planRoadCmd, levelAvenueDecks, applyTransitLine, levelViaductsOverWater, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planZone,
+  applyCloverleaf, applyDiamond, applyTerrain, applyReclaim, planReclaim, applyURamp, linkURampMiddles, linkUrbanEnds, unjoinAlongEnds, planTrees, planEStop, estopGroup, estopRoads, platformCells, planURamp, planTerrain, TerrainOp, applyRamp, planRoadCmd, levelAvenueDecks, applyTransitLine, levelViaductsOverWater, hasSurfaceLine, labelWater, planBusStop, railReachEdge, planTransitLine, removeTransitAt, planCloverleaf, applyRoad, applyZone, regradeApproaches, removeRoadLevel, pruneDeadRamps, BULLDOZE_LAYERS, BULLDOZE_LAYER_NAMES, flattenRect, normRect, planBulldoze, planDiamond, planLine, planPlop, planPowerLine, planRamp, planZone,
 } from './plan';
 import { CELL } from './constants';
+import type { BulldozeLayer } from './plan';
 import { applyJct, JctForm, planJct } from './jct';
 import { ADVISORS, Advice, computeRating, Loan, LOAN_AMOUNTS, loanRate, makeAdvice, MAX_LOANS, newLoan, ordinanceCost, ordinanceEffects, OrdinanceEffects, OrdinanceId, ORDINANCES, payLoan, rewardUnlocked, REWARD_REQ } from './governance';
 import { defaultServiceState, facilityEffect, makeServiceMaps, ServiceMaps, ServiceState, updateServices } from './services';
@@ -155,7 +156,7 @@ export interface CmdResult {
 export type Command =
   | { t: 'road'; x0: number; y0: number; x1: number; y1: number; road: RoadType }
   | { t: 'zone'; x0: number; y0: number; x1: number; y1: number; zone: ZoneType; den: number }
-  | { t: 'bulldoze'; x0: number; y0: number; x1: number; y1: number }
+  | { t: 'bulldoze'; x0: number; y0: number; x1: number; y1: number; layer?: BulldozeLayer } // layer を省くと地上だけ
   | { t: 'pline'; x0: number; y0: number; x1: number; y1: number }
   | { t: 'plop'; id: CivicId; x: number; y: number }
   | { t: 'tax'; kind: GrowKind; rate: number }
@@ -482,14 +483,28 @@ export class World {
       }
       case 'bulldoze': {
         const r = normRect(c.x0, c.y0, c.x1, c.y1, g.n);
-        const plan = planBulldoze(g, r, (id) => this.buildings.get(id));
+        const layer: BulldozeLayer = c.layer && BULLDOZE_LAYERS.includes(c.layer) ? c.layer : 'ground';
+        const plan = planBulldoze(g, r, (id) => this.buildings.get(id), layer);
         if (!plan.roads.length && !plan.lines.length && !plan.buildings.length && !plan.trees.length && !plan.transit.length)
-          return { ok: false, msg: '取り壊すものがありません' };
+          return { ok: false, msg: layer === 'all' ? '取り壊すものがありません' : `${BULLDOZE_LAYER_NAMES[layer]}には取り壊すものがありません` };
         if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
         for (const id of plan.buildings) this.removeBuilding(id);
-        for (const i of plan.roads) this.removeRoad(i);
+        const touched: number[] = [];
+        const N = g.n * g.n;
+        for (const i of plan.roads) {
+          if (layer === 'all') {
+            // 両方の階層を外す。となりのマスは、どちらの階層も行き止まりのランプの片づけの対象にする
+            for (let d = 0; d < 8; d++) {
+              const x = (i % g.n) + DX[d], y = ((i / g.n) | 0) + DY[d];
+              if (g.inb(x, y)) touched.push(g.idx(x, y), N + g.idx(x, y));
+            }
+            this.removeRoad(i);
+          } else if (layer === 'ground') touched.push(...removeRoadLevel(g, i, 0));
+          else if (layer === 'up') touched.push(...removeRoadLevel(g, i, 1));
+        }
+        pruneDeadRamps(g, touched);
         for (const i of plan.lines) g.pline[i] = 0;
-        for (const i of plan.transit) removeTransitAt(g, i);
+        for (const i of plan.transit) removeTransitAt(g, i, layer);
         for (const i of plan.trees) g.tree[i] = 0;
         this.afterGridChange();
         return { ok: true, cost: plan.cost };

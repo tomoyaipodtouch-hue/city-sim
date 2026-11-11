@@ -1153,6 +1153,7 @@ export function applyZone(g: Grid, p: ZonePlan) {
 //   all（すべて）：そのマスのものを全部
 export type BulldozeLayer = 'ground' | 'up' | 'sub' | 'all';
 export const BULLDOZE_LAYERS: BulldozeLayer[] = ['ground', 'up', 'sub', 'all'];
+export const BULLDOZE_LAYER_NAMES: Record<BulldozeLayer, string> = { ground: '地上', up: '高架', sub: '地下', all: 'すべて' };
 export const TRANSIT_LAYER: Record<'rail' | 'erail' | 'mono' | 'sub', BulldozeLayer> = { rail: 'ground', erail: 'up', mono: 'up', sub: 'sub' };
 
 export interface BulldozePlan {
@@ -1199,6 +1200,51 @@ export function planBulldoze(
     if (b) cost += b.civic ? 50 * b.w * b.h : 15 * b.w * b.h;
   }
   return { layer, roads, lines, buildings: [...bset], trees, cost, cells, transit };
+}
+
+// マス i の、片方の階層（L = 0 地上、1 上空）の道路だけを外す。となりのマスの、この階層へのつながりも外す（もう片方の階層は残す）。
+// 外したつながりの先のマスを返す（あとで行き止まりのランプを片づけるため）
+export function removeRoadLevel(g: Grid, i: number, L: 0 | 1): number[] {
+  const n = g.n, x = i % n, y = (i / n) | 0, N = n * n;
+  const conn = L ? g.conn1 : g.conn, oc = L ? g.conn : g.conn1, O = L ? 0 : 1;
+  const touched: number[] = [];
+  for (let d = 0; d < 8; d++) {
+    if (!(conn[i] & (1 << d)) || !g.inb(x + DX[d], y + DY[d])) continue;
+    const j = (y + DY[d]) * n + x + DX[d];
+    const Lj = g.arriveLevel(L, j, d);
+    // もう片方の階層も、となりの同じ階層へつながっている（地上と上空の両方から入れる）なら、となりの側は残す
+    if (oc[i] & (1 << d) && g.arriveLevel(O, j, d) === Lj) continue;
+    const b = ~(1 << opp(d));
+    if (Lj) { g.conn1[j] &= b; g.flow1[j] &= b; } else { g.conn[j] &= b; g.flow[j] &= b; }
+    touched.push(Lj * N + j);
+    // 上空の道路がどこにもつながらなくなったら消す（立体交差の残り）
+    if (Lj && g.up[j] && !g.conn1[j]) { g.up[j] = 0; g.upH[j] = 0; g.jct[j] &= ~2; }
+  }
+  if (L) {
+    g.up[i] = 0; g.conn1[i] = 0; g.flow1[i] = 0; g.upH[i] = 0; g.jct[i] &= ~2;
+  } else {
+    g.road[i] = 0; g.conn[i] = 0; g.flow[i] = 0; g.deck[i] = 0; g.bstop[i] = 0;
+    g.ictl[i] = 0; g.isplit[i] = 50; g.iflags[i] = 0; g.jct[i] &= ~1;
+  }
+  return touched;
+}
+
+// 取り壊しのあとで、行き止まりになったランプ（本線がなくなった都市高速のランプ、片側が外れたジャンクションのランプなど）を片づける。
+// seeds = つながりを外したマスのノード（階層 * n * n + マス）。ランプは入口と出口の 2つ以上のつながりがあるはず
+export function pruneDeadRamps(g: Grid, seeds: number[]) {
+  const N = g.n * g.n;
+  const q = [...seeds];
+  let k = 0;
+  while (q.length) {
+    const node = q.pop()!;
+    const L = node >= N ? 1 : 0, c = node - L * N;
+    if ((L ? g.up[c] : g.road[c]) !== RoadType.Ramp) continue;
+    const m = L ? g.conn1[c] : g.conn[c];
+    if (m & (m - 1)) continue; // つながりが 2つ以上
+    q.push(...removeRoadLevel(g, c, L as 0 | 1));
+    k++;
+  }
+  return k;
 }
 
 // 送電線
