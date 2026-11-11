@@ -177,7 +177,8 @@ function axisAt(g: Grid, c: number) {
   return -1;
 }
 
-export function planORamp(g: Grid, mode: ORampMode, x: number, y: number, fx = x + 0.5, fy = y + 0.5): ORampPlan {
+// median：降りる（上る）位置。省略すると、その向きで降りられる側（大通りの反対車線は道の真ん中、ほかは道の端）
+export function planORamp(g: Grid, mode: ORampMode, x: number, y: number, fx = x + 0.5, fy = y + 0.5, median?: boolean): ORampPlan {
   const fail = (reason: string, bad: number[] = []): ORampPlan => ({ ok: false, reason, ramps: [], cells: bad, bad, cost: 0 });
   if (!g.inb(x, y)) return fail('マップの外です');
   const T = g.idx(x, y);
@@ -188,7 +189,7 @@ export function planORamp(g: Grid, mode: ORampMode, x: number, y: number, fx = x
   const ground = (a: number) => groundFor(g, T, a) !== null;
   const existing = listORamps(g);
   const specs: ORampSpec[] = [];
-  const mk = (a: number, entry: boolean, start: number): ORampSpec => { const partner = !!groundFor(g, T, a)?.partner; return { start, a, entry, median: partner, partner }; };
+  const mk = (a: number, entry: boolean, start: number): ORampSpec => { const partner = !!groundFor(g, T, a)?.partner; return { start, a, entry, median: median ?? partner, partner }; };
   let note = '';
   if (mode === 'set') {
     const slots = orampSlots(g, T, a0);
@@ -292,3 +293,59 @@ export function orampLength(a: number) {
 export const ORAMP_SPEED = 40; // ランプの制限速度（km/h）
 // 方角の名前（向きごと）
 export const DIR_NAMES = ['東行き', '南東行き', '南行き', '南西行き', '西行き', '北西行き', '北行き', '北東行き'];
+
+// ---- 情報ツールから作るときの選択肢 ----
+// タップしたマスで実際に置けるものだけを、計画を確かめてから並べる
+export interface ORampOption {
+  key: string;
+  label: string; // 例：「出入口セット」「東行き：出口だけ（道の真ん中）」
+  mode: ORampMode;
+  fx: number;
+  fy: number;
+  median?: boolean;
+  plan: ORampPlan;
+}
+const SIDE_NAME = (m: boolean) => (m ? '道の真ん中' : '道の端');
+export function isOverlapCell(g: Grid, x: number, y: number) {
+  if (!g.inb(x, y)) return false;
+  const c = g.idx(x, y);
+  return isUrbanElevated(g.up[c]) && orampUnder(g.road[c]);
+}
+export function orampOptions(g: Grid, x: number, y: number): { overlap: boolean; options: ORampOption[]; reason: string } {
+  if (!isOverlapCell(g, x, y)) return { overlap: false, options: [], reason: '' };
+  const T = g.idx(x, y);
+  const options: ORampOption[] = [];
+  let reason = '';
+  const sig = (p: ORampPlan) => p.ramps.map((r) => encodeORamp(r) * 100000 + r.start).sort().join(',');
+  // 同じ並びは1つにまとめる。降りる位置が2通りあるときだけ、位置を書き添える
+  const add = (base: string, keyBase: string, mode: ORampMode, fx: number, fy: number, check: (p: ORampPlan) => boolean) => {
+    const got: ORampOption[] = [];
+    for (const median of [undefined, false, true] as const) {
+      const plan = planORamp(g, mode, x, y, fx, fy, median);
+      if (!plan.ok) { if (!reason) reason = plan.reason; continue; }
+      if (!check(plan) || got.some((o) => sig(o.plan) === sig(plan))) continue;
+      got.push({ key: `${keyBase}:${median === undefined ? 'd' : median ? 'm' : 'e'}`, label: base, mode, fx, fy, median, plan });
+    }
+    if (got.length > 1) {
+      // 既定（undefined）と同じものを除いて、道の端・道の真ん中を書き添える
+      const fixed = got.filter((o) => o.median !== undefined);
+      for (const o of fixed) o.label = `${base}（${SIDE_NAME(!!o.median)}）`;
+      options.push(...(fixed.length ? fixed : got));
+    } else options.push(...got);
+  };
+  add('出入口セット', 'set', 'set', x + 0.5, y + 0.5, () => true);
+  const a0 = [0, 1, 2, 3].find((d) => (g.conn1[T] & bit(d)) && (g.conn1[T] & bit(d + 4)));
+  if (a0 !== undefined) {
+    for (const a of [a0, opp(a0)]) {
+      if (!(g.flow1[T] & bit(a))) continue;
+      // 片側1車線の本線は、その向きの車線の側（進む向きの右）をタップしたことにする
+      const rx = -DY[a], ry = DX[a];
+      const fx = x + 0.5 + rx * 0.3, fy = y + 0.5 + ry * 0.3;
+      for (const entry of [false, true]) {
+        add(`${DIR_NAMES[a]}：${entry ? '入口だけ' : '出口だけ'}`, `${a}:${entry ? 'en' : 'ex'}`, entry ? 'entry' : 'exit', fx, fy, (p) => p.ramps.length === 1 && p.ramps[0].a === a);
+      }
+    }
+  }
+  if (options.length) reason = '';
+  return { overlap: true, options, reason };
+}

@@ -178,7 +178,7 @@ export type Command =
   | { t: 'loan'; amount: number }
   | { t: 'repay'; id: number }
   | { t: 'uramp'; x: number; y: number }
-  | { t: 'oramp'; mode: ORampMode; x: number; y: number; fx?: number; fy?: number }
+  | { t: 'oramp'; mode: ORampMode; x: number; y: number; fx?: number; fy?: number; median?: boolean }
   | { t: 'orampDir'; T: number; a0: number; a: number; want: number }
   | { t: 'orampSide'; start: number; median: boolean }
   | { t: 'terrain'; op: TerrainOp; x0: number; y0: number; x1: number; y1: number }
@@ -422,7 +422,7 @@ export class World {
         return { ok: true, cost: plan.cost, msg: plan.road < 0 ? '真ん中のマスの外側に一般道をつないでください' : undefined };
       }
       case 'oramp': {
-        const plan = planORamp(g, c.mode, c.x, c.y, c.fx, c.fy);
+        const plan = planORamp(g, c.mode, c.x, c.y, c.fx, c.fy, c.median);
         if (!plan.ok) return { ok: false, msg: plan.reason };
         if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
         applyORamp(g, plan);
