@@ -197,7 +197,7 @@ function plan(g: Grid, cells: number[], rail: number[], blocked: Set<number>): H
   res.need = need;
   // 交差のマスは、まっすぐか曲がりの本線（分かれ目やランプのないマス）でないといけない
   const plain = (c: number) => bits(g.conn1[c]).length === 2 && !blocked.has(c);
-  for (const c of cells) if (!plain(c)) fail(HWR_MSG_RAMP, [c]);
+  for (const c of cells) if (!plain(c)) fail(bits(g.conn1[c]).length < 2 ? HWR_MSG_END : HWR_MSG_RAMP, [c]);
   if (!res.ok) return res;
   const setT = (c: number, h: number) => {
     if (h > g.upH[c] + 0.01) res.target.set(c, Math.max(res.target.get(c) ?? 0, h));

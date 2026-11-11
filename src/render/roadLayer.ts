@@ -2390,7 +2390,15 @@ export class RoadLayer {
         const lvM = M.node >= NC ? 1 : 0, cM = M.node - lvM * NC, mm = lvM ? g.conn1[cM] : g.conn[cM];
         // 本線がここで終わっている（T字・Y字の合わさる側の端：本線がランプへ分かれる・ランプから始まる）ときは、
         // 本線のマスは描かず、ランプを本線の続きとしてマスの境から描く（加速・減速車線やゼブラは付けない）
-        if (fromStart ? !(mm & (1 << dM)) : !(mm & (1 << ((dM + 4) & 7)))) {
+        // （本線の先・手前のマスが、ランプになっている（本線の続きのランプ）ときも、ここで本線が終わる）
+        const mainArm = (d: number) => {
+          if (!(mm & (1 << d))) return false;
+          const x = (cM % n) + DX[d], y = ((cM / n) | 0) + DY[d];
+          if (!g.inb(x, y)) return true;
+          const j = y * n + x, L = g.arriveLevel(lvM, j, d), t2 = L ? g.up[j] : g.road[j];
+          return t2 !== RoadType.Ramp && isHighway(t2);
+        };
+        if (fromStart ? !mainArm(dM) : !mainArm((dM + 4) & 7)) {
           jNodes.add(M.node);
           jEnds.push({ M, diverge: fromStart, nose: null, rampAt: edge, C, dead: true });
           continue;

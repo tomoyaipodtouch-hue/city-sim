@@ -24,6 +24,8 @@ export interface JChain {
   main1: JMain | null;
   fork0: number; // 始めの端が分かれ目のランプなら、そのノード（-1 = ちがう）
   join1: number; // 終わりの端が合わさり目のランプなら、そのノード
+  tA: number; // 始めの端の、本線（または幹）の向き
+  tZ: number;
   draw0: number; // 描く範囲（s）
   draw1: number;
 }
@@ -186,6 +188,12 @@ function build(g: Grid, nodes: number[], lift: number, preds: Map<number, number
   const mainA = !isJ(g, A), mainZ = !isJ(g, Z);
   // 端の向き：本線なら本線の進む向き（分かれる向きの 45° 左 / 合わさる向きの 45° 右）、分かれ目なら幹の向き
   let tA = (d0 + 7) & 7, tZ = (dl + 1) & 7;
+  // 本線の端：本線の進む向き（本線から来る向き・本線へ出ていく向きのうち、ランプの向きと 45° 以内のもの）。
+  // T字・Y字の合わさる側の本線の端では、ランプが本線にまっすぐ続くこともある
+  const isMainNode = (v: number) => { const t = g.nodeType(v); return t !== RoadType.Ramp && !!ROADS[t]?.highway; };
+  const turnAbs = (a: number, b: number) => { const t = (b - a + 8) & 7; return t > 4 ? 8 - t : t; };
+  if (mainA) for (const p of preds.get(A) ?? []) { const d = dirTo(g, p, A); if (d >= 0 && isMainNode(p) && turnAbs(d, d0) <= 1) { tA = d; break; } }
+  if (mainZ) for (const q of succs.get(Z) ?? []) { const d = dirTo(g, Z, q); if (d >= 0 && isMainNode(q) && turnAbs(dl, d) <= 1) { tZ = d; break; } }
   if (!mainA) { const p = preds.get(A)?.[0]; tA = p !== undefined && (preds.get(A)?.length ?? 0) === 1 ? dirTo(g, p, A) : d0; }
   if (!mainZ) { const s = succs.get(Z)?.[0]; tZ = s !== undefined && (succs.get(Z)?.length ?? 0) === 1 ? dirTo(g, Z, s) : dl; }
   const unit = (d: number): [number, number] => { const l = Math.hypot(DX[d], DY[d]); return [DX[d] / l, DY[d] / l]; };
@@ -242,6 +250,7 @@ function build(g: Grid, nodes: number[], lift: number, preds: Map<number, number
   };
   const C: JChain = {
     nodes, x: Float32Array.from(X), z: Float32Array.from(Z2), h: Float32Array.from(Hh), s: S, len: S[m - 1], bound,
+    tA, tZ,
     main0: mainA ? mainOf(A, ax, az, 1) : null,
     main1: mainZ ? mainOf(Z, zx, zz, 1) : null,
     fork0: mainA ? -1 : A,
@@ -281,13 +290,13 @@ export function jctSegs(g: Grid, chains: JChain[]) {
     const A = nodes[0];
     const aSplit = !isJ(g, A) || C.fork0 >= 0;
     if (aSplit && C.draw0 === bound[0]) {
-      const tin = C.main0 ? (dirs[0] + 7) & 7 : -1;
+      const tin = C.main0 ? C.tA : -1;
       if (tin >= 0) m.set(jKey(A, tin, dirs[0]), { C, s0: bound[0], s1: bound[1] });
       else for (let din = 0; din < 8; din++) if (!m.has(jKey(A, din, dirs[0]))) m.set(jKey(A, din, dirs[0]), { C, s0: bound[0], s1: bound[1] });
     }
     const Z = nodes[last];
     if (C.draw1 === bound[bound.length - 1]) {
-      const tout = C.main1 ? (dirs[last - 1] + 1) & 7 : -1;
+      const tout = C.main1 ? C.tZ : -1;
       if (tout >= 0) m.set(jKey(Z, dirs[last - 1], tout), { C, s0: bound[last], s1: bound[last + 1] });
       else for (let d = 0; d < 8; d++) if (!m.has(jKey(Z, dirs[last - 1], d))) m.set(jKey(Z, dirs[last - 1], d), { C, s0: bound[last], s1: bound[last + 1] });
     }
