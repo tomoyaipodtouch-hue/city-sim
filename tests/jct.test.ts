@@ -285,7 +285,8 @@ describe('junction ramp ends meet a carriageway', () => {
           const c = v % N, m = v >= N ? g.conn1[c] : g.conn[c];
           return chains.filter((C) => C.main0?.node === v || C.main1?.node === v).length === 2 && popc(m) === 3;
         });
-        expect(ends.length, 'one Y-split cell at the end of the branch').toBeGreaterThanOrEqual(1);
+        const info = [...anchors].map((v) => { const c = v % N, m = v >= N ? g.conn1[c] : g.conn[c]; return `${c % n},${(c / n) | 0}/L${v >= N ? 1 : 0}: conn=${m.toString(2)} chains=${chains.filter((C) => C.main0?.node === v || C.main1?.node === v).length}`; });
+        expect(ends.length, 'one Y-split cell at the end of the branch: ' + info.join(' | ')).toBeGreaterThanOrEqual(1);
       }
     });
 });

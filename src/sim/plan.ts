@@ -1,6 +1,7 @@
 // ツールの計画（プレビューと実行の両方で使う）
 import { Grid } from './grid';
 import { DX, DY, MAX_ROAD_GRADE, CELL, WATER_LEVEL, QUAY_LAND, dirOf, isDiag, opp } from './constants';
+import { checkHwRail, isElevHighway, HWR_MSG_STATION, HWR_MSG_PARALLEL_RAIL } from './hwrail';
 import { ROADS, RoadType, ZoneType, ZONE_COST, POWER_LINE_COST, CIVIC, CivicId, BRIDGE_COST_MUL, MAX_BRIDGE, OVERPASS_LIFT, RAMP_COST, isHighway, isGroundHighway, isUrbanElevated, isUrbanGround, LINES, LineKind, BUS_STOP_COST, ESTOP_COST } from './defs';
 
 export interface LinePath {
@@ -158,7 +159,30 @@ export function planRoad(g: Grid, path: LinePath, type: RoadType): RoadPlan {
     }
   }
   const lanes: Lane[] = raw.map((l) => ({ ...l, oneWay: !!def.oneWay, levels: [] }));
-  return finishRoadPlan(g, path, lanes, type, bad, reasons, uturns);
+  const plan = finishRoadPlan(g, path, lanes, type, bad, reasons, uturns);
+  return def.elevated && def.highway ? checkRoadOverRail(g, plan) : plan;
+}
+
+// 高架の高速道路が高架鉄道をまたぐ所：引いたあとの grid（複製）で、交差の前後に坂を作れるかを確かめる（hwrail.ts）
+function checkRoadOverRail(g: Grid, plan: RoadPlan): RoadPlan {
+  if (!plan.ok) return plan;
+  const n = g.n;
+  const up = new Set(plan.lanes.flatMap((l) => l.cells.filter((_, k) => l.levels[k] === 1)));
+  // 線路のマスか、斜めに線路が通る角の隣のマスがなければ、調べなくてよい
+  const near = [...up].some((c) => {
+    const x = c % n, y = (c / n) | 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (g.inb(x + dx, y + dy) && g.erail[g.idx(x + dx, y + dy)]) return true;
+    return false;
+  });
+  if (!near) return plan;
+  const sim = g.clone();
+  applyRoad(sim, plan);
+  linkUrbanEnds(sim);
+  const r = checkHwRail(sim, up);
+  if (r.ok) return plan;
+  const bad = new Set(plan.bad);
+  for (const c of r.bad) bad.add(c);
+  return { ...plan, ok: false, bad, reason: r.reason };
 }
 
 // 車線が決まったあとの計画（費用、階層、橋、勾配、地形）。pairDeck = 大通りの2本の車線で共通の橋の高さ。
@@ -1454,8 +1478,14 @@ export function planTransitLine(g: Grid, path: LinePath, kind: LineKind): Transi
         if (!ok) { bad.add(i); why('道路とは、まっすぐな場所で直角にしか交差できません（踏切）'); }
       }
     } else {
-      // 高架：上空の道路とは重ねられない
-      if (g.up[i]) { bad.add(i); why('高架の道路と重なっています'); }
+      // 高架：上空の道路とは重ねられない。高架鉄道は、高架の高速道路の下を横切れる（高速道路を持ち上げる。hwrail.ts）
+      if (g.up[i] && !(kind === 'erail' && isElevHighway(g.up[i]))) { bad.add(i); why('高架の道路と重なっています'); }
+      else if (g.up[i]) {
+        const din = k > 0 ? dirs[k - 1] : -1, dout = k < dirs.length ? dirs[k] : -1;
+        const along = [din, dout].some((dd) => dd >= 0 && g.conn1[i] & ((1 << dd) | (1 << opp(dd))));
+        if (along) { bad.add(i); why(HWR_MSG_PARALLEL_RAIL); }
+        if (g.estn[i]) { bad.add(i); why(HWR_MSG_STATION); }
+      }
       // 高架鉄道（8m）とモノレール（11m）は高さが違うので交差できる。ただし同じ向きに重ねて引くことはできない
       const other = kind === 'erail' ? g.mono : g.erail;
       if (other[i] && (other[i] & ((1 << d) | (1 << opp(d))))) { bad.add(i); why('ほかの高架の線路と重なっています'); }
@@ -1470,6 +1500,18 @@ export function planTransitLine(g: Grid, path: LinePath, kind: LineKind): Transi
     if (!g.inb(ax, ay) || !g.inb(bx, by)) continue;
     const dd = dirOf(bx - ax, by - ay);
     if (mask[ay * n + ax] & (1 << dd)) { bad.add(i); why('斜めの線路どうしは交差できません'); }
+  }
+  // 高架鉄道が高架の高速道路の下を通る所：引いたあとの grid（複製）で、高速道路に坂を作れるかを確かめる
+  if (kind === 'erail' && bad.size === 0 && cells.length > 1 && cells.some((c) => {
+    const x = c % n, y = (c / n) | 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (g.inb(x + dx, y + dy) && isElevHighway(g.up[g.idx(x + dx, y + dy)])) return true;
+    return false;
+  })) {
+    const sim = g.clone();
+    applyTransitLine(sim, { ok: true, kind, path, cost: 0, bad, reason: '' });
+    const r = checkHwRail(sim, new Set(cells));
+    for (const c of r.bad) bad.add(c);
+    if (!r.ok) why(r.reason);
   }
   return { ok: bad.size === 0 && cells.length > 1, kind, path, cost: Math.round(cost), bad, reason };
 }
@@ -2819,6 +2861,7 @@ export function planEStop(g: Grid, x: number, y: number): EStopPlan {
       // 同じ線路の上で、ほかの駅と重なったり、すぐ続いたりはできない（隣の線路に並べるのはよい）
       const ends = [cells[0], cells[cells.length - 1]].flatMap((c, k) => { const cx = (c % n) + DX[d] * (k ? 1 : -1), cy = ((c / n) | 0) + DY[d] * (k ? 1 : -1); return g.inb(cx, cy) ? [g.idx(cx, cy)] : []; });
       if (cells.some((c) => g.estn[c]) || ends.some((c) => g.estn[c] !== 0)) return fail('同じ線路の上に、すでに駅があります', cells);
+      if ([...cells, ...ends].some((c) => isElevHighway(g.up[c]))) return fail('高架の高速道路の下には駅を置けません', cells);
       if (!estopRoads(g, cells).length) return fail('ホームの下か横に、一般の道路が必要です（歩いて出入りするため）', cells);
       return { ok: true, cells, remove: false, reason: '', cost: ESTOP_COST };
     }

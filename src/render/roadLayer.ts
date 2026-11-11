@@ -2490,7 +2490,7 @@ export class RoadLayer {
       if (urSkip.has(node) || jNodes.has(node)) continue;
       S.owner = node;
       viaCur = level === 1 && isUrbanElevated(t);
-      pierOk = !(level === 1 && (g.road[i] || g.rail[i]));
+      pierOk = !(level === 1 && (g.road[i] || g.rail[i] || g.erail[i]));
       const x = i % n, y = (i / n) | 0;
       const cx = (x + 0.5) * CELL, cz = (y + 0.5) * CELL;
       const ch = g.nodeH(node) + ROAD_LIFT;
@@ -3748,8 +3748,29 @@ export class RoadLayer {
         pier(x, z, ux, uz, rings, COL.pier);
         footing(x, z, ux, uz, 1.4, 1.75, gnd);
       };
+      // 高架鉄道の線路の中心線から、点 (px, pz) までの距離（近くのマスだけ調べる）。高架鉄道をまたぐ所では、橋脚を線路から離して長い桁で渡す
+      const railDist = (px: number, pz: number) => {
+        let best = Infinity;
+        const cx0 = Math.floor(px / CELL), cz0 = Math.floor(pz / CELL);
+        for (let yy = cz0 - 1; yy <= cz0 + 1; yy++)
+          for (let xx = cx0 - 1; xx <= cx0 + 1; xx++) {
+            if (!g.inb(xx, yy)) continue;
+            const m = g.erail[yy * n + xx];
+            if (!m) continue;
+            const ax = (xx + 0.5) * CELL, az = (yy + 0.5) * CELL;
+            for (let d = 0; d < 8; d++) {
+              if (!(m & (1 << d))) continue;
+              const bx = ax + DX[d] * CELL, bz = az + DY[d] * CELL;
+              const vx = bx - ax, vz = bz - az, t = Math.max(0, Math.min(1, ((px - ax) * vx + (pz - az) * vz) / (vx * vx + vz * vz)));
+              best = Math.min(best, Math.hypot(px - ax - vx * t, pz - az - vz * t));
+            }
+          }
+        return best;
+      };
+      const RAIL_KEEP = 8.5; // 線路の中心から橋脚の中心まで（架線柱 5.35m + 橋脚の半径 + 余裕。高架鉄道の柱にも当たらない）
       // マス A と、向き d の隣 B の境：下を道路・線路が通るか
-      const blocked = (A: number, d: number) => (g.road[A] !== 0 && (g.conn[A] & (1 << d)) !== 0) || (g.rail[A] & (1 << d)) !== 0;
+      const blocked = (A: number, d: number) => (g.road[A] !== 0 && (g.conn[A] & (1 << d)) !== 0) || (g.rail[A] & (1 << d)) !== 0 ||
+        railDist(((A % n) + 0.5 + DX[d] / 2) * CELL, (((A / n) | 0) + 0.5 + DY[d] / 2) * CELL) < RAIL_KEEP;
       const straight = (c: number, d: number) => c >= 0 && isUrbanElevated(g.up[c]) && (g.conn1[c] & (1 << d)) !== 0 && (g.conn1[c] & (1 << opp(d))) !== 0;
       const tryEdge = (A: number, d: number) => {
         const B = nb(A, d);
@@ -3768,7 +3789,7 @@ export class RoadLayer {
         }
         // 斜めの区間：x が偶数のマスの中心（約 45m ごと）
         for (const d of [1, 3])
-          if (!(x & 1) && straight(i, d) && !g.road[i] && !g.rail[i]) pierAt((x + 0.5) * CELL, (y + 0.5) * CELL, DX[d] * Math.SQRT1_2, DY[d] * Math.SQRT1_2, g.upH[i] + ROAD_LIFT, g.up[i]);
+          if (!(x & 1) && straight(i, d) && !g.road[i] && !g.rail[i] && railDist((x + 0.5) * CELL, (y + 0.5) * CELL) >= RAIL_KEEP) pierAt((x + 0.5) * CELL, (y + 0.5) * CELL, DX[d] * Math.SQRT1_2, DY[d] * Math.SQRT1_2, g.upH[i] + ROAD_LIFT, g.up[i]);
       }
     }
     // ---- 大通りの交差点と転回場 ----

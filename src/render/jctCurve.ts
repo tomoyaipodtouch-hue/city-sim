@@ -156,6 +156,8 @@ export function findJctChains(g: Grid, lift: number): JChain[] {
   const startEdges: [number, number][] = [];
   for (const v of J) {
     for (const p of preds.get(v) ?? []) if (!inner(p)) startEdges.push([p, v]);
+    // 分かれ目・合わさり目のランプから、そのまま本線へ入る1歩（途中のランプのマスがない鎖）
+    if (!inner(v)) for (const w of succs.get(v) ?? []) if (!isJ(g, w)) startEdges.push([v, w]);
   }
   for (const [a, b0] of startEdges) {
     const nodes = [a];
