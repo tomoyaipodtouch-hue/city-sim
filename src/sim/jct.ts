@@ -306,7 +306,7 @@ class Router {
     this.B = 2 * RB + 1;
     this.bx0 = Math.round(ox) - RB;
     this.by0 = Math.round(oy) - RB;
-    const S = this.B * this.B * 16 * NH;
+    const S = this.B * this.B * 24 * NH;
     this.dist = new Float32Array(S);
     this.prev = new Int32Array(S);
     this.stamp = new Int32Array(S);
@@ -411,10 +411,10 @@ class Router {
         for (let k = -sl; k <= span + sl; k++) headMask |= bit(f + 16 + k * sg);
       }
     }
-    // 状態：マス・向き・（予備：直前に曲がったか。いまは続けて曲がってよいので常に 0）・高さの段
-    const SID = (lc: number, d: number, hs: number, t = 0) => ((lc * 8 + d) * 2 + t) * NH + hs;
+    // 状態：マス・向き・最後に曲がった向き（0 = まだ、1 = 右、2 = 左）・高さの段
+    const SID = (lc: number, d: number, hs: number, t = 0) => ((lc * 8 + d) * 3 + t) * NH + hs;
     // 出発点：本線から新しく分かれる、または同じ本線から来るランプから分かれる
-    interface Start { lc: number; d: number; hs: number; g0: number; prefix: PNode[]; fork: boolean }
+    interface Start { lc: number; d: number; hs: number; g0: number; prefix: PNode[]; fork: boolean; turn: number }
     const starts: Start[] = [];
     if (E.fresh && mv.from.inb)
       for (let k = E.dRange[0]; k <= E.dRange[1]; k++) {
@@ -422,7 +422,7 @@ class Router {
         if (!P) continue;
         const last = P[P.length - 1], lc = this.local(last.c);
         if (lc < 0) continue;
-        starts.push({ lc, d: opp(mv.from.dir), hs: last.hs, g0: 0.3 * Math.abs(k - E.dPref), prefix: P, fork: false });
+        starts.push({ lc, d: opp(mv.from.dir), hs: last.hs, g0: 0.3 * Math.abs(k - E.dPref), prefix: P, fork: false, turn: 0 });
       }
     if (E.fork || cdOpts)
       for (const p of this.nodes.values()) {
@@ -436,7 +436,7 @@ class Router {
           for (let hs = Math.max(0, p.hs - 1); hs <= Math.min(HMAX, p.hs + 1); hs++) {
             const L = hs ? 1 : 0;
             if (!this.okState(j, hs) || !this.okStep(p.c, p.L, nd, L)) continue;
-            starts.push({ lc, d: nd, hs, g0: 1.5, prefix: [{ c: p.c, L: p.L, hs: p.hs }, { c: j, L, hs }], fork: true });
+            starts.push({ lc, d: nd, hs, g0: 1.5, prefix: [{ c: p.c, L: p.L, hs: p.hs }, { c: j, L, hs }], fork: true, turn: nd === ((p.outDir + 1) & 7) ? 1 : 2 });
           }
         }
       }
@@ -477,7 +477,7 @@ class Router {
     };
     const heap = new Heap();
     for (let q = 0; q < starts.length; q++) {
-      const s = starts[q], id = SID(s.lc, s.d, s.hs, s.fork ? 1 : 0);
+      const s = starts[q], id = SID(s.lc, s.d, s.hs, s.turn);
       if (stamp[id] === gen && dist[id] <= s.g0) continue;
       stamp[id] = gen;
       dist[id] = s.g0;
@@ -493,19 +493,19 @@ class Router {
       const id = heap.pop();
       if (++iter > 400000) break;
       const g0 = dist[id];
-      const hs = id % NH, tr = Math.floor(id / NH) & 1, d = Math.floor(id / NH / 2) & 7, lc = Math.floor(id / NH / 16);
+      const hs = id % NH, tr = Math.floor(id / NH) % 3, d = Math.floor(id / NH / 3) & 7, lc = Math.floor(id / NH / 24);
       if (g0 + H(lc) < fk - 1e-4) continue;
       const c = this.global(lc), L = hs ? 1 : 0;
       // 本線への合流の始まりのマス
       const gl = goals.get(lc);
       if (gl)
         for (const G of gl) {
-          if (hs < G.hsMin || hs > G.hsMax || turnAbs(d, G.f) > 1 || (tr && d !== G.f)) continue;
+          if (hs < G.hsMin || hs > G.hsMax || turnAbs(d, G.f) > 1) continue;
           if ((hs ? 1 : 0) !== G.suffix[0].L) continue;
           const tot = g0 + G.g1 + LACC;
           if (tot < best) { best = tot; bestId = id; bestGoal = G; bestJoin = null; }
         }
-      for (const nd of tr ? [d] : [(d + 7) & 7, d, (d + 1) & 7]) {
+      for (const nd of [(d + 7) & 7, d, (d + 1) & 7]) {
         if (!(headMask & bit(nd))) continue;
         const j = stepC(w, c, nd);
         if (j < 0) continue;
@@ -521,7 +521,9 @@ class Router {
         for (let h2 = Math.max(0, hs - 1); h2 <= Math.min(HMAX, hs + 1); h2++) {
           const L2 = h2 ? 1 : 0;
           if (!this.okState(j, h2) || !this.okStep(c, L, nd, L2)) continue;
-          let cost = len + (nd !== d ? 0.3 : 0) + (h2 !== hs ? 0.12 : 0) + (h2 ? 0.01 : 0);
+          // 曲がる向き（0 = まっすぐ、1 = 右、2 = 左）。曲がるたびに少し高く、前と逆に曲がる（S字・1マスの横ずれ）と大きく高くつく
+          const sg = nd === d ? 0 : nd === ((d + 1) & 7) ? 1 : 2;
+          let cost = len + (sg ? 0.55 : 0) + (sg && tr && sg !== tr ? 1.8 : 0) + (h2 !== hs ? 0.12 : 0) + (h2 ? 0.01 : 0);
           // 交差点から遠いほど少し高くつく（ランプを本線のそばに寄せて、ジャンクションを小さくまとめる）
           {
             const x = (j % this.n) + 0.5 - this.ox, y = ((j / this.n) | 0) + 0.5 - this.oy;
@@ -531,7 +533,7 @@ class Router {
             const x = (j % this.n) + 0.5 - this.ox, y = ((j / this.n) | 0) + 0.5 - this.oy;
             cost += E.shape * Math.abs(Math.hypot(x, y) - shapeR) * len;
           }
-          const nid = SID(lj, nd, h2, 0), ng = g0 + cost; // 続けて曲がってよい（半径 30〜40m。描くときにならす）
+          const nid = SID(lj, nd, h2, sg || tr), ng = g0 + cost; // 続けて曲がってよい（半径 30〜40m。描くときにならす）
           if (stamp[nid] === gen && dist[nid] <= ng) continue;
           stamp[nid] = gen;
           dist[nid] = ng;
@@ -545,7 +547,7 @@ class Router {
     const mid: PNode[] = [];
     let cur = bestId, sIdx = -1;
     for (;;) {
-      const hs = cur % NH, lc = Math.floor(cur / NH / 16);
+      const hs = cur % NH, lc = Math.floor(cur / NH / 24);
       mid.push({ c: this.global(lc), L: hs ? 1 : 0, hs });
       const p = prev[cur];
       if (p < 0) { sIdx = -1 - p; break; }

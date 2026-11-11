@@ -10,8 +10,6 @@ import { CELL, DX, DY } from '../sim/constants';
 import { RoadType, ROADS } from '../sim/defs';
 
 export const JR_HALF = 3.0; // 描くランプの車道の半分の幅（1車線 3.25m ＋ 路肩で、欄干の内側 6.0m）
-const SIG_XY = 6; // 平面の形をならす幅（m）
-const SIG_H = 10; // 高さをならす幅（m）
 const LANE_SHIFT = 1.9; // 本線から分かれる・合流する点の、本線の中心からランプの側への横のずれ（右の車線の中心あたり）
 
 export interface JChain {
@@ -58,6 +56,57 @@ export function jAt(C: JChain, s: number, out: JPt = { x: 0, z: 0, h: 0, tx: 1, 
   out.tx = tx / l;
   out.tz = tz / l;
   return out;
+}
+
+const CORR = 0.4 * CELL; // 曲線がマスの中心線から離れてよい長さ（となりのマスの道路や柱に重ならない）
+const H_CORR = 1.0; // 高さを動かしてよい幅（m）。立体交差の下の空きは 6m より十分に大きい
+const FSTEP = 4; // ならすときの点の間隔（m）
+
+// 曲率の変化が小さい曲線（自然なスプラインに近い）を、帯の中で求める。pinA..pinZ の外（延長と端の点）は動かさない
+function fair(xs: number[], zs: number[], hs: number[], pinA: number, pinZ: number) {
+  const m = xs.length;
+  const idx: number[] = [];
+  for (let i = 0; i < m; i += FSTEP) idx.push(i);
+  if (idx[idx.length - 1] !== m - 1) idx.push(m - 1);
+  for (const q of [pinA, pinZ]) if (!idx.includes(q)) idx.push(q);
+  idx.sort((a, b) => a - b);
+  const K = idx.length;
+  const ox = idx.map((i) => xs[i]), oz = idx.map((i) => zs[i]), oh = idx.map((i) => hs[i]);
+  const pin = idx.map((i) => i <= pinA || i >= pinZ);
+  // はじめは少しならした形から
+  const g = (a: number[], sig: number) => Array.from(smooth(Float64Array.from(a), sig, true));
+  const cx = g(ox, 2), cz = g(oz, 2), ch = g(oh, 3);
+  for (let k = 0; k < K; k++) if (pin[k]) { cx[k] = ox[k]; cz[k] = oz[k]; ch[k] = oh[k]; }
+  // 4階差分（曲がりの変化）を小さくする。ガウス・ザイデル法で、毎回帯の中へ戻す
+  const lam = 0.12;
+  for (let it = 0; it < 900; it++) {
+    for (let k = 2; k < K - 2; k++) {
+      if (pin[k]) continue;
+      const fx = cx[k - 2] - 4 * cx[k - 1] + 6 * cx[k] - 4 * cx[k + 1] + cx[k + 2];
+      const fz = cz[k - 2] - 4 * cz[k - 1] + 6 * cz[k] - 4 * cz[k + 1] + cz[k + 2];
+      const fh = ch[k - 2] - 4 * ch[k - 1] + 6 * ch[k] - 4 * ch[k + 1] + ch[k + 2];
+      cx[k] -= lam * fx;
+      cz[k] -= lam * fz;
+      ch[k] -= lam * fh;
+      const dx = cx[k] - ox[k], dz = cz[k] - oz[k], d = Math.hypot(dx, dz);
+      if (d > CORR) { cx[k] = ox[k] + (dx * CORR) / d; cz[k] = oz[k] + (dz * CORR) / d; }
+      ch[k] = Math.max(oh[k] - H_CORR, Math.min(oh[k] + H_CORR, ch[k]));
+    }
+  }
+  // 1m ごとの点へ（Catmull-Rom）
+  const X = new Float64Array(m), Z2 = new Float64Array(m), Hh = new Float64Array(m);
+  for (let k = 0; k + 1 < K; k++) {
+    const i0 = idx[k], i1 = idx[k + 1];
+    const a = Math.max(0, k - 1), b = Math.min(K - 1, k + 2);
+    for (let i = i0; i <= i1; i++) {
+      const u = (i - i0) / (i1 - i0 || 1), u2 = u * u, u3 = u2 * u;
+      const cr = (p0: number, p1: number, p2: number, p3: number) => 0.5 * (2 * p1 + (-p0 + p2) * u + (2 * p0 - 5 * p1 + 4 * p2 - p3) * u2 + (-p0 + 3 * p1 - 3 * p2 + p3) * u3);
+      X[i] = cr(cx[a], cx[k], cx[k + 1], cx[b]);
+      Z2[i] = cr(cz[a], cz[k], cz[k + 1], cz[b]);
+      Hh[i] = cr(ch[a], ch[k], ch[k + 1], ch[b]);
+    }
+  }
+  return { X, Z2, Hh };
 }
 
 function smooth(a: Float64Array, sig: number, fixedEnds: boolean) {
@@ -165,19 +214,9 @@ function build(g: Grid, nodes: number[], lift: number, preds: Map<number, number
   }
   at.push(xs.length);
   xs.push(P[P.length - 1][0]); zs.push(P[P.length - 1][1]); hs.push(P[P.length - 1][2]);
-  let X = smooth(Float64Array.from(xs), SIG_XY, true), Z2 = smooth(Float64Array.from(zs), SIG_XY, true), Hh = smooth(Float64Array.from(hs), SIG_H, true);
-  // 端（本線や幹のランプ）の点は、ならす前の位置に戻す（その近くは少しずつ）
-  const iA = at[3], iZ = at[P.length - 4];
-  for (const [i0, sg] of [[iA, 1], [iZ, -1]] as const) {
-    const dx = xs[i0] - X[i0], dz = zs[i0] - Z2[i0], dh = hs[i0] - Hh[i0];
-    const R = SIG_XY * 2.5;
-    for (let k = 0; k < X.length; k++) {
-      const dist = (k - i0) * sg; // 端から内側へ（外側は全部戻す）
-      const w = dist <= 0 ? 1 : dist >= R ? 0 : 1 - dist / R;
-      const ww = w * w * (3 - 2 * w);
-      X[k] += dx * ww; Z2[k] += dz * ww; Hh[k] += dh * ww;
-    }
-  }
+  // 曲がり具合（曲率）がなるべく小さく、少しずつ変わる曲線にする：マスの中心線から ±CORR m の帯の中で、
+  // 4m おきの点の「曲がりの変化」を減らすようにくり返し動かす（両端の延長は本線・幹の向きのまま動かさない）。高さも同じ
+  const { X, Z2, Hh } = fair(xs, zs, hs, at[3], at[P.length - 4]);
   // 曲線の長さ
   const m = X.length, S = new Float32Array(m);
   for (let k = 1; k < m; k++) S[k] = S[k - 1] + Math.hypot(X[k] - X[k - 1], Z2[k] - Z2[k - 1]);
