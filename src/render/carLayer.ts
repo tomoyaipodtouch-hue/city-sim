@@ -9,6 +9,7 @@ import { RailLayer, TRACK_GAP } from './railLayer';
 import { isJctRamp, isUrbanHighway, urbanTurnOk } from '../sim/traffic';
 import { ROAD_LIFT, SIG_STOP, avenueMedianDir, drawWidth } from './roadLayer';
 import { findTurnbacks, Turnback, Island, islandSpread, ISLAND_GAP } from './turnback';
+import { findJctChains, jAt, jctSegs, JSeg, jKey, JPt } from './jctCurve';
 import { findURamps, urampAt, urampH, urampS, urampSegs, urKey, URSeg, UPt } from './uramp';
 import { BOGIE, boxTruck, cityBus, garbageTruck, TRAIN_SPEC, TrainKind, hatchback, kei, minivan, person, pickup, sedan, suv, taxi, tractor, trailerBox, trailerTank, trainCar, vc } from './vehicles';
 import { createVehicleMaterial, vehicleUniforms } from './vehicleMaterial';
@@ -232,6 +233,8 @@ export class CarLayer {
   private ptCell: Cell | null = null; // pt があるマス
   private urSegs = new Map<number, URSeg>(); // 都市高速のランプの、描いた曲線の上を走るマス
   private urPt: UPt = { x: 0, z: 0, h: 0, tx: 0, tz: 1, o: 0 };
+  private jSegs = new Map<number, JSeg>(); // ジャンクションのランプの、描いた曲線の上を走るマス
+  private jPt: JPt = { x: 0, z: 0, h: 0, tx: 1, tz: 0 };
   enabled = true;
   drops = 0; // 止まったまま動けずに消した道路の車の数（確かめる用）
   showSubway = false;
@@ -801,6 +804,7 @@ export class CarLayer {
     this.grid = g;
     this.scanAvenues(g);
     this.urSegs = urampSegs(g, findURamps(g, ROAD_LIFT));
+    this.jSegs = jctSegs(g, findJctChains(g, ROAD_LIFT));
     this.traffic = traffic;
     this.cong = cong;
     this.scanEdges(g, traffic);
@@ -1445,6 +1449,18 @@ export class CarLayer {
         P.tz = q.tz;
       } else if (u) P.h = urampH(u.U, urampS(u.U, P.x, P.z));
     }
+    // ジャンクションのランプ：道路の層が描いたなめらかな曲線の上を走る
+    if (f.track === 'road' && this.jSegs.size) {
+      const u = this.jSegs.get(jKey(c.from, c.din, c.d));
+      if (u) {
+        const q = jAt(u.C, u.s0 + (u.s1 - u.s0) * t, this.jPt);
+        P.x = q.x;
+        P.z = q.z;
+        P.h = q.h;
+        P.tx = q.tx;
+        P.tz = q.tz;
+      }
+    }
   }
 
   // 道に沿って back m だけ後ろの点（トレーラーの連結部や車輪）
@@ -1968,7 +1984,7 @@ export class CarLayer {
         const rd = line || walk ? def : ROADS[rt] || ROADS[1];
         let lane = walk ? (def.width / 2 + 0.9) * (c.lane ? 1 : -1) : line ? TRACK_GAP : rd.oneWay ? (c.lane ? 1 : -1) * (rt === RoadType.Avenue ? AV_LANE : rd.width * 0.2) : (rd.width / 2) * 0.48;
         // 都市高速のランプでは、描いた曲線（車道の中心）を走る
-        if (f.track === 'road' && this.urSegs.get(urKey(c.from, c.din, c.d))?.lane0) lane = 0;
+        if (f.track === 'road' && (this.urSegs.get(urKey(c.from, c.din, c.d))?.lane0 || this.jSegs.has(jKey(c.from, c.din, c.d)))) lane = 0;
         // バス停で止まるバスは、車道の端の停車スペース（縁石から 0.4〜2.8m）に寄せる
         if (stopHere()) lane = drawWidth(g.road[c.from]) / 2 - 1.6;
         if (!walk && !line) {
