@@ -7,6 +7,8 @@ import { ROADS, RoadType, isHighway, isUrbanElevated } from '../sim/defs';
 import { AV_W, ROAD_LIFT, avLampBlock, avenueMedianDir, inRegion, junctionLamps, junctionPools } from './roadLayer';
 import { findURamps, urampAt, UR_END, UR_HALF } from './uramp';
 import { findJctChains, jAt, JR_HALF } from './jctCurve';
+import { findORamps, orLampSpots } from './oramp';
+import { ORAMP_LEN } from '../sim/grid';
 
 // soft = 街灯の光：中心が明るく、外へ長くうすく消える（寄ったとき、ふちのはっきりした円盤に見えないように）
 function glowTexture(soft = false) {
@@ -136,6 +138,21 @@ export class StreetLights {
         lamp.push(cx - nx * 2.0, base + 7.2, cz - nz * 2.0);
         pool.push(cx - nx * 2.6, P.h + 0.05, cz - nz * 2.6, 11);
         poles.push(cx, base, cz, Math.atan2(nz, -nx));
+      }
+    }
+    // 重ねランプ：外側の欄干の上に 25m ごと。ランプが分かれる・合わさる本線のマスでは、ランプの側に立てない
+    for (const G of findORamps(g, ROAD_LIFT)) {
+      for (let k = 0; k <= ORAMP_LEN; k++) {
+        const x = (G.r.start % n) + DX[G.r.a] * k, y = ((G.r.start / n) | 0) + DY[G.r.a] * k;
+        if (!g.inb(x, y)) continue;
+        const nd = N + y * n + x;
+        (urSide.get(nd) ?? urSide.set(nd, []).get(nd)!).push(G.rx * G.sg, G.rz * G.sg);
+      }
+      for (const P of orLampSpots(G)) {
+        const base = P.h + 0.9;
+        lamp.push(P.x - P.nx * 2.0, base + 7.2, P.z - P.nz * 2.0);
+        pool.push(P.x - P.nx * 2.6, P.h + 0.05, P.z - P.nz * 2.6, 11);
+        poles.push(P.x, base, P.z, Math.atan2(P.nz, -P.nx));
       }
     }
     // ジャンクションのランプ：描いた曲線の右側の欄干の上に、約 40m ごとに立てる（マスごとには立てない）

@@ -41,7 +41,7 @@ function inject(m: THREE.Material, key: string, ao: number, body: string, decl =
 // コンクリートの路面（高速道路・高架）は、板の目地と板ごとの色の違い
 export function createRoadSurfaceMaterial() {
   const m = new THREE.MeshLambertMaterial({ vertexColors: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
-  return inject(m, 'road-surface-4', 0.32, `
+  return inject(m, 'road-surface-5', 0.32, `
     vec2 p = vRw.xz;
     float code = floor(vRd.w + 0.5);
     float lanes = mod(code, 4.0);
@@ -74,8 +74,10 @@ export function createRoadSurfaceMaterial() {
     vec3 c = diffuseColor.rgb;
     // 道ごとの色の違い（舗装した時期の違い）
     float sv = sHash(vec2(seed * 0.37 + 0.11, 7.1));
-    c *= 0.95 + 0.1 * sv;
-    c *= mix(vec3(1.0), vec3(1.035, 1.0, 0.95), sHash(vec2(seed * 0.53 + 0.7, 3.3)));
+    // コンクリートの床版（高架・ランプ）はつなぎ目で色が変わって見えないよう、道ごとの違いをごく小さくする（板ごとの違いは下で）
+    float rv = conc > 0.5 ? 0.15 : 1.0;
+    c *= 1.0 + (0.1 * sv - 0.05) * rv;
+    c *= mix(vec3(1.0), vec3(1.035, 1.0, 0.95), sHash(vec2(seed * 0.53 + 0.7, 3.3)) * rv);
     // 広いむらと汚れ
     c *= 0.88 + 0.24 * nL.a;
     c *= 0.9 + 0.2 * nM.g;

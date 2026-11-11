@@ -122,7 +122,7 @@ export function orO(G: ORGeo, q: number) {
 }
 // 路面の半分の幅：低いところ（歩道の上を通るところ）では細くする
 export function orHalf(G: ORGeo, q: number) {
-  return OR_HALF - 0.9 * sstep((q - (G.len - 22)) / 16);
+  return OR_HALF - 1.15 * sstep((q - (G.len - 24)) / 18);
 }
 // 地面からの高さの割合（0 = 本線、1 = 一般道）
 export function orT(G: ORGeo, q: number) {
@@ -172,3 +172,31 @@ export function findORamps(g: Grid, lift: number): ORGeo[] {
   return out;
 }
 export const orKey = (from: number, to: number) => from * 4194304 + to;
+
+// q（本線の側からの長さ）で、ランプの外側の縁が本線の路面の外へ出るところ（q0）と、
+// 内側の欄干が本線の欄干から離れるところ（分かれ目の先端、qg）
+export function orEdges(G: ORGeo) {
+  let q0 = G.len, qg = G.len;
+  for (let q = 0; q < G.len; q += 0.25) {
+    const o = G.sg * orO(G, q);
+    if (q0 === G.len && o + OR_HALF >= G.hwHalf + 0.05) q0 = q;
+    if (o - OR_HALF - PAR >= G.hwHalf + PAR + 0.05) { qg = q; break; }
+  }
+  return { q0, qg };
+}
+// 照明柱を立てる点（ランプの外側の欄干の上、25m ごと、地面から 3m 以上の高架の部分）。nx, nz は外向き
+export function orLampSpots(G: ORGeo): { x: number; z: number; h: number; nx: number; nz: number }[] {
+  const out: { x: number; z: number; h: number; nx: number; nz: number }[] = [];
+  const { qg } = orEdges(G);
+  const P: ORPt = { x: 0, z: 0, h: 0, tx: 1, tz: 0, o: 0 };
+  for (let q = Math.max(qg + 4, 12); q < G.len; q += 25) {
+    const s = G.r.entry ? G.len - q : q;
+    orAt(G, s, P);
+    if (P.h - orGroundH(G, s) < 3) break;
+    let nx = -P.tz, nz = P.tx;
+    if ((nx * G.rx + nz * G.rz) * G.sg < 0) { nx = -nx; nz = -nz; }
+    const off = orHalf(G, q) + 0.12;
+    out.push({ x: P.x + nx * off, z: P.z + nz * off, h: P.h, nx, nz });
+  }
+  return out;
+}

@@ -16,7 +16,7 @@ import { CELL, DX, DY, dirOf, isDiag, opp } from '../sim/constants';
 import { ROADS, RoadType, isHighway, isUrbanElevated } from '../sim/defs';
 import type { TreeSpot } from './buildingGen';
 import { findJctChains, JChain, jAt, JPt, JR_HALF, mainLocal, JMain } from './jctCurve';
-import { findORamps, orAt, orGroundH, orHalf, orO, OR_HALF, OR_LANE, ORGeo, ORPt } from './oramp';
+import { findORamps, orAt, orEdges, orGroundH, orHalf, orHwH, orO, OR_HALF, OR_LANE, ORPt } from './oramp';
 import { findURamps, URamp, UR_END, UR_HALF, urampAt, urampS, urGore, urHw, urStart, UPt } from './uramp';
 
 export const ROAD_LIFT = 0.3;
@@ -1511,6 +1511,7 @@ export class RoadLayer {
       hs: [number, number]; // 縁の路面の高さ
       para: [boolean, boolean]; // 欄干があるか（ない側は、床版の縁だけ）。区間は両端の点にあるときだけ
       sp?: [boolean, boolean]; // 点 k から次の点までの区間に、欄干があるか（あれば para より優先）
+      ph?: [number, number]; // 欄干の高さ（なければ PAR_H）。重ねランプの地面に着くところで、0 まで下げる
     }
     const via = (V: VP[], spec = VIA_MAIN) => {
       const nP = V.length;
@@ -1548,9 +1549,10 @@ export class RoadLayer {
           const R0 = pa ? 0 : 20; // 欄干のない側は、縁の位置が違うので別の頂点
           if (pa) {
             // 欄干：内側の面、上の面、外側の面、水切りの溝
-            face(k, 1, 2, si, (p) => [p.e[si], p.hs[si] - 0.05], (p) => [p.e[si], p.hs[si] + PAR_H], COL.parapet, -1, 0);
-            face(k, 3, 4, si, (p) => [p.e[si], p.hs[si] + PAR_H], (p) => [p.e[si] + PAR_T, p.hs[si] + PAR_H], COL.parapet, 0, 1);
-            face(k, 5, 6, si, (p) => [p.e[si] + PAR_T, p.hs[si] + PAR_H], (p) => [p.e[si] + PAR_T, p.hs[si] + 0.05], COL.parapet, 1, 0);
+            const PH = (p: VP) => (p.ph ? p.ph[si] : PAR_H);
+            face(k, 1, 2, si, (p) => [p.e[si], p.hs[si] - 0.05], (p) => [p.e[si], p.hs[si] + PH(p)], COL.parapet, -1, 0);
+            face(k, 3, 4, si, (p) => [p.e[si], p.hs[si] + PH(p)], (p) => [p.e[si] + PAR_T, p.hs[si] + PH(p)], COL.parapet, 0, 1);
+            face(k, 5, 6, si, (p) => [p.e[si] + PAR_T, p.hs[si] + PH(p)], (p) => [p.e[si] + PAR_T, p.hs[si] + 0.05], COL.parapet, 1, 0);
             face(k, 7, 8, si, (p) => [p.e[si] + PAR_T, p.hs[si] + 0.05], (p) => [p.e[si] + PAR_T, p.hs[si] - 0.04], COL.groove, 1, 0);
           }
           const top = (p: VP): [number, number] => [ou(p, si, pa), p.hs[si] - (pa ? 0.04 : 0)];
@@ -1578,7 +1580,8 @@ export class RoadLayer {
             if (other < 0 || other + 1 >= nP) continue;
             const p = V[kk], sg = si ? 1 : -1;
             const P = (o: number, y: number) => [p.x + sg * p.nx * o, y, p.z + sg * p.nz * o];
-            quad2([P(p.e[si], p.hs[si] - FAS), P(p.e[si], p.hs[si] + PAR_H), P(p.e[si] + PAR_T, p.hs[si] + PAR_H), P(p.e[si] + PAR_T, p.hs[si] - FAS)], COL.parapet);
+            const ph = p.ph ? p.ph[si] : PAR_H;
+            quad2([P(p.e[si], p.hs[si] - FAS), P(p.e[si], p.hs[si] + ph), P(p.e[si] + PAR_T, p.hs[si] + ph), P(p.e[si] + PAR_T, p.hs[si] - FAS)], COL.parapet);
           }
         }
         if (st === 0) {
@@ -2410,15 +2413,6 @@ export class RoadLayer {
     const ors = findORamps(g, ROAD_LIFT);
     const orPt: ORPt = { x: 0, z: 0, h: 0, tx: 1, tz: 0, o: 0 };
     // ランプの q（本線の側からの長さ）で、外側の縁が本線の路面の外へ出るところと、内側の縁が本線の欄干から離れるところ
-    const orEdges = (G: ORGeo) => {
-      let q0 = G.len, qg = G.len;
-      for (let q = 0; q < G.len; q += 0.25) {
-        const o = G.sg * orO(G, q);
-        if (q0 === G.len && o + OR_HALF >= G.hwHalf + 0.05) q0 = q;
-        if (o - OR_HALF - PAR_T >= G.hwHalf + PAR_T + 0.05) { qg = q; break; }
-      }
-      return { q0, qg };
-    };
     for (const G of ors) {
       const { q0, qg } = orEdges(G);
       const s0 = G.r.entry ? G.len - qg : q0, s1 = G.r.entry ? G.len - q0 : qg;
@@ -3399,6 +3393,7 @@ export class RoadLayer {
     onGround = false;
     liftCur = 0;
     const orFoot: [number, number, number][] = []; // ランプの路面の点と、まわりの木をよける半径
+    const orLow: [number, number, number][] = []; // ランプの低いところの点と半径（その下の歩道は描かない）
     const SIGN_GREEN = new THREE.Color(0x1d7a46);
     for (const G of ors) {
       const { q0, qg } = orEdges(G);
@@ -3406,17 +3401,24 @@ export class RoadLayer {
       const sOf = (q: number) => (entry ? len - q : q);
       const owner = -1000 - G.r.start;
       S.owner = owner;
-      // 帯の終わり（一般道の側）：路面が一般道より 8cm 高いところまで
+      // 帯の終わり（一般道の側）：路面が一般道の路面の高さに着くところ（段差を作らない）
       let qe = len;
       for (let q = len * 0.5; q <= len; q += 0.25) {
         const s2 = sOf(q);
         orAt(G, s2, orPt);
-        if (orPt.h - orGroundH(G, s2) < 0.08) { qe = q; break; }
+        if (orPt.h - orGroundH(G, s2) < 0.01) { qe = q; break; }
       }
-      interface OS { x: number; z: number; h: number; nx: number; nz: number; half: number; hi: number; ho: number; pi: boolean; q: number; o: number }
+      // 高架の部分（コンクリートの床版）と、地面に近い土の部分（一般道と同じアスファルト）の境
+      let qa = qe;
+      for (let q = qg; q <= qe; q += 0.25) {
+        const s2 = sOf(q);
+        orAt(G, s2, orPt);
+        if (orPt.h - orGroundH(G, s2) < WALL_H - 0.3) { qa = q; break; }
+      }
+      interface OS { x: number; z: number; h: number; nx: number; nz: number; half: number; hi: number; ho: number; pi: boolean; q: number; o: number; ph: number }
       const qs: number[] = [];
-      for (let k = 0; k <= 64; k++) qs.push(q0 + ((qe - q0) * k) / 64);
-      qs.push(qg, qg - 6);
+      for (let k = 0; k <= 80; k++) qs.push(q0 + ((qe - q0) * k) / 80);
+      qs.push(qg, qa);
       const L: OS[] = [];
       for (const q of [...new Set(qs)].filter((q) => q >= q0 && q <= qe).sort((a, b) => (entry ? b - a : a - b))) {
         if (L.length && Math.abs(L[L.length - 1].q - q) < 0.2) continue;
@@ -3425,38 +3427,91 @@ export class RoadLayer {
         // ランプの外側への横向き
         let nx = -orPt.tz, nz = orPt.tx;
         if (nx * G.rx * sg + nz * G.rz * sg < 0) { nx = -nx; nz = -nz; }
-        // 横の位置（ランプの外側が +）。本線の路面と重なるところは、内側の縁を本線の縁で止める
+        // 横の位置（ランプの外側が +）。本線の路面と重なるところは、内側の縁を本線の縁で止める（重ねない）
         const so = sg * orPt.o, hf = orHalf(G, q);
-        const oo = so + hf, oi = q < qg ? Math.max(so - hf, G.hwHalf - 0.1) : so - hf;
-        const m = (oi + oo) / 2 - so, half = (oo - oi) / 2;
+        const oo = so + hf, oi = q < qg ? Math.max(so - hf, G.hwHalf) : so - hf;
+        const m = (oi + oo) / 2 - so, half = Math.max(0.01, (oo - oi) / 2);
         const x = orPt.x + nx * m, z = orPt.z + nz * m;
         let hi = orPt.h;
-        // 分かれ目の手前では、本線の側の縁を本線の高さにそろえる
-        const hwH = G.hh[Math.max(0, Math.min(G.hh.length - 1, Math.round(s2 / G.cell + 0.5)))];
+        // 分かれ目の手前では、本線の側の縁を本線の路面の高さにそろえる（段差もすき間も作らない）
+        const hwH = orHwH(G, s2);
         if (q < qg) hi = orPt.h + (hwH - orPt.h) * (1 - Math.min(1, Math.max(0, (q - qg + 6) / 6)));
-        L.push({ x, z, h: orPt.h + 0.03, nx, nz, half, hi: hi + 0.03, ho: orPt.h + 0.03, pi: q >= qg, q, o: orPt.o });
+        // 地面に着くところでは、欄干をなめらかに低くして 0 にする
+        const gh = orGroundH(G, s2), ph = PAR_H * Math.min(1, Math.max(0, (orPt.h - gh) / 1.2));
+        // 着地の点は、一般道の路面とぴったり同じ高さ
+        const h = q >= qe - 0.01 ? gh : orPt.h;
+        L.push({ x, z, h, nx, nz, half, hi: q >= qe - 0.01 ? gh : hi, ho: h, pi: q >= qg, q, o: orPt.o, ph });
       }
       if (L.length < 2) continue;
-      for (const p of L) orFoot.push([p.x, p.z, p.half + 1.8]);
-      // 路面
-      const code = surfCode(lanesOf(RoadType.Ramp), SURF.concrete, false, hashInt(G.r.start, 7));
-      let along = 0;
-      const ids: [number, number][] = [];
-      L.forEach((p, k) => {
-        if (k) along += Math.hypot(p.x - L[k - 1].x, p.z - L[k - 1].z);
-        S.aux = [-p.half, along, p.half, code];
-        const a = S.v(p.x - p.nx * p.half, p.hi, p.z - p.nz * p.half, COL.slab);
-        S.aux = [p.half, along, p.half, code];
-        const b = S.v(p.x + p.nx * p.half, p.ho, p.z + p.nz * p.half, COL.slab);
-        ids.push([a, b]);
-      });
-      S.aux = AUX0;
-      for (let k = 0; k + 1 < ids.length; k++) {
-        // 面の向き（上向き）をそろえる
+      for (const p of L) {
+        orFoot.push([p.x, p.z, p.half + 1.8]);
+        // 低いところ（擁壁と土の部分）の下の歩道は作らない（擁壁が歩道を突き抜けないように）
+        if (p.h - g.groundAt(p.x, p.z) < 3.2) orLow.push([p.x, p.z, p.half + PAR_T + 0.3]);
+      }
+      // 路面：高架の部分は本線と同じコンクリート（同じ色・同じ道ごとの乱数・同じ目地の位置）、
+      // 地面に近い部分は下の一般道と同じアスファルト（同じ乱数）。境には伸縮継手
+      const lineSeed = (px: number, pz: number, ux: number, uz: number) => {
+        let tx = ux, tz = uz;
+        if (tx < -1e-3 || (Math.abs(tx) <= 1e-3 && tz < 0)) { tx = -tx; tz = -tz; }
+        return { seed: hashInt(Math.round((pz * tx - px * tz) / 4), Math.round(Math.atan2(tz, tx) * 4)), tx, tz };
+      };
+      const hwS = lineSeed(G.ox, G.oz, G.ux, G.uz);
+      const gx0 = G.ox + G.rx * G.gOff, gz0 = G.oz + G.rz * G.gOff;
+      const gS = lineSeed(gx0, gz0, G.ux, G.uz);
+      const gt = G.gType;
+      const codeC = surfCode(lanesOf(g.up[G.r.start]), SURF.concrete, false, hwS.seed);
+      const codeA = surfCode(lanesOf(gt), gt === RoadType.Avenue ? SURF.avenue : SURF.asphalt, sidewalkOf(gt) > 0 && !hasBarrier(gt), gS.seed);
+      const gHalf = drawWidth(gt) / 2;
+      const isA = (p: OS) => (entry ? p.q >= qa - 0.01 : p.q >= qa - 0.01);
+      const vtx = (p: OS, sd: number, asph: boolean) => {
+        const x = p.x + sd * p.nx * p.half, z = p.z + sd * p.nz * p.half, y = sd < 0 ? p.hi : p.ho;
+        if (asph) {
+          // 一般道の帯と同じ：横は一般道の中心線から、縦は一般道に沿った長さ
+          const lat = (x - gx0) * -gS.tz + (z - gz0) * gS.tx;
+          S.aux = [lat, x * gS.tx + z * gS.tz, gHalf, codeA];
+          return S.v(x, y, z, COL.asphalt);
+        }
+        S.aux = [(x - G.ox) * -hwS.tz + (z - G.oz) * hwS.tx, x * hwS.tx + z * hwS.tz, G.hwHalf, codeC];
+        return S.v(x, y, z, COL.slab);
+      };
+      for (let k = 0; k + 1 < L.length; k++) {
         const A = L[k], B = L[k + 1];
-        const cr = (B.x - A.x) * A.nz - (B.z - A.z) * A.nx; // 進む向きと外向きの外積の y 成分
-        if (cr < 0) { S.tri(ids[k][0], ids[k][1], ids[k + 1][1]); S.tri(ids[k][0], ids[k + 1][1], ids[k + 1][0]); }
-        else { S.tri(ids[k][0], ids[k + 1][1], ids[k][1]); S.tri(ids[k][0], ids[k + 1][0], ids[k + 1][1]); }
+        const asph = isA(A) && isA(B);
+        const a0 = vtx(A, -1, asph), a1 = vtx(A, 1, asph), b0 = vtx(B, -1, asph), b1 = vtx(B, 1, asph);
+        S.tri(a0, a1, b1);
+        S.tri(a0, b1, b0);
+      }
+      S.aux = AUX0;
+      // 伸縮継手（床版と土の部分の境）：細い黒い線
+      {
+        const J = L.find((p) => Math.abs(p.q - qa) < 0.15);
+        if (J && qa < qe - 1) seg2(J.x - J.nx * J.half, J.z - J.nz * J.half, J.x + J.nx * J.half, J.z + J.nz * J.half, Math.max(J.hi, J.ho), COL.groove, 0.12);
+      }
+      // 分かれ目の先端：本線の欄干とランプの内側の欄干を、丸い頭の壁でつなぐ（すき間をふさぐ）
+      {
+        orAt(G, sOf(qg), orPt);
+        let nx = -orPt.tz, nz = orPt.tx;
+        if (nx * G.rx * sg + nz * G.rz * sg < 0) { nx = -nx; nz = -nz; }
+        const inner = sg * orPt.o - orHalf(G, qg); // ランプの内側の縁（本線の中心から、外向き）
+        const hb = Math.min(orHwH(G, sOf(qg)), orPt.h);
+        const ux = entry ? orPt.tx : -orPt.tx, uz = entry ? orPt.tz : -orPt.tz; // 丸い先端は、出口は手前（来る車の側）、入口は先へ向ける
+        const hx = G.ox + G.ux * sOf(qg), hz = G.oz + G.uz * sOf(qg); // 本線の中心線の点
+        const sideX = G.rx * sg, sideZ = G.rz * sg;
+        const o0 = G.hwHalf, o1 = inner + PAR_T * 0; // 本線の欄干の内側の面から、ランプの欄干の内側の面まで
+        const mid = (o0 + o1) / 2, rw = (o1 - o0) / 2 + 0.01;
+        const cxN = hx + sideX * mid, czN = hz + sideZ * mid;
+        // 平らな頭の壁（上流側は縦の面、下流側は半円）
+        const SEG = 8, ring: [number, number][] = [];
+        for (let q = 0; q <= SEG; q++) {
+          const th = -Math.PI / 2 + (Math.PI * q) / SEG;
+          ring.push([cxN + sideX * Math.sin(th) * rw + ux * Math.cos(th) * rw * 0.9, czN + sideZ * Math.sin(th) * rw + uz * Math.cos(th) * rw * 0.9]);
+        }
+        const yb = hb - FAS, yt = hb + PAR_H;
+        for (let q = 0; q < SEG; q++) O.wall(ring[q][0], ring[q][1], yb, yt, ring[q + 1][0], ring[q + 1][1], yb, yt, COL.parapet);
+        // 上流側のふた
+        O.wall(ring[0][0], ring[0][1], yb, yt, ring[SEG][0], ring[SEG][1], yb, yt, COL.parapet);
+        const top = ring.map(([x, z]) => O.v(x, yt, z, COL.parapet));
+        for (let q = 1; q + 1 < top.length; q++) { O.tri(top[0], top[q], top[q + 1]); O.tri(top[0], top[q + 1], top[q]); }
       }
       // 路面の両端の白線（本線の側は分かれ目の先から）
       lineKeep = true;
@@ -3481,7 +3536,8 @@ export class RoadLayer {
         const nx = outRight ? p.nx : -p.nx, nz = outRight ? p.nz : -p.nz;
         const hs: [number, number] = outRight ? [p.hi, p.ho] : [p.ho, p.hi];
         const para: [boolean, boolean] = outRight ? [p.pi, true] : [true, p.pi];
-        return { x: p.x, z: p.z, h: p.h, nx, nz, e: [p.half, p.half], hs, para };
+        const ph: [number, number] = [p.ph, p.ph];
+        return { x: p.x, z: p.z, h: p.h, nx, nz, e: [p.half, p.half], hs, para: [para[0] && p.ph > 0.05, para[1] && p.ph > 0.05], ph };
       });
       via(V, VIA_RAMP);
       // 橋脚：地面から 3.5〜8m の所で、下の道路の車道の上ではない所に、20m 以上あけて2本まで（1本柱）
@@ -3507,18 +3563,6 @@ export class RoadLayer {
         footing(orPt.x, orPt.z, orPt.tx, orPt.tz, 1.0, 1.2, gnd);
         piers++;
         lastQ = q;
-      }
-      // 照明柱：ランプの外側の欄干の上に、25m ごと（高架の部分だけ）。ランプの上へ腕をのばす
-      for (let q = Math.max(qg, 10); q < qe - 6; q += 25) {
-        const s2 = sOf(q);
-        orAt(G, s2, orPt);
-        let nx = -orPt.tz, nz = orPt.tx;
-        if (nx * G.rx * sg + nz * G.rz * sg < 0) { nx = -nx; nz = -nz; }
-        const hf = orHalf(G, q), px = orPt.x + nx * (hf + 0.12), pz = orPt.z + nz * (hf + 0.12), base = orPt.h + 0.9, top = orPt.h + 9;
-        O.box(px - 0.1, base - 0.9, pz - 0.1, px + 0.1, top, pz + 0.1, COL.signal);
-        const ax = px - nx * 2.2, az = pz - nz * 2.2;
-        quad2([[px, top - 0.12, pz], [px, top, pz], [ax, top, az], [ax, top - 0.12, az]], COL.signal);
-        O.box(ax - 0.3, top - 0.22, az - 0.3, ax + 0.3, top - 0.02, az + 0.3, COL.signal);
       }
       // ---- 一般道の上の線 ----
       // ランプの車線の内側（本線の車線の側）への向き
@@ -3738,9 +3782,11 @@ export class RoadLayer {
       for (let c = 0; c < 4 && k < 2; c++) if (onOtherRoad(p[c * 3] * 0.8 + mx * 0.2, p[c * 3 + 2] * 0.8 + mz * 0.2, owner, -1, my)) k++;
       return k >= 2;
     };
+    const underLowRamp = (x: number, z: number) => orLow.some(([ox, oz, r]) => (x - ox) ** 2 + (z - oz) ** 2 < r * r);
     for (const q of walkQ) {
       const p = q.p;
       if (overlaps(p, -2)) continue;
+      if (orLow.length && [0, 1, 2, 3].some((c) => underLowRamp(p[c * 3], p[c * 3 + 2])) || (orLow.length && underLowRamp((p[0] + p[6]) / 2, (p[2] + p[8]) / 2))) continue;
       const cw = q.o !== undefined ? clipOf.get(q.o)?.walk : undefined;
       if (cw && cw.some((R) => inRegion(R, (p[0] + p[6]) / 2, (p[2] + p[8]) / 2) && inRegion(R, p[0], p[2]) && inRegion(R, p[3], p[5]) && inRegion(R, p[6], p[8]) && inRegion(R, p[9], p[11]))) continue;
       const w0 = O.I.length / 3;
