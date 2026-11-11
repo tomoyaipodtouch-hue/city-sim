@@ -1427,6 +1427,12 @@ export class CarLayer {
   }
 
   // マスの中の道のり（入口の半分 + 出口の半分）
+  // 向き a で入ってきた車が、向き b へ進む車と反対向き（135° 以上ちがう）か
+  private static oppose(a: number, b: number) {
+    if (a < 0) return false;
+    const t = (b - a + 8) & 7;
+    return t >= 3 && t <= 5;
+  }
   private static cellLen(c: Cell) {
     if (OR_LENS.size) {
       const l = OR_LENS.get(orKey(c.from, c.to));
@@ -1819,11 +1825,14 @@ export class CarLayer {
           if (box && !inBox(c.from) && c.nx === undefined) c.nx = this.nextRoad(f, c);
           const ex = c.nx?.[1] ?? c.d;
           // マップの端のマスを通りぬけて外へ出ていく車（c.to = c.from）は、この先に車はいない
+          // 両方向の高速道路（都市高速の片側1車線）とランプのマスでは、反対向きから入ってきた車（反対車線から右へ分かれる車など）は
+          // 反対車線を走っているので、前の車とみなさない（分かれ目・合わさり目で、反対車線の車を待って止まらないように）
+          const twoWayHw = !box && c.from !== c.to && (() => { const t = g.nodeType(c.to); return (isHighway(t) && !ROADS[t].oneWay) || t === RoadType.Ramp; })();
           if (gap === Infinity && c.from !== c.to)
             for (let d = 0; d < 8; d++) {
               if (d === opp(c.d)) continue;
               for (const o of lanes.get((c.to * 8 + d) * 2 + lb) ?? [])
-                if (o.c !== c && (!box || d === ex || (o.c.din === c.d && o.t < 0.6)) && (v = (1 - c.t) * len + o.t * o.L - o.r - me) < gap) {
+                if (o.c !== c && (!box || d === ex || (o.c.din === c.d && o.t < 0.6)) && !(twoWayHw && CarLayer.oppose(o.c.din, c.d)) && (v = (1 - c.t) * len + o.t * o.L - o.r - me) < gap) {
                   gap = v;
                   lim = o.c;
                 }

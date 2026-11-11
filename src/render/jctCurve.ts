@@ -99,7 +99,9 @@ const H_CORR = 1.0; // 高さを動かしてよい幅（m）。立体交差の�
 const FSTEP = 4; // ならすときの点の間隔（m）
 
 // 曲率の変化が小さい曲線（自然なスプラインに近い）を、帯の中で求める。pinA..pinZ の外（延長と端の点）は動かさない
-function fair(xs: number[], zs: number[], hs: number[], pinA: number, pinZ: number) {
+// wideA / wideZ：Y字の分かれ目の端。そこから DEAD_R m のあいだは帯を広げて（本線の向きから、ランプの向きへ、ゆっくり曲がれるように）
+const CORR_DEAD = 0.9 * CELL, DEAD_R = 64;
+function fair(xs: number[], zs: number[], hs: number[], pinA: number, pinZ: number, wideA = false, wideZ = false) {
   const m = xs.length;
   const idx: number[] = [];
   for (let i = 0; i < m; i += FSTEP) idx.push(i);
@@ -115,7 +117,7 @@ function fair(xs: number[], zs: number[], hs: number[], pinA: number, pinZ: numb
   for (let k = 0; k < K; k++) if (pin[k]) { cx[k] = ox[k]; cz[k] = oz[k]; ch[k] = oh[k]; }
   // 4階差分（曲がりの変化）を小さくする。ガウス・ザイデル法で、毎回帯の中へ戻す
   const lam = 0.12;
-  for (let it = 0; it < 900; it++) {
+  for (let it = 0, nIt = wideA || wideZ ? 3000 : 900; it < nIt; it++) {
     for (let k = 2; k < K - 2; k++) {
       if (pin[k]) continue;
       const fx = cx[k - 2] - 4 * cx[k - 1] + 6 * cx[k] - 4 * cx[k + 1] + cx[k + 2];
@@ -125,7 +127,10 @@ function fair(xs: number[], zs: number[], hs: number[], pinA: number, pinZ: numb
       cz[k] -= lam * fz;
       ch[k] -= lam * fh;
       const dx = cx[k] - ox[k], dz = cz[k] - oz[k], d = Math.hypot(dx, dz);
-      if (d > CORR) { cx[k] = ox[k] + (dx * CORR) / d; cz[k] = oz[k] + (dz * CORR) / d; }
+      let cr = CORR;
+      if (wideA) cr = Math.max(cr, CORR_DEAD * Math.max(0, 1 - (idx[k] - pinA) / DEAD_R));
+      if (wideZ) cr = Math.max(cr, CORR_DEAD * Math.max(0, 1 - (pinZ - idx[k]) / DEAD_R));
+      if (d > cr) { cx[k] = ox[k] + (dx * cr) / d; cz[k] = oz[k] + (dz * cr) / d; }
       ch[k] = Math.max(oh[k] - H_CORR, Math.min(oh[k] + H_CORR, ch[k]));
     }
   }
@@ -302,7 +307,7 @@ function build(g: Grid, nodes: number[], lift: number, preds: Map<number, number
   const joinA = !mainA && (preds.get(A)?.length ?? 0) > 1, forkZ = !mainZ && (succs.get(Z)?.length ?? 0) > 1;
   const pinA = joinA ? Math.round((at[3] + at[4]) / 2) : at[3];
   const pinZ = forkZ ? Math.round((at[P.length - 5] + at[P.length - 4]) / 2) : at[P.length - 4];
-  const { X, Z2, Hh } = fair(xs, zs, hs, pinA, pinZ);
+  const { X, Z2, Hh } = fair(xs, zs, hs, pinA, pinZ, dead0, dead1);
   // 曲線の長さ
   const m = X.length, S = new Float32Array(m);
   for (let k = 1; k < m; k++) S[k] = S[k - 1] + Math.hypot(X[k] - X[k - 1], Z2[k] - Z2[k - 1]);
