@@ -540,7 +540,12 @@ function car(mb: MeshBuilder, x: number, z: number, alongX: boolean, col: THREE.
 export function townHall(mb: MeshBuilder, f: LotFrame, tf: TF) {
   mb.flatRoofMat = MAT.membrane;
   const hw = f.W / 2, hd = f.D / 2, big = f.W >= 80;
-  const gA = C(0x557a92), gB = C(0x7fa3b8), alu = C(0xd9dcdf), aluS = C(0xb9bec4);
+  const gA = C(0x557a92), gB = C(0x7fa3b8), alu = C(0xd9dcdf);
+  // 木（明るいオーク色のひれ・柱・軒裏）。ガラスを主にして、木で暖かさを足す
+  const wood = C(0xc08a55), woodS = C(0xa5733f), soffit = C(0xd2a06a);
+  // 軒裏（下向きの面）。lit なら夜に下から照らされて光る
+  const under = (x0: number, z0: number, x1: number, z1: number, y: number, lit = false) =>
+    mb.quad([x0, y - 0.01, z0], [x1, y - 0.01, z0], [x1, y - 0.01, z1], [x0, y - 0.01, z1], soffit, lit ? PAT.lit : PAT.none);
   mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.07, LAWN);
   const sq = Math.max(13, f.D * 0.32);
   const bz0 = -hd + 3, bz1 = hd - sq;
@@ -550,14 +555,16 @@ export function townHall(mb: MeshBuilder, f: LotFrame, tf: TF) {
   const n = big ? 11 : 8, g0 = 5.4, ff = 3.6, aH = g0 + (n - 1) * ff;
   // 1階：奥まったガラスのロビーと柱
   mb.box(ax0 + 1.2, 0, az0 + 1.2, ax1 - 1.2, g0, az1 - 1.2, gB, PAT.fullglass, ROOF);
-  for (const s of sides(ax0, az0, ax1, az1)) for (let t = 0.4; t < s.L; t += Math.max(4, s.L / Math.round(s.L / 6))) { const p = s.P(t, -0.4); mb.box(p[0] - 0.3, 0, p[1] - 0.3, p[0] + 0.3, g0, p[1] + 0.3, alu); }
+  for (const s of sides(ax0, az0, ax1, az1)) for (let t = 0.4; t < s.L; t += Math.max(4, s.L / Math.round(s.L / 6))) { const p = s.P(t, -0.4); mb.box(p[0] - 0.3, 0, p[1] - 0.3, p[0] + 0.3, g0, p[1] + 0.3, wood); }
   mb.box(ax0, g0, az0, ax1, g0 + 0.6, az1, alu, PAT.none, alu);
-  // 上の階：カーテンウォールと、細い縦のアルミのひれ、2階ごとの細い床の帯
+  under(ax0, az0, ax1, az1, g0, true); // ロビーの上の木の軒裏
+  // 上の階：カーテンウォールと、縦の木のひれ（3m ごと）、2階ごとの細いアルミの床の帯
   mb.box(ax0, g0 + 0.6, az0, ax1, aH, az1, gA, PAT.curtain, ROOF);
-  for (const s of sides(ax0, az0, ax1, az1)) for (let t = 1.5; t < s.L - 0.5; t += 3) fin(mb, s, t, 0.12, 0.35, g0 + 0.6, aH, alu, aluS);
-  for (let i = 2; i < n; i += 2) wrap(mb, ax0, az0, ax1, az1, g0 + 0.6 + (i - 1) * ff - 0.12, g0 + 0.6 + (i - 1) * ff + 0.12, alu, PAT.none, 0.38);
+  for (const s of sides(ax0, az0, ax1, az1)) for (let t = 1.5; t < s.L - 0.5; t += 3) fin(mb, s, t, 0.2, 0.45, g0 + 0.6, aH, wood, woodS);
+  for (let i = 2; i < n; i += 2) wrap(mb, ax0, az0, ax1, az1, g0 + 0.6 + (i - 1) * ff - 0.1, g0 + 0.6 + (i - 1) * ff + 0.1, alu, PAT.none, 0.48);
   // 屋上：薄い張り出しのスラブ、奥まった機械室（ガラスのルーバー）
   slab(mb, ax0, az0, ax1, az1, aH, 0.55, 0.5, WHITE, ROOF);
+  under(ax0 - 0.5, az0 - 0.5, ax1 + 0.5, az1 + 0.5, aH);
   mb.box(ax0 + 4, aH + 0.55, az0 + 4, ax1 - 4, aH + 3.6, az1 - 6, C(0xcdd2d6), PAT.industrial, C(0xbfc5ca));
   greenRoof(mb, ax0, az0, ax1, az1, aH + 0.55, false);
   // ---- 議会棟：2階の基壇の上に、前へ張り出すガラスの議場 ----
@@ -566,24 +573,28 @@ export function townHall(mb: MeshBuilder, f: LotFrame, tf: TF) {
   const twoRows = f.W >= 80, pw = twoRows ? 19 : 12.5;
   const cx0 = ax1 + gap, cx1 = hw - 3 - pw, cz0 = bz0 + 1, cz1 = bz1 - 3, cH = 8.4;
   mb.box(cx0 + 1, 0, cz0 + 1, cx1 - 1, 4.2, cz1 - 1, gB, PAT.fullglass, ROOF);
-  for (const s of sides(cx0, cz0, cx1, cz1)) for (let t = 0.4; t < s.L; t += Math.max(4, s.L / Math.round(s.L / 6))) { const p = s.P(t, -0.4); mb.box(p[0] - 0.25, 0, p[1] - 0.25, p[0] + 0.25, 4.2, p[1] + 0.25, alu); }
+  for (const s of sides(cx0, cz0, cx1, cz1)) for (let t = 0.4; t < s.L; t += Math.max(4, s.L / Math.round(s.L / 6))) { const p = s.P(t, -0.4); mb.box(p[0] - 0.25, 0, p[1] - 0.25, p[0] + 0.25, 4.2, p[1] + 0.25, wood); }
   mb.box(cx0, 4.2, cz0, cx1, cH, cz1, gA, PAT.curtain, ROOF);
   slab(mb, cx0, cz0, cx1, cz1, 4.2, 0.45, 0.25, alu, alu);
+  under(cx0 - 0.25, cz0 - 0.25, cx1 + 0.25, cz1 + 0.25, 4.2, true);
   // 議場（高さ 9m のガラスの箱、前は基壇より 3m 張り出す）と深い屋根
   const hx0 = cx0 + 1.5, hx1 = cx1 - 1.5, hz0 = cz0 + 3, hz1 = bz1, hH = cH + 9;
   slab(mb, hx0, hz0, hx1, hz1, cH, 0.5, 0, alu, alu);
   mb.box(hx0, cH + 0.5, hz0, hx1, hH, hz1, gB, PAT.fullglass, ROOF);
-  for (const s of sides(hx0, hz0, hx1, hz1)) for (let t = 1.2; t < s.L - 0.5; t += 2.4) fin(mb, s, t, 0.1, 0.25, cH + 0.5, hH, alu, aluS);
+  for (const s of sides(hx0, hz0, hx1, hz1)) for (let t = 1.2; t < s.L - 0.5; t += 2.4) fin(mb, s, t, 0.16, 0.35, cH + 0.5, hH, wood, woodS);
   slab(mb, hx0, hz0, hx1, hz1, hH, 0.7, 2.0, WHITE, ROOF);
+  under(hx0 - 2, hz0 - 2, hx1 + 2, hz1 + 2, hH, true);
   greenRoof(mb, hx0, hz0, hx1, hz1, hH + 0.7);
   // 張り出しの下の明かりと、前の細い柱
-  mb.quad([hx0, cH - 0.01, cz1], [hx1, cH - 0.01, cz1], [hx1, cH - 0.01, hz1], [hx0, cH - 0.01, hz1], C(0xfff1d6), PAT.lit);
-  for (let x = hx0 + 1; x < hx1; x += (hx1 - hx0 - 2) / 3) mb.box(x - 0.15, 0, hz1 - 0.6, x + 0.15, cH, hz1 - 0.3, alu);
+  under(hx0, cz1, hx1, hz1, cH, true);
+  for (let x = hx0 + 1; x < hx1; x += (hx1 - hx0 - 2) / 3) mb.box(x - 0.2, 0, hz1 - 0.7, x + 0.2, cH, hz1 - 0.3, wood);
   // ---- ガラスの渡り廊下（2階の高さ）----
   const bzA = Math.max(az0, cz0) + 4, bzB = bzA + 5, by0 = 9.2, by1 = 12.6;
-  mb.box(ax1, by0 - 0.5, bzA, cx0, by0, bzB, alu, PAT.none, alu);
+  mb.box(ax1, by0 - 0.5, bzA, cx0, by0, bzB, wood, PAT.none, wood);
+  under(ax1, bzA, cx0, bzB, by0 - 0.5, true);
   mb.box(ax1, by0, bzA + 0.1, cx0, by1, bzB - 0.1, gB, PAT.fullglass, ROOF);
-  mb.box(ax1, by1, bzA, cx0, by1 + 0.45, bzB, WHITE, PAT.none, WHITE2);
+  for (let x = ax1 + 1.2; x < cx0 - 0.5; x += 1.6) for (const z of [bzA, bzB - 0.2]) mb.box(x - 0.1, by0, z, x + 0.1, by1, z + 0.2, wood);
+  mb.box(ax1, by1, bzA, cx0, by1 + 0.45, bzB, wood, PAT.none, WHITE2);
   // 1階の通り抜け（2棟の間の舗装）
   mb.ground(ax1, bz0, cx0, hd - 0.4, 0.09, PAVE2);
   // ---- 広場（議会棟の前と、2棟の間）----
@@ -592,6 +603,11 @@ export function townHall(mb: MeshBuilder, f: LotFrame, tf: TF) {
   mb.ground(sqX0, bz1, sqX1, hd - 0.4, 0.09, PAVE);
   for (let x = sqX0 + 5; x < sqX1; x += 5) mb.ground(x - 0.05, bz1, x + 0.05, hd - 0.4, 0.095, PAVE2);
   mb.ground(sqX0, bz1 + sq * 0.42, sqX1, bz1 + sq * 0.42 + 0.12, 0.095, PAVE2);
+  // 議会棟の前の木のデッキ（板の目地）
+  const dz0 = hz1 + 0.5, dz1 = hz1 + Math.min(6, sq * 0.32), dx0 = hx0 + 1, dx1 = hx1 - 1;
+  mb.ground(dx0, dz0, dx1, dz1, 0.1, C(0xb88a5c));
+  for (let x = dx0 + 0.6; x < dx1; x += 0.6) mb.ground(x - 0.03, dz0, x + 0.03, dz1, 0.105, C(0x9c7348));
+  for (let x = dx0 + 3; x < dx1 - 4; x += 9) bench(mb, x, dz0 + 1.5, x + 3.5, dz0 + 2.1);
   const nt = Math.max(2, Math.round((sqX1 - sqX0) / 10));
   for (let k = 0; k < nt; k++) {
     const x = sqX0 + ((k + 0.5) * (sqX1 - sqX0)) / nt, z = hd - 4.2;
@@ -624,9 +640,9 @@ export function townHall(mb: MeshBuilder, f: LotFrame, tf: TF) {
   }
   // ひさし：玄関から車路の上まで（白い薄い板、夜は下面が光る）
   const kx0 = ux0 + 1.5, kx1 = ux1 - 1.5, kz1 = rz1 + 0.6, kY = 4.8;
-  mb.box(kx0, kY, az1, kx1, kY + 0.45, kz1, WHITE, PAT.none, WHITE2);
-  mb.quad([kx0 + 0.3, kY - 0.01, az1 + 0.3], [kx1 - 0.3, kY - 0.01, az1 + 0.3], [kx1 - 0.3, kY - 0.01, kz1 - 0.3], [kx0 + 0.3, kY - 0.01, kz1 - 0.3], C(0xfff1d6), PAT.lit);
-  for (const x of [kx0 + 0.6, kx1 - 0.6]) mb.box(x - 0.13, 0, kz1 - 0.6, x + 0.13, kY, kz1 - 0.34, alu);
+  mb.box(kx0, kY, az1, kx1, kY + 0.45, kz1, wood, PAT.none, WHITE2);
+  under(kx0, az1, kx1, kz1, kY, true);
+  for (const x of [kx0 + 0.6, kx1 - 0.6]) mb.box(x - 0.2, 0, kz1 - 0.7, x + 0.2, kY, kz1 - 0.3, wood);
   // 止まっている車（タクシーと乗用車）
   car(mb, ux0 + 4.5, (rz0 + rz1) / 2, true, C(0xf2c200));
   car(mb, ux1 - 6, (rz0 + rz1) / 2, true, C(0x2b2b2b));
