@@ -238,6 +238,14 @@ button:disabled { opacity: 0.38; cursor: default; }
 #demo-band { position: absolute; left: 0; right: 0; top: 0; height: calc(var(--st) + 7px); z-index: 30; pointer-events: none;
   background: repeating-linear-gradient(-45deg, #f2c200 0 12px, #1a1a1a 12px 24px); box-shadow: 0 1px 4px rgba(0,0,0,0.4); display: none; }
 #demo-band.on { display: block; }
+/* 取り壊す階層の切り替え（地上／高架／地下／すべて）：地図の左下、ツールの横。指が届きやすい場所 */
+.dlayer {
+  position: absolute; left: calc(var(--sl) + var(--tool) + 8px); bottom: calc(var(--bar) + var(--news) + var(--sb) + 8px);
+  background: var(--bg2); border: 1px solid rgba(242, 194, 0, 0.45); border-radius: 11px; padding: 3px; gap: 2px;
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); text-shadow: 0 1px 2px rgba(0,0,0,0.45);
+}
+.dlayer button { min-width: 46px; height: 34px; padding: 0 10px; font-size: var(--fs-m); }
+.dlayer button.on { background: #f2c200; color: #1a1a1a; text-shadow: none; font-weight: 700; }
 
 /* メニューの中の文字は、すべてタブ（予算など）と同じ大きさにする */
 .sheet-b, .sheet-b * { font-size: var(--fs-m) !important; }
@@ -273,6 +281,7 @@ html.portrait .sub {
   border-radius: 12px 12px 0 0; border-top: 1px solid var(--line); border-bottom: 0;
 }
 html.portrait .info { left: 8px; bottom: calc(var(--stack) + 8px); max-height: calc(100% - var(--stack) - var(--st) - 20px); }
+html.portrait .dlayer { left: calc(var(--sl) + 8px); bottom: calc(var(--stack) + 8px); }
 html.portrait .chips { bottom: calc(var(--stack) + 6px); max-width: calc(100vw - 12px); }
 html.portrait .restore { bottom: calc(var(--sb) + 8px); }
 html.portrait .sheet { left: 0; right: 0; }

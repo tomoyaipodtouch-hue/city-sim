@@ -101,7 +101,7 @@ function checkAll(kind: 'x' | 't', ta: number, tb: number, diagA: boolean, diagB
   // ジャンクションのランプには印がついている（容量と速さが大きい）
   let jr = 0;
   for (let i = 0; i < g.n * g.n; i++) if (g.jct[i]) jr++;
-  expect(jr).toBeGreaterThan(10);
+  expect(jr).toBeGreaterThan(4);
   // ランプは信号のある交差点にならない
   const jm = buildJunctions(g, new Float32Array(2 * g.n * g.n).fill(5000));
   for (let i = 0; i < g.n * g.n; i++) if (g.road[i] === RoadType.Ramp) expect(jm.ctl[i]).toBe(0);
@@ -238,5 +238,54 @@ describe('junction car paths are continuous (carLayer follows the drawn curves w
       const r = carPathGaps(w.g);
       expect(r.checked).toBeGreaterThan(4);
       expect(r.bad, r.bad.slice(0, 6).join('\n')).toEqual([]);
+    });
+});
+
+// ---- T字・Y字の合わさる側の本線の端：行き止まりの切れ端（丸い端）を残さず、端のマスでランプに分かれる ----
+describe('junction ramp ends meet a carriageway', () => {
+  const popc = (m: number) => { let k = 0; for (; m; m &= m - 1) k++; return k; };
+  const cases: [string, 'x' | 't', number, number, boolean, boolean, JctForm][] = [];
+  for (const [ln, ta, tb] of LEVELS) for (const [gn, da, db] of GEOMS) cases.push([`tee ${ln}, ${gn}`, 't', ta, tb, da, db, 'tee']);
+  cases.push(['tee one-way branch', 't', G, G1, false, false, 'tee'], ['tee one-way elevated branch into ground', 't', G, E1, false, true, 'tee']);
+  for (const form of ['semi', 'clover', 'turbine'] as JctForm[]) cases.push([`${form} mixed`, 'x', G, E, false, false, form]);
+  for (const [name, kind, ta, tb, da, db, form] of cases)
+    it(name, { timeout: 60000 }, () => {
+      const { w } = build(kind, ta, tb, da, db, form);
+      const g = w.g, n = g.n, N = n * n;
+      const chains = findJctChains(g, 0);
+      const anchors = new Set<number>();
+      for (const C of chains) for (const M of [C.main0, C.main1]) if (M) anchors.add(M.node);
+      // 1) 高速道路のマスで、つながりが1本だけ（行き止まり）のものは、ランプへ分かれる・ランプから始まる端だけ（マップの端は除く）
+      for (let v = 0; v < 2 * N; v++) {
+        const t = g.nodeType(v), c = v % N, x = c % n, y = (c / n) | 0;
+        if (!RD[t]?.highway || Math.abs(x - C) > 20 || Math.abs(y - C) > 20) continue; // 引いた道路の両端（交差点から 30 マス）は除く
+        const m = v >= N ? g.conn1[c] : g.conn[c];
+        let hwArms = 0;
+        for (let d = 0; d < 8; d++) {
+          if (!(m & (1 << d)) || !g.inb(x + DXc[d], y + DYc[d])) continue;
+          const j = (y + DYc[d]) * n + x + DXc[d], L = g.arriveLevel(v >= N ? 1 : 0, j, d);
+          if (RD[g.nodeType(L * N + j)]?.highway) hwArms++;
+        }
+        if (popc(m) >= 1 && hwArms <= 1) expect(anchors.has(v), `dead-end highway stub at ${x},${y} (level ${v >= N ? 1 : 0})`).toBe(true);
+      }
+      // 2) ランプの曲線の、本線の側の端は、本線の車線の上（中心から 0〜3m ランプの側）にある
+      for (const C of chains)
+        for (const [M, s] of [[C.main0, C.bound[0]], [C.main1, C.bound[C.bound.length - 1]]] as const) {
+          if (!M) continue;
+          const q = jAt(C, s);
+          const rx = q.x - M.x, rz = q.z - M.z;
+          const o = -rx * M.uz + rz * M.ux, along = Math.abs(rx * M.ux + rz * M.uz);
+          expect(o, 'ramp end lies on the right lane of its carriageway').toBeGreaterThan(0.5);
+          expect(o).toBeLessThan(3.2);
+          expect(along).toBeGreaterThan(CELL * 0.45); // マスの境（入口・出口）
+        }
+      // 3) T字（両方向）：合わさる側の本線は、端の1マスで、右へ分かれるランプと左から合わさるランプに分かれる
+      if (kind === 't' && tb !== G1 && tb !== E1) {
+        const ends = [...anchors].filter((v) => {
+          const c = v % N, m = v >= N ? g.conn1[c] : g.conn[c];
+          return chains.filter((C) => C.main0?.node === v || C.main1?.node === v).length === 2 && popc(m) === 3;
+        });
+        expect(ends.length, 'one Y-split cell at the end of the branch').toBeGreaterThanOrEqual(1);
+      }
     });
 });

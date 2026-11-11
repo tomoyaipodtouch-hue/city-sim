@@ -295,6 +295,16 @@ class Router {
   bx0: number; by0: number; B: number;
   nodes = new Map<number, RNode>(); // ランプのノード（L * N + c）
   attached = new Set<number>(); // ランプが分かれる・合わさる本線のマス
+  attachDirs = new Map<number, number[]>(); // 本線のマス → ランプへのつながりの向き（左右それぞれ1本まで）
+  // 本線のマス m（向き axis の線）の、向き d の側にランプをつなげるか（同じ側にもうつながりがあればだめ。反対側はよい：T字の端の分かれ目）
+  sideFree(m: number, Lm: number, axis: number, d: number) {
+    const side = (k: number) => Math.sign(DX[axis] * DY[k] - DY[axis] * DX[k]);
+    const sd = side(d);
+    const extra = conn(this.w, m, Lm) & ~(bit(axis) | bit(opp(axis)));
+    for (let k = 0; k < 8; k++) if (extra & bit(k) && side(k) === sd) return false;
+    for (const k of this.attachDirs.get(m) ?? []) if (side(k) === sd) return false;
+    return true;
+  }
   ox: number; oy: number;
   dist: Float32Array; prev: Int32Array; stamp: Int32Array; gen = 0;
   hcache: Float32Array;
@@ -355,8 +365,8 @@ class Router {
     const w = this.w, line = A.line;
     if (k - LDEC < 1 || k > A.usable - 1) return null;
     const m = line.cells[k], Lm = line.lv[k], f = opp(A.dir);
-    if (this.attached.has(m) || conn(w, m, Lm) & ~(bit(A.dir) | bit(opp(A.dir)))) return null;
     const dd = (f + 1) & 7;
+    if (!this.sideFree(m, Lm, A.dir, dd)) return null;
     const out: PNode[] = [{ c: m, L: Lm, hs: this.hmOf(m, Lm) }];
     let c = stepC(w, m, dd), d = dd;
     for (let j = 0; j < LDEC; j++) {
@@ -375,8 +385,8 @@ class Router {
     const w = this.w, line = B.line;
     if (k - LACC < 1 || k > B.usable - 1) return null;
     const m = line.cells[k], Lm = line.lv[k], f = B.dir;
-    if (this.attached.has(m) || conn(w, m, Lm) & ~(bit(B.dir) | bit(opp(B.dir)))) return null;
     const dm = (f + 7) & 7;
+    if (!this.sideFree(m, Lm, B.dir, opp(dm))) return null;
     const out: PNode[] = [];
     let c = stepC(w, m, opp(dm));
     for (let j = 0; j < LACC; j++) {
@@ -577,8 +587,9 @@ class Router {
       const a = chain[k].c, b = chain[k + 1].c, n = this.n;
       dirs.push([0, 1, 2, 3, 4, 5, 6, 7].find((d) => DX[d] === (b % n) - (a % n) && DY[d] === ((b / n) | 0) - ((a / n) | 0))!);
     }
-    if (!forked) this.attached.add(chain[0].c);
-    if (!joined) this.attached.add(chain[last].c);
+    const addAt = (c: number, d: number) => { this.attached.add(c); (this.attachDirs.get(c) ?? this.attachDirs.set(c, []).get(c)!).push(d); };
+    if (!forked) addAt(chain[0].c, dirs[0]);
+    if (!joined) addAt(chain[last].c, opp(dirs[last - 1]));
     const fl = mv.from.dir; // CD の進み具合の向き：分かれる本線の進む向き = opp(from.dir)
     const ux = DX[opp(fl)], uy = DY[opp(fl)], ul = Math.hypot(ux, uy);
     for (let k = 1; k < last; k++) {
@@ -746,6 +757,7 @@ function routeAll(g0: Grid, w0: Grid, J: Junction, form: JctForm): JctPlan {
   const bad = new Set<number>();
   const fail = (reason: string): JctPlan => ({ ok: false, reason, cost: 0, cells: [...bad], bad, out: null });
   const arms = J.arms;
+  const branch = J.kind === 't' ? J.hws[J.branchHw].arms[0] : null;
   // 乗り換えの一覧
   const mvs: Mv[] = [];
   for (const A of arms)
@@ -766,6 +778,8 @@ function routeAll(g0: Grid, w0: Grid, J: Junction, form: JctForm): JctPlan {
     const w = w0.clone();
     const R = new Router(w, ox, oy);
     failed = null;
+    // T字・Y字の分かれ目のマス（交差点から何マス目か）。うまく通せなければ、少しずつ遠くにする
+    const eB = J.kind === 't' ? [2, 3, 4, 5, 3, 4][attempt] : 0;
     // クローバー型：先に集散路（同じ本線の、手前の腕 → 先の腕）
     if (form === 'clover') {
       for (const A of arms) {
@@ -795,7 +809,16 @@ function routeAll(g0: Grid, w0: Grid, J: Junction, form: JctForm): JctPlan {
             joinOk: (q) => q.cdDst === toCd && q.s > Math.max(1.2, lf + 1),
           });
         }
-      } else ok = R.route(mv, endsFor(form, mv.kind, attempt), mv.from.id, mv.to.id);
+      } else {
+        let E = endsFor(form, mv.kind, attempt);
+        // T字・Y字：合わさる側の本線は、端の1マス（eB）で、右へ分かれるランプと、左から合わさるランプの2つに分かれる（Y字の分かれ目）。
+        // 分かれ目より先の本線は、あとで外す
+        if (eB) {
+          if (mv.from === branch) E = { ...E, dRange: [eB, eB], dPref: eB };
+          if (mv.to === branch) E = { ...E, mRange: [eB, eB], mPref: eB };
+        }
+        ok = R.route(mv, E, mv.from.id, mv.to.id);
+      }
       if (!ok) { failed = mv; break; }
     }
     if (!failed) {
@@ -852,8 +875,12 @@ function pruneBranch(w: Grid, A: Arm, R: Router) {
     const c = line.cells[k], L = line.lv[k];
     const m = conn(w, c, L) & ~(bit(A.dir) | bit(opp(A.dir)));
     const fl = L ? w.flow1[c] : w.flow[c];
-    if (fl & m) kd = Math.min(kd, k); // 外へ出ていく = ランプへ分かれる
-    else km = Math.min(km, k);
+    // つながりごとに：外へ出ていく = ランプへ分かれる、入ってくる = ランプから合わさる（同じマスで両方のこともある）
+    for (let d = 0; d < 8; d++) {
+      if (!(m & bit(d))) continue;
+      if (fl & bit(d)) kd = Math.min(kd, k);
+      else km = Math.min(km, k);
+    }
   }
   for (let k = 1; k + 1 < line.cells.length && (k < kd || k < km); k++) {
     const a = line.cells[k], La = line.lv[k], b = line.cells[k + 1], Lb = line.lv[k + 1];

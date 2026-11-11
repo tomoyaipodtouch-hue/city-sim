@@ -1,6 +1,7 @@
 // ツールの定義と、ドラッグ中のプレビュー・確定
 import { BUS_STOP_COST, CIVIC, CivicId, DENSITY_NAMES, LINES, LineKind, ROADS, RoadType, ZoneType, ZONE_COST, ZONE_NAMES, POWER_LINE_COST, RAMP_COST , ESTOP_COST } from '../sim/defs';
-import { normRect, planBulldoze, planBusStop, planCloverleaf, planTransitLine, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoadCmd, planZone, planURamp, planTerrain, TERRAIN_STEP, TerrainOp, planTrees, TREE_COST, planEStop, planReclaim, RECLAIM_COST } from '../sim/plan';
+import { normRect, planBulldoze, planBusStop, planCloverleaf, planTransitLine, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoadCmd, planZone, planURamp, planTerrain, TERRAIN_STEP, TerrainOp, planTrees, TREE_COST, planEStop, planReclaim, RECLAIM_COST, BULLDOZE_LAYERS, BULLDOZE_LAYER_NAMES } from '../sim/plan';
+import type { BulldozeLayer } from '../sim/plan';
 import { JCT_FORMS, planJct, JctForm } from '../sim/jct';
 import { ORAMP_COST, ORampMode, orampHw, planORamp } from '../sim/oramp';
 import type { PreviewArrow } from '../render/previewLayer';
@@ -197,6 +198,15 @@ function snap8(sx: number, sy: number, fx: number, fy: number, hard: boolean): [
   return [sx + ux * k, sy + uy * k];
 }
 
+const LAYER_KEY = 'pm.bulldozeLayer';
+function loadBulldozeLayer(): BulldozeLayer {
+  try {
+    const v = sessionStorage.getItem(LAYER_KEY) as BulldozeLayer | null;
+    if (v && BULLDOZE_LAYERS.includes(v)) return v;
+  } catch { /* 読めなければ地上 */ }
+  return 'ground';
+}
+
 export interface PreviewInfo {
   text: string;
   bad: boolean;
@@ -208,6 +218,8 @@ const ZONE_HEX = [0, 0x49c25a, 0x4a8ff0, 0xe9b52a, 0xb9a24e];
 export class ToolController {
   tool = '';
   drag: DragState | null = null;
+  // 取り壊す階層（地上・高架・地下・すべて）。このセッションの間は覚えておく
+  bulldozeLayer: BulldozeLayer = loadBulldozeLayer();
   onResult: ((ok: boolean, msg: string) => void) | null = null;
 
   constructor(private game: GameClient, private r: CityRenderer) {}
@@ -229,7 +241,7 @@ export class ToolController {
     this.r.preview.clear();
     this.r.setShowGrid(!!t && t !== 'query');
     // 地下鉄の線路と駅のツールでは、地下の画面にする
-    this.r.setUnderground(t === 'line:sub' || t === 'plop:sub_station');
+    this.r.setUnderground(t === 'line:sub' || t === 'plop:sub_station' || (t === 'bulldoze' && this.bulldozeLayer === 'sub'));
     // 取り壊しモードのときは、画面の上に黄色と黒のしまを出す
     let band = document.getElementById('demo-band');
     if (!band) {
@@ -238,6 +250,14 @@ export class ToolController {
       document.getElementById('app')!.append(band);
     }
     band.classList.toggle('on', t === 'bulldoze');
+  }
+
+  setBulldozeLayer(l: BulldozeLayer) {
+    this.bulldozeLayer = l;
+    try { sessionStorage.setItem(LAYER_KEY, l); } catch { /* 保存できなくても使える */ }
+    // 地下を選んだら、地下の画面にする
+    if (this.tool === 'bulldoze') this.r.setUnderground(l === 'sub');
+    this.r.kick();
   }
 
   get isDragTool() {
@@ -375,8 +395,10 @@ export class ToolController {
     }
     if (t === 'bulldoze') {
       const rect = normRect(d.x0, d.y0, x, y, g.n);
-      const plan = planBulldoze(g, rect, (id) => this.game.buildings.get(id));
-      const cells = new Set<number>([...plan.roads, ...plan.lines, ...plan.trees]);
+      const layer = this.bulldozeLayer;
+      const plan = planBulldoze(g, rect, (id) => this.game.buildings.get(id), layer);
+      // 選んだ階層で取り壊すものがあるマスだけを光らせる
+      const cells = new Set<number>([...plan.roads, ...plan.lines, ...plan.trees, ...plan.transit]);
       for (const id of plan.buildings) {
         const b = this.game.buildings.get(id);
         if (!b) continue;
@@ -385,7 +407,8 @@ export class ToolController {
       const all = plan.cells.filter((i) => !cells.has(i));
       pv.setTiles(g, [...all, ...cells], (i) => (cells.has(i) ? 0xf07030 : 0x777777));
       pv.setPath(g, []);
-      return cells.size ? { text: `取り壊し ${yen(plan.cost)}`, bad: false } : { text: '取り壊すものがありません', bad: true };
+      const what = layer === 'all' ? '' : `（${BULLDOZE_LAYER_NAMES[layer]}）`;
+      return cells.size ? { text: `取り壊し${what} ${yen(plan.cost)}`, bad: false } : { text: layer === 'all' ? '取り壊すものがありません' : `${BULLDOZE_LAYER_NAMES[layer]}には取り壊すものがありません`, bad: true };
     }
     if (t === 'estop') {
       const plan = planEStop(g, x, y);
@@ -482,7 +505,7 @@ export class ToolController {
     else if (t.startsWith('reclaim:')) cmd = { t: 'reclaim', style: Number(t.split(':')[1]), x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1 };
     else if (t.startsWith('terrain:')) cmd = { t: 'terrain', op: t.split(':')[1] as TerrainOp, x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1 };
     else if (t === 'trees') cmd = { t: 'trees', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1 };
-    else if (t === 'bulldoze') cmd = { t: 'bulldoze', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1 };
+    else if (t === 'bulldoze') cmd = { t: 'bulldoze', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1, layer: this.bulldozeLayer };
     else if (t.startsWith('plop:')) cmd = { t: 'plop', id: t.split(':')[1] as CivicId, x: d.x1, y: d.y1 };
     else if (t === 'ramp') cmd = { t: 'ramp', x: d.x1, y: d.y1 };
     else if (t === 'uramp') cmd = { t: 'uramp', x: d.x1, y: d.y1 };

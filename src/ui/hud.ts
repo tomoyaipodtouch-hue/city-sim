@@ -12,7 +12,8 @@ import type { SaveMeta } from '../save';
 import type { MapStyle } from '../sim/terrain';
 import type { NewCityOpts } from '../sim/protocol';
 import { BRIDGE_STYLES } from '../render/bridgeStyles';
-import { platformCells } from '../sim/plan';
+import { platformCells, BULLDOZE_LAYERS, BULLDOZE_LAYER_NAMES } from '../sim/plan';
+import type { BulldozeLayer } from '../sim/plan';
 import { junctionGroup } from '../sim/traffic';
 import { decodeORamp, DIR_NAMES, orampAnchor, orampsAt, orampSlots, ORampSpec, sideReason } from '../sim/oramp';
 import { OrientMode, toApp } from './orient';
@@ -92,6 +93,7 @@ export class Hud {
   private cost = el('div', 'cost hidden');
   private cancelZone = el('div', 'cancel hidden', '✕　ここで指を離すとキャンセル');
   private chips = el('div', 'chips hidden');
+  private dlayer = el('div', 'dlayer seg hidden'); // 取り壊す階層の切り替え（取り壊しモードのときだけ）
   private restore = el('button', 'restore hidden', svg('show'));
   private fpsEl = el('div', 'fps hidden');
   private sheetBg = el('div', 'sheet-bg hidden');
@@ -113,8 +115,9 @@ export class Hud {
   constructor(private game: GameClient, private r: CityRenderer, private tools: ToolController, private act: HudActions) {
     this.root = document.getElementById('ui')!;
     this.buildToolbar();
+    this.buildLayerToggle();
     this.buildBar();
-    this.root.append(this.toolbar, this.sub, this.bar, this.news, this.info, this.chips, this.cancelZone, this.cost, this.toast, this.restore, this.fpsEl, this.sheetBg, this.sheet, this.title);
+    this.root.append(this.toolbar, this.sub, this.bar, this.news, this.info, this.chips, this.dlayer, this.cancelZone, this.cost, this.toast, this.restore, this.fpsEl, this.sheetBg, this.sheet, this.title);
     this.restore.onclick = () => this.setHidden(false);
     this.sheetBg.onclick = () => this.closeSheet();
     this.setInGame(false);
@@ -126,6 +129,7 @@ export class Hud {
 
   setInGame(on: boolean) {
     for (const e of [this.toolbar, this.bar, this.news]) e.classList.toggle('hidden', !on || this.hidden);
+    if (!on) this.dlayer.classList.add('hidden');
     if (!on) {
       this.closeSub();
       this.info.classList.add('hidden');
@@ -156,6 +160,33 @@ export class Hud {
       };
       this.toolbar.append(b);
     }
+  }
+
+  // 取り壊す階層：地上／高架／地下／すべて
+  private buildLayerToggle() {
+    const tips: Record<BulldozeLayer, string> = {
+      ground: '地上の道路・線路・建物・木・送電線を壊します',
+      up: '高架の道路・高速道路・ランプ、高架鉄道、モノレールを壊します',
+      sub: '地下鉄の線路と駅を壊します',
+      all: 'そのマスにあるものを、上も下もすべて壊します',
+    };
+    for (const l of BULLDOZE_LAYERS) {
+      const b = el('button', l === this.tools.bulldozeLayer ? 'on' : '', BULLDOZE_LAYER_NAMES[l]);
+      b.dataset.l = l;
+      b.title = tips[l];
+      b.onclick = () => {
+        sfx.click();
+        b.blur();
+        this.tools.setBulldozeLayer(l);
+        for (const x of this.dlayer.querySelectorAll<HTMLElement>('button')) x.classList.toggle('on', x.dataset.l === l);
+        this.showToast(`取り壊し（${BULLDOZE_LAYER_NAMES[l]}）：${tips[l]}`);
+      };
+      this.dlayer.append(b);
+    }
+  }
+
+  private syncLayerToggle() {
+    this.dlayer.classList.toggle('hidden', this.tools.tool !== 'bulldoze' || this.hidden);
   }
 
   private openSub(id: string) {
@@ -191,6 +222,7 @@ export class Hud {
     this.group = t ? group : '';
     if (t !== 'query') this.info.classList.add('hidden');
     this.highlightToolbar();
+    this.syncLayerToggle();
   }
 
   private highlightToolbar() {
@@ -247,6 +279,7 @@ export class Hud {
   setHidden(h: boolean) {
     this.hidden = h;
     for (const e of [this.toolbar, this.bar, this.news]) e.classList.toggle('hidden', h);
+    this.syncLayerToggle();
     if (h) {
       this.closeSub();
       this.info.classList.add('hidden');

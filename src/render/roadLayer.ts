@@ -2374,8 +2374,8 @@ export class RoadLayer {
     const jNodes = new Set<number>();
     for (const C of jchains) for (const v of C.nodes) if ((v >= NC ? g.up[v - NC] : g.road[v]) === RoadType.Ramp) jNodes.add(v);
     // 本線のそばの部分：ランプと本線のすきまを路面でうめる帯（加速・減速車線）と、その範囲の本線の欄干を切る
-    const jFills: { pts: RP[]; gore: boolean[]; elev: boolean }[] = [];
-    const jEnds: { M: JMain; diverge: boolean; nose: [number, number, number] | null; rampAt: number; C: JChain }[] = [];
+    const jFills: { pts: RP[]; gore: boolean[]; elev: boolean; M: JMain }[] = [];
+    const jEnds: { M: JMain; diverge: boolean; nose: [number, number, number] | null; rampAt: number; C: JChain; dead: boolean }[] = [];
     const jCuts = new Map<number, { x0: number; z0: number; x1: number; z1: number; vx: number; vz: number }[]>();
     const jDraw = new Map<JChain, [number, number]>();
     const jq: JPt = { x: 0, z: 0, h: 0, tx: 1, tz: 0 };
@@ -2385,19 +2385,38 @@ export class RoadLayer {
         if (!M) continue;
         const edge = fromStart ? C.bound[0] : C.bound[C.bound.length - 1];
         const sg = fromStart ? 1 : -1;
+        const dM = [0, 1, 2, 3, 4, 5, 6, 7].find((d) => Math.abs(DX[d] / Math.hypot(DX[d], DY[d]) - M.ux) < 0.01 && Math.abs(DY[d] / Math.hypot(DX[d], DY[d]) - M.uz) < 0.01)!;
+        const step = CELL * Math.hypot(DX[dM], DY[dM]);
+        const lvM = M.node >= NC ? 1 : 0, cM = M.node - lvM * NC, mm = lvM ? g.conn1[cM] : g.conn[cM];
+        // 本線がここで終わっている（T字・Y字の合わさる側の端：本線がランプへ分かれる・ランプから始まる）ときは、
+        // 本線のマスは描かず、ランプを本線の続きとしてマスの境から描く（加速・減速車線やゼブラは付けない）
+        if (fromStart ? !(mm & (1 << dM)) : !(mm & (1 << ((dM + 4) & 7)))) {
+          jNodes.add(M.node);
+          jEnds.push({ M, diverge: fromStart, nose: null, rampAt: edge, C, dead: true });
+          continue;
+        }
+        // 本線に沿った位置 a に、本線のマスがあるか
+        const mainAt = (a: number) => {
+          const k = Math.round(a / step), x = (cM % n) + DX[dM] * k, y = ((cM / n) | 0) + DY[dM] * k;
+          return g.inb(x, y) && isHighway(g.nodeType(lvM * NC + y * n + x));
+        };
+        // すきま（本線の車線の縁と、ランプの描いた縁の間）を、ランプの曲線の縁から求める
         const fill: RP[] = [];
         const fg: boolean[] = []; // 分かれ目の先の、ゼブラを塗る部分（ランプが本線から離れたところ）
         let drawAt = edge, aMin = Infinity, aMax = -Infinity, nose: [number, number, number] | null = null;
-        for (let k = 0; k <= CELL * 4; k += 1.5) {
+        for (let k = 0; k <= CELL * 4; k += 1) {
           const sv = edge + sg * k;
           if (sv < 0 || sv > C.len) break;
           jAt(C, sv, jq);
-          const { a, o } = mainLocal(M, jq.x, jq.z);
-          const inside = o - JR_HALF < M.half - 0.5;
-          if (inside) drawAt = sv + sg * 1.5;
-          const gap = o - JR_HALF - M.half;
-          if (!inside && (gap > 7 || Math.abs(jq.h - M.h) > 1.6)) break;
-          const inner = M.half - 0.05, outer = inside ? o + JR_HALF : o - JR_HALF + 0.4;
+          // ランプの左の縁（本線の側）と右の縁
+          const E = mainLocal(M, jq.x + jq.tz * JR_HALF, jq.z - jq.tx * JR_HALF), F = mainLocal(M, jq.x - jq.tz * JR_HALF, jq.z + jq.tx * JR_HALF);
+          const inside = E.o < M.half - 0.3;
+          if (inside) drawAt = sv + sg * 1.0;
+          const gap = E.o - M.half;
+          if (!inside && (gap > 6 || Math.abs(jq.h - M.h) > 1.6)) break;
+          const a = inside ? F.a : E.a;
+          if (!mainAt(a)) break;
+          const inner = M.half - 0.05, outer = inside ? F.o : E.o + 0.05;
           aMin = Math.min(aMin, a);
           aMax = Math.max(aMax, a);
           if (outer <= inner + 0.05) continue;
@@ -2408,14 +2427,12 @@ export class RoadLayer {
           if (!nose && gap > 1.5) nose = [M.x + M.ux * a - M.uz * (M.half + 0.75), M.z + M.uz * a + M.ux * (M.half + 0.75), jq.h];
         }
         if (!fromStart) { fill.reverse(); fg.reverse(); }
-        if (fill.length >= 2) jFills.push({ pts: fill, gore: fg, elev: M.node >= NC || g.deck[M.node] > 0 });
-        jEnds.push({ M, diverge: fromStart, nose, rampAt: drawAt, C });
+        if (fill.length >= 2) jFills.push({ pts: fill, gore: fg, elev: M.node >= NC || g.deck[M.node] > 0, M });
+        jEnds.push({ M, diverge: fromStart, nose, rampAt: drawAt, C, dead: false });
         if (fromStart) d0 = Math.max(d0, drawAt); else d1 = Math.min(d1, drawAt);
         // 本線のマス（前後）の欄干を切る
         if (aMax > aMin) {
-          const dM = [0, 1, 2, 3, 4, 5, 6, 7].find((d) => Math.abs(DX[d] / Math.hypot(DX[d], DY[d]) - M.ux) < 0.01 && Math.abs(DY[d] / Math.hypot(DX[d], DY[d]) - M.uz) < 0.01)!;
-          const step = CELL * Math.hypot(DX[dM], DY[dM]);
-          const lv = M.node >= NC ? 1 : 0, c0 = M.node - lv * NC;
+          const lv = lvM, c0 = cM;
           for (let k = Math.floor(aMin / step - 0.5); k <= Math.ceil(aMax / step + 0.5); k++) {
             const x = (c0 % n) + DX[dM] * k, y = ((c0 / n) | 0) + DY[dM] * k;
             if (!g.inb(x, y)) continue;
@@ -3244,14 +3261,25 @@ export class RoadLayer {
         if (gz.length >= 2) {
           line(gz, (p) => -(p.hw - 0.25), COL.white, 0.15);
           line(gz, (p) => p.hw - 0.25, COL.white, 0.15);
-          // ゼブラ（斜めのしま）：3m ごと
-          for (let k = 0; k + 1 < gz.length; k += 2) {
-            const a = gz[k], b = gz[Math.min(gz.length - 1, k + 1)];
-            const ux = b.x - a.x, uz = b.z - a.z, ul = Math.hypot(ux, uz) || 1, ex = ux / ul, ez = uz / ul, px = -ez, pz = ex;
-            const at = (sv: number, l: number): number => M.v(a.x + ex * sv + px * l, a.h + 0.05, a.z + ez * sv + pz * l, COL.white);
-            const w2 = Math.max(0, a.hw - 0.4);
-            if (w2 < 0.3) continue;
-            const q = [at(-1.2, -w2), at(-0.6, -w2), at(0.6, w2), at(0, w2)];
+          // ゼブラ（斜めのしま）：本線の車線の縁と、ランプの縁ではさまれた三角形の中だけに、2.5m ごと。
+          // 位置は本線に沿った a と、本線の中心からの横の位置 o（すきまの帯の点から、そのまま求める）
+          const Mf = F.M, loc = gz.map((p) => ({ ...mainLocal(Mf, p.x, p.z), hw: p.hw, h: p.h })).sort((u, v) => u.a - v.a);
+          const lo = loc[0].a, hi = loc[loc.length - 1].a;
+          const edgeAt = (a: number) => {
+            let k = 0;
+            while (k < loc.length - 2 && loc[k + 1].a < a) k++;
+            const u = loc[k], v = loc[k + 1], t2 = Math.max(0, Math.min(1, (a - u.a) / (v.a - u.a || 1)));
+            return { o: lerp(u.o + u.hw, v.o + v.hw, t2), h: lerp(u.h, v.h, t2) };
+          };
+          const inner = Mf.half + 0.25;
+          const W = (a: number, o: number, h: number) => M.v(Mf.x + Mf.ux * a - Mf.uz * o, h + 0.05, Mf.z + Mf.uz * a + Mf.ux * o, COL.white);
+          for (let a = lo + 1.2; a < hi - 0.3; a += 2.5) {
+            const e0 = edgeAt(a), top = e0.o - 0.3;
+            if (top - inner < 0.5) continue;
+            // しまは進む向きに 45° 傾ける（外側ほど先）。外側の端が帯の外へ出るなら、そこで切る
+            const at = Math.min(hi - 0.1, a + (top - inner));
+            const e1 = edgeAt(at), e2 = edgeAt(Math.min(hi - 0.1, at + 0.5));
+            const q = [W(a, inner, e0.h), W(a + 0.5, inner, e0.h), W(Math.min(hi - 0.1, at + 0.5), Math.min(e2.o - 0.3, e1.o - 0.3), e1.h), W(at, e1.o - 0.3, e1.h)];
             M.tri(q[0], q[1], q[2]);
             M.tri(q[0], q[2], q[3]);
           }
@@ -3276,10 +3304,10 @@ export class RoadLayer {
         const { M } = E;
         const two = !ROADS[g.nodeType(M.node)]?.oneWay;
         const at = (a: number, b: number): [number, number] => [M.x + M.ux * a - M.uz * b, M.z + M.uz * a + M.ux * b];
-        // 車線の矢印（本線の右の車線、分かれる・合わさる手前）
-        const [ax, az] = at(E.diverge ? -CELL * 2.2 : -CELL * 0.2, 1.9);
-        arrow(ax, az, M.h, M.ux, M.uz, 0);
+        // 車線の矢印：分かれる手前の本線の右の車線（合流には付けない）
         if (!E.diverge) continue;
+        const [ax, az] = at(-CELL * 2.2, 1.9);
+        arrow(ax, az, M.h, M.ux, M.uz, 0);
         const ra = jAt(E.C, Math.min(E.C.len, E.rampAt + 10), jq);
         arrow(ra.x, ra.z, ra.h, ra.tx, ra.tz, 0);
         // 門型の標識（分かれる 1.2 マス手前）
