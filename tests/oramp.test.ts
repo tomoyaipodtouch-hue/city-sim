@@ -145,9 +145,9 @@ describe('overlay ramp: sets', () => {
       checkRamp(w, ex);
       checkRamp(w, en);
     }
-    // 全体で 10 マスほど
+    // 全体で 10 マスほど（本線のつなぎ目のマスを含めて 12 マス）
     const xs = list.flatMap((r) => orampHw(w.g, r)).map((c) => c % w.g.n);
-    expect(Math.max(...xs) - Math.min(...xs)).toBeLessThanOrEqual(10);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeLessThanOrEqual(11);
   });
 
   it('two-way highway over a two-way road', () => {

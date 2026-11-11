@@ -16,7 +16,7 @@ export type GridU8Key = (typeof GRID_U8)[number];
 export type GridF32Key = (typeof GRID_F32)[number];
 
 // 重ねランプの印（grid.oramp）：下位3ビット = 本線の進む向き、ほかはフラグ
-export const ORAMP_LEN = 4; // ランプの長さ（マス）。始まりのマスから ORAMP_LEN マス先のマスへつながる
+export const ORAMP_LEN = 5; // ランプの長さ（マス）。始まりのマスから ORAMP_LEN マス先のマスへつながる
 export const ORAMP_ENTRY = 8; // 入口（一般道 → 高架）。なければ出口（高架 → 一般道）
 export const ORAMP_MEDIAN = 16; // 道の真ん中（中央分離帯・追い越し車線の側）に降りる。なければ道の端（左端の車線は右側通行なので右の端）
 export const ORAMP_PARTNER = 32; // 一般道の側は、本線のマスの右隣（大通りの反対車線）
