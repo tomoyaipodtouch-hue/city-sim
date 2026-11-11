@@ -40,10 +40,10 @@ export const JCT_HSTEP = 1.5; // ランプの高さの1段（m）。1マスに1�
 export const JCT_CLEAR = 6; // 立体交差で下をあける高さ（m）
 const HMAX = 8; // ランプの高さの段の上限（12m）
 const NH = HMAX + 1;
-const RB = 26; // 探す範囲（交差点から何マスまで）
+const RB = 21; // 探す範囲（交差点から何マスまで）
 const LDEC = 2; // 本線から分かれたあと、本線の横を並んで走るマス数（減速車線）
 const LACC = 3; // 合流の前に、本線の横を並んで走るマス数（加速車線）
-const ARM_MIN = 12; // 本線がまっすぐ続いていないといけない長さ（マス）
+const ARM_MIN = 10; // 本線がまっすぐ続いていないといけない長さ（マス）
 const MOVE_F = 1; // 本線を別の階層へ移すとき、交差点の前後で高さがそろう長さ（マス）
 const MOVE_S = 6; // 本線を別の階層へ移すときの坂の長さ（マス）
 const JCT_CELL_COST = 120;
@@ -522,6 +522,11 @@ class Router {
           const L2 = h2 ? 1 : 0;
           if (!this.okState(j, h2) || !this.okStep(c, L, nd, L2)) continue;
           let cost = len + (nd !== d ? 0.3 : 0) + (h2 !== hs ? 0.12 : 0) + (h2 ? 0.01 : 0);
+          // 交差点から遠いほど少し高くつく（ランプを本線のそばに寄せて、ジャンクションを小さくまとめる）
+          {
+            const x = (j % this.n) + 0.5 - this.ox, y = ((j / this.n) | 0) + 0.5 - this.oy;
+            cost += 0.025 * Math.hypot(x, y) * len;
+          }
           if (E.shape) {
             const x = (j % this.n) + 0.5 - this.ox, y = ((j / this.n) | 0) + 0.5 - this.oy;
             cost += E.shape * Math.abs(Math.hypot(x, y) - shapeR) * len;
@@ -679,8 +684,8 @@ function endsFor(form: JctForm, kind: Mv['kind'], attempt = 0): Ends {
   const wide = attempt >= 3 ? 4 : 0;
   const E = (d: [number, number], dp: number, m: [number, number], mp: number, fresh = true, fork = true, join = true, shape = 0): Ends =>
     ({ dRange: [d[0], d[1] + wide], dPref: dp, mRange: [m[0], m[1] + wide], mPref: mp, fresh, fork: fork || wide > 0, join: join || wide > 0, shape: wide ? shape / 2 : shape, slack: wide ? 2 : 1 });
-  if (form === 'tee') return kind === 'R' ? E([3, 10], 4, [4, 12], 6) : E([3, 12], 5, [4, 14], 7);
-  if (form === 'semi') return kind === 'R' ? E([3, 9], 4, [4, 10], 5) : E([4, 14], 6, [5, 14], 7);
+  if (form === 'tee') return kind === 'R' ? E([3, 9], 3, [4, 10], 5) : E([3, 11], 4, [4, 12], 5);
+  if (form === 'semi') return kind === 'R' ? E([3, 9], 4, [4, 10], 5) : E([4, 12], 5, [5, 12], 6);
   if (form === 'turbine') return kind === 'R' ? E([3, 12], 4, [4, 12], 5, true, false, false) : E([4, 12], 6, [5, 12], 7, true, false, false, 0.8);
   // クローバー型：集散路は本線の遠くから分かれて、遠くで合流する
   if (kind === 'CD') return E([9, 13], 10, [10, 14], 11, true, false, false);

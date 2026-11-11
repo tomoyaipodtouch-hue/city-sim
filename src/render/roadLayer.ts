@@ -55,6 +55,8 @@ const COL = {
   footing: new THREE.Color(0x8e8a80),
   grass: new THREE.Color(0x66843f), // 分離帯の芝と土
   hedge: new THREE.Color(0x3d6a2c), // 分離帯の低い植え込み（サツキなど）
+  signGreen: new THREE.Color(0x1d7046), // 高速道路の案内標識（緑の板）
+  steel: new THREE.Color(0x8e9398), // 標識の門型の柱と梁（灰色の鋼）
 };
 const VIA_COLS = new Set([COL.parapet, COL.groove, COL.soffit, COL.girder, COL.pier, COL.wall, COL.footing]);
 const AUX0: [number, number, number, number] = [0, 0, 0, 0];
@@ -2333,7 +2335,8 @@ export class RoadLayer {
     const jNodes = new Set<number>();
     for (const C of jchains) for (const v of C.nodes) if ((v >= NC ? g.up[v - NC] : g.road[v]) === RoadType.Ramp) jNodes.add(v);
     // 本線のそばの部分：ランプと本線のすきまを路面でうめる帯（加速・減速車線）と、その範囲の本線の欄干を切る
-    const jFills: { pts: RP[]; elev: boolean }[] = [];
+    const jFills: { pts: RP[]; gore: boolean[]; elev: boolean }[] = [];
+    const jEnds: { M: JMain; diverge: boolean; nose: [number, number, number] | null; rampAt: number; C: JChain }[] = [];
     const jCuts = new Map<number, { x0: number; z0: number; x1: number; z1: number; vx: number; vz: number }[]>();
     const jDraw = new Map<JChain, [number, number]>();
     const jq: JPt = { x: 0, z: 0, h: 0, tx: 1, tz: 0 };
@@ -2344,7 +2347,8 @@ export class RoadLayer {
         const edge = fromStart ? C.bound[0] : C.bound[C.bound.length - 1];
         const sg = fromStart ? 1 : -1;
         const fill: RP[] = [];
-        let drawAt = edge, aMin = Infinity, aMax = -Infinity;
+        const fg: boolean[] = []; // 分かれ目の先の、ゼブラを塗る部分（ランプが本線から離れたところ）
+        let drawAt = edge, aMin = Infinity, aMax = -Infinity, nose: [number, number, number] | null = null;
         for (let k = 0; k <= CELL * 4; k += 1.5) {
           const sv = edge + sg * k;
           if (sv < 0 || sv > C.len) break;
@@ -2360,9 +2364,13 @@ export class RoadLayer {
           if (outer <= inner + 0.05) continue;
           const oc = (inner + outer) / 2;
           fill.push({ x: M.x + M.ux * a - M.uz * oc, z: M.z + M.uz * a + M.ux * oc, h: jq.h, hw: (outer - inner) / 2, sw: 0, t: RoadType.Ramp });
+          fg.push(!inside);
+          // 分かれ目の先端（すきまが 1.5m になるところ）
+          if (!nose && gap > 1.5) nose = [M.x + M.ux * a - M.uz * (M.half + 0.75), M.z + M.uz * a + M.ux * (M.half + 0.75), jq.h];
         }
-        if (!fromStart) fill.reverse();
-        if (fill.length >= 2) jFills.push({ pts: fill, elev: M.node >= NC || g.deck[M.node] > 0 });
+        if (!fromStart) { fill.reverse(); fg.reverse(); }
+        if (fill.length >= 2) jFills.push({ pts: fill, gore: fg, elev: M.node >= NC || g.deck[M.node] > 0 });
+        jEnds.push({ M, diverge: fromStart, nose, rampAt: drawAt, C });
         if (fromStart) d0 = Math.max(d0, drawAt); else d1 = Math.min(d1, drawAt);
         // 本線のマス（前後）の欄干を切る
         if (aMax > aMin) {
@@ -2785,41 +2793,6 @@ export class RoadLayer {
           if (side.length) disc(cx, cz, ch, UR_HALF, asph);
           continue;
         }
-        if (t === RoadType.Ramp && k === 3 && arms.every((q) => q.tn === RoadType.Ramp)) {
-          // ランプの分かれ目・合わさり目（ジャンクション）：幹の腕から2本の枝へ、それぞれ曲線の帯。2本の間（分かれ目の先端）には壁を付けない
-          const trunk = arms.find((a) => arms.filter((b) => b !== a).every((b) => { const t2 = (b.d - ((a.d + 4) & 7) + 8) & 7; return t2 <= 1 || t2 >= 7; }));
-          if (trunk) {
-            const br = arms.filter((b) => b !== trunk);
-            const curve = (a: Arm, b: Arm) => {
-              const pts: RP[] = [];
-              const ax = cx + a.ux * a.L, az = cz + a.uz * a.L, bx = cx + b.ux * b.L, bz = cz + b.uz * b.L;
-              for (let s2 = 0; s2 <= 10; s2++) {
-                const u = s2 / 10, p0 = (1 - u) * (1 - u), p1 = 2 * u * (1 - u), p2 = u * u;
-                pts.push({ x: p0 * ax + p1 * cx + p2 * bx, z: p0 * az + p1 * cz + p2 * bz, h: p0 * a.eh + p1 * ch + p2 * b.eh, hw: w / 2, sw: 0, t });
-              }
-              return pts;
-            };
-            const c0 = curve(trunk, br[0]), c1 = curve(trunk, br[1]);
-            for (const [pts, other] of [[c0, br[1]], [c1, br[0]]] as const) {
-              const [px, pz] = rightOf(pts);
-              // もう1本の枝がある側の壁は付けない
-              const inner = other.ux * px + other.uz * pz > 0 ? 1 : 0;
-              const sides: [boolean, boolean] = [true, true];
-              sides[inner] = false;
-              ribbon(pts, t, sides);
-              if (elevated) deckUnder(pts, level ? ground : null);
-            }
-            // 分かれ目の先端の路面の印（ゼブラの代わりの白い縁）
-            const tip = (pts: RP[], other: Arm) => {
-              const [px, pz] = rightOf(pts);
-              const sg = other.ux * px + other.uz * pz > 0 ? 1 : -1;
-              line(pts.slice(5), (q) => sg * (q.hw - 0.4), COL.white, 0.15);
-            };
-            tip(c0, br[1]);
-            tip(c1, br[0]);
-            continue;
-          }
-        }
         if (t === RoadType.Ramp && k === 2) {
           // ランプの途中：まっすぐか曲線の帯。高速道路のすぐ横なら、そちら側の壁は省く
           const [a, b] = arms;
@@ -2836,8 +2809,7 @@ export class RoadLayer {
             const qx = x + DX[sd], qy = y + DY[sd];
             if (!g.inb(qx, qy)) continue;
             const j = qy * n + qx;
-            // （ジャンクションのランプは、すぐ横の本線と同じくらいの高さのときだけ）
-            if (isHighway(level ? g.up[j] : g.road[j]) && !(g.jct[i] && Math.abs(g.nodeH(level * NC + j) - g.nodeH(node)) > 1.2)) sides[DX[sd] * px + DY[sd] * pz > 0 ? 1 : 0] = false;
+            if (isHighway(level ? g.up[j] : g.road[j])) sides[DX[sd] * px + DY[sd] * pz > 0 ? 1 : 0] = false;
           }
           ribbon(pts, t, sides);
           markings(pts, t);
@@ -3206,8 +3178,84 @@ export class RoadLayer {
       for (const F of jFills) {
         ribbon(F.pts, RoadType.Ramp, [false, false]);
         if (F.elev || F.pts.some((p) => p.h - ROAD_LIFT - g.groundAt(p.x, p.z) > 0.9)) { pierOk = false; deckUnder(F.pts, null); pierOk = true; }
-        // 本線との境の破線（車線の区切り）は、本線の縁に
-        line(F.pts, (p) => -(p.hw - 0.25), COL.white, 0.15, true);
+        // 本線との境：加速・減速車線は破線、分かれ目の先（ゼブラ）は実線で囲む
+        const lane = F.pts.filter((_, k) => !F.gore[k]), gz = F.pts.filter((_, k) => F.gore[k]);
+        if (lane.length >= 2) line(lane, (p) => -(p.hw - 0.25), COL.white, 0.15, true);
+        if (gz.length >= 2) {
+          line(gz, (p) => -(p.hw - 0.25), COL.white, 0.15);
+          line(gz, (p) => p.hw - 0.25, COL.white, 0.15);
+          // ゼブラ（斜めのしま）：3m ごと
+          for (let k = 0; k + 1 < gz.length; k += 2) {
+            const a = gz[k], b = gz[Math.min(gz.length - 1, k + 1)];
+            const ux = b.x - a.x, uz = b.z - a.z, ul = Math.hypot(ux, uz) || 1, ex = ux / ul, ez = uz / ul, px = -ez, pz = ex;
+            const at = (sv: number, l: number): number => M.v(a.x + ex * sv + px * l, a.h + 0.05, a.z + ez * sv + pz * l, COL.white);
+            const w2 = Math.max(0, a.hw - 0.4);
+            if (w2 < 0.3) continue;
+            const q = [at(-1.2, -w2), at(-0.6, -w2), at(0.6, w2), at(0, w2)];
+            M.tri(q[0], q[1], q[2]);
+            M.tri(q[0], q[2], q[3]);
+          }
+        }
+      }
+      // 案内標識：分かれる手前の本線をまたぐ門型の標識（緑の板）と、分かれ目の先端の小さな標識。車線の矢印
+      const obox = (cx: number, cz: number, ux: number, uz: number, la: number, lw: number, y0: number, y1: number, c: THREE.Color) => {
+        const P = (a: number, b: number): [number, number] => [cx + ux * a - uz * b, cz + uz * a + ux * b];
+        const [x00, z00] = P(-la, -lw), [x10, z10] = P(la, -lw), [x11, z11] = P(la, lw), [x01, z01] = P(-la, lw);
+        O.wall(x01, z01, y0, y1, x11, z11, y0, y1, c);
+        O.wall(x10, z10, y0, y1, x00, z00, y0, y1, c);
+        O.wall(x11, z11, y0, y1, x10, z10, y0, y1, c);
+        O.wall(x00, z00, y0, y1, x01, z01, y0, y1, c);
+        const a = O.v(x00, y1, z00, c), b = O.v(x10, y1, z10, c), d = O.v(x11, y1, z11, c), e = O.v(x01, y1, z01, c);
+        O.tri(a, b, d);
+        O.tri(a, d, e);
+        const a2 = O.v(x00, y0, z00, c, 0, -1, 0), b2 = O.v(x10, y0, z10, c, 0, -1, 0), d2 = O.v(x11, y0, z11, c, 0, -1, 0), e2 = O.v(x01, y0, z01, c, 0, -1, 0);
+        O.tri(a2, d2, b2);
+        O.tri(a2, e2, d2);
+      };
+      for (const E of jEnds) {
+        const { M } = E;
+        const two = !ROADS[g.nodeType(M.node)]?.oneWay;
+        const at = (a: number, b: number): [number, number] => [M.x + M.ux * a - M.uz * b, M.z + M.uz * a + M.ux * b];
+        // 車線の矢印（本線の右の車線、分かれる・合わさる手前）
+        const [ax, az] = at(E.diverge ? -CELL * 2.2 : -CELL * 0.2, 1.9);
+        arrow(ax, az, M.h, M.ux, M.uz, 0);
+        if (!E.diverge) continue;
+        const ra = jAt(E.C, Math.min(E.C.len, E.rampAt + 10), jq);
+        arrow(ra.x, ra.z, ra.h, ra.tx, ra.tz, 0);
+        // 門型の標識（分かれる 1.2 マス手前）
+        const ag = -CELL * 1.2, half = M.half + 0.9, base = M.h - ROAD_LIFT, top = base + 6.9;
+        for (const b of [-half, half]) {
+          const [px, pz] = at(ag, b);
+          obox(px, pz, M.ux, M.uz, 0.2, 0.2, base, top, COL.steel);
+        }
+        const [bx, bz] = at(ag, 0);
+        obox(bx, bz, M.ux, M.uz, 0.18, half, top - 0.45, top - 0.1, COL.steel);
+        // 緑の板：分かれる先（右の車線の上）と、まっすぐ（一方通行の左の車線の上）
+        const panels: [number, number, number][] = two ? [[2.0, 3.8, 1]] : [[2.3, 3.3, 1], [-2.3, 3.3, 0]];
+        for (const [b, w2, exit] of panels) {
+          const [px, pz] = at(ag - 0.35, b);
+          obox(px, pz, M.ux, M.uz, 0.08, w2 / 2, top - 2.6, top - 0.35, COL.signGreen);
+          // 白い線（文字と矢印の代わり）：横線2本と、上向き（分岐は右上向き）の矢印
+          const fx = (bb: number) => at(ag - 0.45, b + bb);
+          for (const [yy, ww] of [[top - 0.9, w2 * 0.6], [top - 1.35, w2 * 0.45]] as const) {
+            const [qx, qz] = fx(-w2 * 0.1);
+            obox(qx, qz, M.ux, M.uz, 0.02, ww / 2, yy - 0.09, yy, COL.white);
+          }
+          const [rx, rz] = fx(w2 * 0.32);
+          obox(rx, rz, M.ux, M.uz, 0.02, 0.07, top - 2.35, top - 1.6, COL.white);
+          if (exit) {
+            const [sx, sz] = fx(w2 * 0.38);
+            obox(sx, sz, M.ux, M.uz, 0.02, 0.18, top - 1.75, top - 1.6, COL.white);
+          }
+        }
+        // 分かれ目の先端の小さな標識
+        if (E.nose) {
+          const [nx, nz, nh] = E.nose;
+          const b0 = nh - ROAD_LIFT;
+          obox(nx, nz, M.ux, M.uz, 0.06, 0.06, b0, b0 + 2.6, COL.steel);
+          obox(nx - M.ux * 0.1, nz - M.uz * 0.1, M.ux, M.uz, 0.05, 0.55, b0 + 1.7, b0 + 2.6, COL.signGreen);
+          obox(nx - M.ux * 0.16, nz - M.uz * 0.16, M.ux, M.uz, 0.01, 0.35, b0 + 2.05, b0 + 2.2, COL.white);
+        }
       }
     }
 

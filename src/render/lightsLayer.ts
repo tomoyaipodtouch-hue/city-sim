@@ -3,9 +3,10 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Grid } from '../sim/grid';
 import { CELL, DX, DY } from '../sim/constants';
-import { ROADS, RoadType, isUrbanElevated } from '../sim/defs';
+import { ROADS, RoadType, isHighway, isUrbanElevated } from '../sim/defs';
 import { AV_W, ROAD_LIFT, avLampBlock, avenueMedianDir, inRegion, junctionLamps, junctionPools } from './roadLayer';
 import { findURamps, urampAt, UR_END, UR_HALF } from './uramp';
+import { findJctChains, jAt, JR_HALF } from './jctCurve';
 
 // soft = 街灯の光：中心が明るく、外へ長くうすく消える（寄ったとき、ふちのはっきりした円盤に見えないように）
 function glowTexture(soft = false) {
@@ -137,6 +138,28 @@ export class StreetLights {
         poles.push(cx, base, cz, Math.atan2(nz, -nx));
       }
     }
+    // ジャンクションのランプ：描いた曲線の右側の欄干の上に、約 40m ごとに立てる（マスごとには立てない）
+    for (const C of findJctChains(g, ROAD_LIFT)) {
+      for (const v of C.nodes) if (g.nodeType(v) === RoadType.Ramp) urCells.add(v);
+      for (let sv = C.draw0 + 20; sv < C.draw1 - 10; sv += 40) {
+        const P = jAt(C, sv);
+        const nx = -P.tz, nz = P.tx, off = JR_HALF + 0.12, cx = P.x + nx * off, cz = P.z + nz * off;
+        const base = P.h + 0.9;
+        lamp.push(cx - nx * 2.0, base + 7.2, cz - nz * 2.0);
+        pool.push(cx - nx * 2.6, P.h + 0.05, cz - nz * 2.6, 11);
+        poles.push(cx, base, cz, Math.atan2(nz, -nx));
+      }
+    }
+    // ジャンクションのランプのとなりの本線のマスでは、ランプの側には立てない
+    const jSide = (node: number, sx: number, sz: number) => {
+      const lv = node >= N ? 1 : 0, c = node - lv * N, x = c % n, y = (c / n) | 0;
+      for (let d = 0; d < 8; d++) {
+        if (DX[d] * sx + DY[d] * sz <= 0.3 || !g.inb(x + DX[d], y + DY[d])) continue;
+        const j = (y + DY[d]) * n + x + DX[d];
+        if (g.jct[j]) return true;
+      }
+      return false;
+    };
     for (let node = 0; node < 2 * N; node++) {
       const level = node >= N ? 1 : 0;
       const i = node - level * N;
@@ -189,6 +212,10 @@ export class StreetLights {
         const toward = (sg: number) => rs.some((_, q) => q % 2 === 0 && (px * rs[q] + pz * rs[q + 1]) * sg > 0);
         if (toward(side)) side = -side;
         if (toward(side)) continue;
+      }
+      if (isHighway(t) && jSide(node, px * side, pz * side)) {
+        side = -side;
+        if (jSide(node, px * side, pz * side)) continue;
       }
       const off = (via ? ROADS[t].width / 2 + 0.12 : ROADS[t].width / 2 + 0.6) * side;
       const hb = via ? h + ROAD_LIFT + 0.9 : h;
