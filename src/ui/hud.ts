@@ -14,7 +14,7 @@ import type { NewCityOpts } from '../sim/protocol';
 import { BRIDGE_STYLES } from '../render/bridgeStyles';
 import { platformCells } from '../sim/plan';
 import { junctionGroup } from '../sim/traffic';
-import { decodeORamp, DIR_NAMES, orampAnchor, orampsAt, orampSlots, ORampSpec } from '../sim/oramp';
+import { decodeORamp, DIR_NAMES, orampAnchor, orampsAt, orampSlots, ORampSpec, sideReason } from '../sim/oramp';
 import { OrientMode, toApp } from './orient';
 
 const ICONS: Record<string, string> = {
@@ -603,6 +603,12 @@ export class Hud {
         if (!r) return;
         const row = el('div', 'jrow');
         row.append(el('span', '', r.entry ? '入口：上る位置' : '出口：降りる位置'));
+        // 片方にしか降りられないときは、切り替えずに見せるだけ
+        if (sideReason(g, { ...r, median: !r.median })) {
+          row.append(el('span', 'muted', r.median ? '道の真ん中（追い越し車線）' : '道の端'));
+          box.append(row);
+          return;
+        }
         const s2 = el('div', 'seg');
         [[false, '道の端'], [true, '道の真ん中']].forEach(([med, name]) => {
           const b = el('button', r.median === med ? 'on' : '', name as string);
@@ -618,7 +624,7 @@ export class Hud {
         box.append(row);
       });
     }
-    box.append(el('p', 'muted', '出口は手前、入口は先にあります。道の端：右端の車線へ降ります。道の真ん中：中央分離帯の側（追い越し車線）へ降ります。'));
+    box.append(el('p', 'muted', '出口は手前、入口は先にあります。道の端：右端の車線へ降ります。道の真ん中：中央分離帯の側（追い越し車線）へ降ります。片側1車線の都市高速は、ランプが高架の外側を下りるので、降りる位置は向きで決まります。'));
     return box;
   }
 

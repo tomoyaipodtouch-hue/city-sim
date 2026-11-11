@@ -78,7 +78,8 @@ describe('overlay ramp: single ramps (exit / entrance × edge / median × road b
     for (const mode of ['exit', 'entry'] as const)
       for (const median of [false, true])
         it(`${mode}, ${median ? 'median' : 'edge'}, over ${name}`, () => {
-          const w = scene(under, hw);
+          // 片側1車線の本線は、ランプが高架の外側を下りるので、真下の車線へは道の端だけ。道の真ん中は一方通行の本線で試す
+          const w = scene(under, median ? E1 : hw);
           const g = w.g;
           // 南側（東行きの車線の側）をタップ
           const r0 = w.exec({ t: 'oramp', mode, x: T, y: Y, fx: T + 0.5, fy: Y + 0.8 });
@@ -96,6 +97,15 @@ describe('overlay ramp: single ramps (exit / entrance × edge / median × road b
           expect(noLinkWithout(w, r)).toBe(true);
         });
 
+  it('two-way highway: the carriageway right below takes only the edge', () => {
+    const w = scene(RoadType.Avenue, E);
+    expect(w.exec({ t: 'oramp', mode: 'exit', x: T, y: Y, fx: T + 0.5, fy: Y + 0.8 }).ok).toBe(true);
+    const r = listORamps(w.g)[0];
+    const res = w.exec({ t: 'orampSide', start: r.start, median: true });
+    expect(res.ok).toBe(false);
+    expect(res.msg).toMatch(/道の端/);
+  });
+
   it('a westbound ramp over an avenue lands on the opposite carriageway (partner cell)', () => {
     const w = scene(RoadType.Avenue, E);
     const r0 = w.exec({ t: 'oramp', mode: 'exit', x: T, y: Y, fx: T + 0.5, fy: Y + 0.2 });
@@ -103,6 +113,8 @@ describe('overlay ramp: single ramps (exit / entrance × edge / median × road b
     const r = listORamps(w.g)[0];
     expect(r.a).toBe(4);
     expect(r.partner).toBe(true);
+    expect(r.median).toBe(true); // 分離帯の上を下りて、追い越し車線へ
+    expect(w.exec({ t: 'orampSide', start: r.start, median: false }).ok).toBe(false);
     expect(orampGround(w.g, r)[0]).toBe(w.g.idx(T + 2, Y - 1));
     checkRamp(w, r);
   });
@@ -182,11 +194,22 @@ describe('overlay ramp: sets', () => {
     expect(w.exec({ t: 'orampDir', T: Tc, a0: 0, a: 0, want: 3 }).ok).toBe(true);
     expect([count(0, false), count(0, true), count(4, false), count(4, true)]).toEqual([1, 1, 0, 0]);
     for (const r of listORamps(g)) checkRamp(w, r);
-    // 降りる位置：道の真ん中
+    for (const r of listORamps(g)) expect(r.median).toBe(false);
+  });
+
+  it('the info tool switches the landing side on a one-way highway', () => {
+    const w = scene(RoadType.Avenue, E1);
+    const g = w.g;
+    expect(w.exec({ t: 'oramp', mode: 'set', x: T, y: Y }).ok).toBe(true);
     const ex = listORamps(g).find((r) => !r.entry)!;
+    expect(ex.median).toBe(false);
     expect(w.exec({ t: 'orampSide', start: ex.start, median: true }).ok).toBe(true);
     expect(decodeORamp(g, ex.start)!.median).toBe(true);
     checkRamp(w, decodeORamp(g, ex.start)!);
+    // 入口だけにして、また出口を足すと、降りる位置は入口に合わせる
+    expect(w.exec({ t: 'orampDir', T: g.idx(T, Y), a0: 0, a: 0, want: 2 }).ok).toBe(true);
+    expect(w.exec({ t: 'orampDir', T: g.idx(T, Y), a0: 0, a: 0, want: 3 }).ok).toBe(true);
+    expect(listORamps(g).length).toBe(2);
   });
 });
 

@@ -64,6 +64,17 @@ export function orampSide(g: Grid, r: ORampSpec) {
   return 1;
 }
 
+// 降りる位置の決まり：ランプは下の道路の車線をまたがない（低いところで車線をふさがないように）。
+//   一方通行の本線は、道の端なら右、道の真ん中なら左の横を下りるので、どちらにも降りられる。
+//   片側1車線の本線は、いつも自分の車線の側（右）の横を下りる。高架の真下の車線へは道の端に、
+//   大通りの反対車線へは、分離帯の上を下りて道の真ん中（追い越し車線）に降りる
+export function sideReason(g: Grid, r: ORampSpec): string {
+  if (g.up[r.start] !== RoadType.UrbanHighway) return '';
+  if (r.partner && !r.median) return 'この向きのランプは、分離帯の上を下りるので、道の真ん中にだけ降りられます';
+  if (!r.partner && r.median) return '片側1車線の都市高速の真下の車線へは、道の端にだけ降りられます（ランプは高架の外側を下ります）';
+  return '';
+}
+
 // 本線のマスで、向き a の車線があり、まっすぐ（ほかのつながりがない）か
 function hwOk(g: Grid, c: number, a: number) {
   if (c < 0 || !isUrbanElevated(g.up[c])) return false;
@@ -106,6 +117,8 @@ export function checkORamp(g: Grid, r: ORampSpec, others: ORampSpec[] | null): {
   const gr = orampGround(g, r);
   const badG = hw.filter((c, k) => gr[k] < 0 || !groundOk(g, gr[k], r.a));
   if (badG.length) return { reason: `真下に、同じ向きに走る一般道・一方通行・大通りがまっすぐ（${ORAMP_LEN + 1}マス）続いている所に置いてください（交差点には置けません）`, bad: badG };
+  const sr = sideReason(g, r);
+  if (sr) return { reason: sr, bad: hw.slice(0, ORAMP_LEN) };
   if (others) {
     const occ = new Set(occupancy(g, r));
     for (const o of others) {
@@ -175,7 +188,7 @@ export function planORamp(g: Grid, mode: ORampMode, x: number, y: number, fx = x
   const ground = (a: number) => groundFor(g, T, a) !== null;
   const existing = listORamps(g);
   const specs: ORampSpec[] = [];
-  const mk = (a: number, entry: boolean, start: number): ORampSpec => ({ start, a, entry, median: false, partner: !!groundFor(g, T, a)?.partner });
+  const mk = (a: number, entry: boolean, start: number): ORampSpec => { const partner = !!groundFor(g, T, a)?.partner; return { start, a, entry, median: partner, partner }; };
   let note = '';
   if (mode === 'set') {
     const slots = orampSlots(g, T, a0);
@@ -226,8 +239,8 @@ export function editORampDir(g: Grid, T: number, a0: number, a: number, want: nu
   if (!slots.length) return { ok: false, reason: 'この向きには置けません', added: 0, removed: 0 };
   const cur = slots.map((s) => (s.start >= 0 ? decodeORamp(g, s.start) : null)).map((r, k) => (r && r.a === a && r.entry === slots[k].entry ? r : null));
   const sib = cur.find((r) => r);
-  const median = sib ? sib.median : false;
   const gf = groundFor(g, T, a);
+  const median = sib ? sib.median : !!gf?.partner;
   const others = listORamps(g).filter((o) => !slots.some((s) => s.start === o.start));
   const adds: ORampSpec[] = [];
   let removed = 0;

@@ -15,10 +15,12 @@ import { listORamps, orampGround, orampHw, orampSide, ORampSpec } from '../sim/o
 export const OR_HALF = 3.0; // ランプの路面の半分の幅（車線 3.5m と路肩、6m）
 export const OR_LANE = 1.75; // ランプの車線の半分の幅
 const PAR = 0.25; // 欄干の厚さ
-const DIV = 20; // 本線から分かれて、横に出るまでの長さ
+const DIV = 16; // 本線から分かれて、横に出るまでの長さ
 const GROUND_RUN = 6; // 一般道の高さで走る長さ（一般道の側の端）
-const MOVE = 30; // 高架の横から、一般道の車線へ横にずれる長さ
+const MOVE = 26; // 高架の横から、一般道の車線へ横にずれる長さ
+const MOVE_END = 14; // 横にずれ終わる所（一般道の側の端から）。そのあとは車線の上をまっすぐ下りる
 const EASE = 0.3; // 坂の始まりと終わりの、勾配が変わる部分の割合
+const HS = 5; // 本線から分かれて、下り始めるまでの長さ
 
 export interface ORGeo {
   r: ORampSpec;
@@ -98,7 +100,7 @@ export function orGeo(g: Grid, r: ORampSpec, lift: number): ORGeo | null {
   if (!link) return null;
   return {
     r, from: link[0], to: link[1], len: hw.length > 1 ? (hw.length - 1) * cell : cell, ox, oz, ux, uz, rx, rz, sg, hwHalf,
-    Lh: hwLane(ht, r.median, sg), Lb: sg * (hwHalf + PAR + OR_HALF + 0.15), Lg: gOff + gLane, gOff, gLane, gType: gt, hh, gh, cell,
+    Lh: hwLane(ht, r.median, sg), Lb: sg * (hwHalf + 2 * PAR + OR_HALF + 0.35), Lg: gOff + gLane, gOff, gLane, gType: gt, hh, gh, cell,
   };
 }
 
@@ -115,12 +117,16 @@ const qOf = (G: ORGeo, s: number) => (G.r.entry ? G.len - s : s);
 export function orO(G: ORGeo, q: number) {
   const L = G.len;
   const div = sstep(q / DIV);
-  const mv = sstep((q - (L - MOVE)) / (MOVE - 2));
+  const mv = sstep((q - (L - MOVE_END - MOVE)) / MOVE);
   return G.Lh + (G.Lb - G.Lh) * div + (G.Lg - G.Lb) * mv;
+}
+// 路面の半分の幅：低いところ（歩道の上を通るところ）では細くする
+export function orHalf(G: ORGeo, q: number) {
+  return OR_HALF - 0.9 * sstep((q - (G.len - 22)) / 16);
 }
 // 地面からの高さの割合（0 = 本線、1 = 一般道）
 export function orT(G: ORGeo, q: number) {
-  return slope01(q / (G.len - GROUND_RUN));
+  return slope01((q - HS) / (G.len - GROUND_RUN - HS));
 }
 export function orH(G: ORGeo, s: number) {
   const t = orT(G, qOf(G, s));

@@ -16,7 +16,7 @@ import { CELL, DX, DY, dirOf, isDiag, opp } from '../sim/constants';
 import { ROADS, RoadType, isHighway, isUrbanElevated } from '../sim/defs';
 import type { TreeSpot } from './buildingGen';
 import { findJctChains, JChain, jAt, JPt, JR_HALF, mainLocal, JMain } from './jctCurve';
-import { findORamps, orAt, orGroundH, orO, OR_HALF, OR_LANE, ORGeo, ORPt } from './oramp';
+import { findORamps, orAt, orGroundH, orHalf, orO, OR_HALF, OR_LANE, ORGeo, ORPt } from './oramp';
 import { findURamps, URamp, UR_END, UR_HALF, urampAt, urampS, urGore, urHw, urStart, UPt } from './uramp';
 
 export const ROAD_LIFT = 0.3;
@@ -3398,6 +3398,7 @@ export class RoadLayer {
     viaCur = false;
     onGround = false;
     liftCur = 0;
+    const orFoot: [number, number, number][] = []; // ランプの路面の点と、まわりの木をよける半径
     for (const G of ors) {
       const { q0, qg } = orEdges(G);
       const entry = G.r.entry, len = G.len, sg = G.sg;
@@ -3424,8 +3425,8 @@ export class RoadLayer {
         let nx = -orPt.tz, nz = orPt.tx;
         if (nx * G.rx * sg + nz * G.rz * sg < 0) { nx = -nx; nz = -nz; }
         // 横の位置（ランプの外側が +）。本線の路面と重なるところは、内側の縁を本線の縁で止める
-        const so = sg * orPt.o;
-        const oo = so + OR_HALF, oi = q < qg ? Math.max(so - OR_HALF, G.hwHalf - 0.1) : so - OR_HALF;
+        const so = sg * orPt.o, hf = orHalf(G, q);
+        const oo = so + hf, oi = q < qg ? Math.max(so - hf, G.hwHalf - 0.1) : so - hf;
         const m = (oi + oo) / 2 - so, half = (oo - oi) / 2;
         const x = orPt.x + nx * m, z = orPt.z + nz * m;
         let hi = orPt.h;
@@ -3435,6 +3436,7 @@ export class RoadLayer {
         L.push({ x, z, h: orPt.h + 0.03, nx, nz, half, hi: hi + 0.03, ho: orPt.h + 0.03, pi: q >= qg, q, o: orPt.o });
       }
       if (L.length < 2) continue;
+      for (const p of L) orFoot.push([p.x, p.z, p.half + 1.8]);
       // 路面
       const code = surfCode(lanesOf(RoadType.Ramp), SURF.concrete, false, hashInt(G.r.start, 7));
       let along = 0;
@@ -3546,11 +3548,11 @@ export class RoadLayer {
       // しま：内側の線と境の線の間に、45° の斜めの線を 2m ごと
       const median = G.r.median;
       const nose = median ? 7 : 0; // 縁石の島の長さ
-      for (let q = qn + nose; q < len - 0.5; q += 2) {
+      for (let q = qn + nose; q < len - 0.5; q += 1.8) {
         const a = inner(q), wdt = (a - TE) * -sIn;
         if (wdt < 0.4) continue;
         const dq = Math.min(wdt, 3), A = W(sAt(q), TE), B = W(sAt(q + dq), inner(q + dq));
-        segW(A, B, 0.45);
+        segW(A, B, 0.32);
       }
       // 道の真ん中に降りるとき：導流帯の先端に縁石の島（高さ 15cm の三角形）
       if (median) {
@@ -3796,7 +3798,8 @@ export class RoadLayer {
       mesh.geometry.dispose();
       mesh.geometry = buf.geometry();
     }
-    this.medianTrees = trees;
+    // 重ねランプの下になる分離帯の木は植えない
+    this.medianTrees = orFoot.length ? trees.filter((t) => !orFoot.some(([x, z, r]) => (t.x - x) ** 2 + (t.z - z) ** 2 < r * r)) : trees;
     this.rebuildLines(g);
   }
 
