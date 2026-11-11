@@ -1479,6 +1479,7 @@ export class RoadLayer {
     const VIA_MAIN = { over: 1.5, depth: 1.25 }, VIA_RAMP = { over: 1.3, depth: 1.0 };
     const SL_C = Math.cos((18 * Math.PI) / 180), SL_S = Math.sin((18 * Math.PI) / 180), SL_T = Math.tan((18 * Math.PI) / 180);
     let viaCur = false; // いまのノードは都市高速の高架（欄干と桁を、この断面で描く）
+    let pierOk = true; // いまのノードの真下に橋脚を立ててよいか（下に地上の道路や線路があれば立てない）
     // 外向きの向き (ox, oy, oz) に合わせて、四角形を足す
     const quadO = (a: number, b: number, c: number, d: number, ox: number, oy: number, oz: number) => {
       const P = O.P;
@@ -1669,7 +1670,7 @@ export class RoadLayer {
             O.wall(a.x + sd * px * wa, a.z + sd * pz * wa, a.h + 0.1, a.h + 1.1, b.x + sd * px * wb, b.z + sd * pz * wb, b.h + 0.1, b.h + 1.1, COL.concrete);
           }
       }
-      if (bot !== null && pts[0].t !== AV) {
+      if (bot !== null && pts[0].t !== AV && pierOk) {
         const p = pts[0];
         if (p.h - bot > 3) O.box(p.x - 1.0, bot, p.z - 1.0, p.x + 1.0, p.h - 1.2, p.z + 1.0, COL.concrete);
       }
@@ -2326,6 +2327,43 @@ export class RoadLayer {
       return cut;
     };
 
+    // ---- ジャンクションの加速車線・減速車線：本線のすぐ横を並んで走る（まっすぐな）ランプのマス ----
+    // ランプのマス i（階層 lv）の横に、同じ向きにまっすぐな高速道路のマスが同じくらいの高さであれば、その向きと間隔を返す
+    const hugOf = (i: number, lv: number): { j: number; vx: number; vz: number; dist: number } | null => {
+      if (!(g.jct[i] & (lv ? 2 : 1))) return null;
+      const m = lv ? g.conn1[i] : g.conn[i];
+      let d = -1;
+      for (let q = 0; q < 4; q++) if (m === ((1 << q) | (1 << (q + 4)))) d = q;
+      if (d < 0) return null;
+      const x = i % n, y = (i / n) | 0, ux = DX[d] / Math.hypot(DX[d], DY[d]), uz = DY[d] / Math.hypot(DX[d], DY[d]);
+      for (let s2 = 0; s2 < 8; s2++) {
+        if (s2 === d || s2 === d + 4) continue;
+        const qx = x + DX[s2], qy = y + DY[s2];
+        if (!g.inb(qx, qy)) continue;
+        const j = qy * n + qx, tj = lv ? g.up[j] : g.road[j];
+        if (!isHighway(tj) || ROADS[tj].wide) continue;
+        const mj = lv ? g.conn1[j] : g.conn[j];
+        if ((mj & ((1 << d) | (1 << (d + 4)))) !== ((1 << d) | (1 << (d + 4)))) continue;
+        if (Math.abs(g.nodeH(lv * NC + j) - g.nodeH(lv * NC + i)) > 1.2) continue;
+        // 本線の中心線からランプの中心線への、横向きの長さ
+        const ox = -DX[s2], oz = -DY[s2], al = ox * ux + oz * uz;
+        const vx = ox - al * ux, vz = oz - al * uz, l = Math.hypot(vx, vz);
+        if (l < 0.5) continue;
+        return { j, vx: vx / l, vz: vz / l, dist: l * CELL };
+      }
+      return null;
+    };
+    // 高速道路のマス j の横の、加速・減速車線になっているランプのマス（その側の欄干を切る）
+    const hugSides = new Map<number, [number, number][]>(); // ノード → 本線からランプへの横向き
+    for (let lv = 0; lv < 2; lv++)
+      for (let i = 0; i < NC; i++) {
+        if ((lv ? g.up[i] : g.road[i]) !== RoadType.Ramp) continue;
+        const h = hugOf(i, lv);
+        if (!h) continue;
+        const key = lv * NC + h.j;
+        (hugSides.get(key) ?? hugSides.set(key, []).get(key)!).push([h.vx, h.vz]);
+      }
+
     // ---- マス（ノード）ごと ----
     for (let node = 0; node < 2 * NC; node++) {
       const level = node >= NC ? 1 : 0;
@@ -2337,6 +2375,7 @@ export class RoadLayer {
       if (urSkip.has(node)) continue;
       S.owner = node;
       viaCur = level === 1 && isUrbanElevated(t);
+      pierOk = !(level === 1 && (g.road[i] || g.rail[i]));
       const x = i % n, y = (i / n) | 0;
       const cx = (x + 0.5) * CELL, cz = (y + 0.5) * CELL;
       const ch = g.nodeH(node) + ROAD_LIFT;
@@ -2713,6 +2752,41 @@ export class RoadLayer {
           if (side.length) disc(cx, cz, ch, UR_HALF, asph);
           continue;
         }
+        if (t === RoadType.Ramp && k === 3 && arms.every((q) => q.tn === RoadType.Ramp)) {
+          // ランプの分かれ目・合わさり目（ジャンクション）：幹の腕から2本の枝へ、それぞれ曲線の帯。2本の間（分かれ目の先端）には壁を付けない
+          const trunk = arms.find((a) => arms.filter((b) => b !== a).every((b) => { const t2 = (b.d - ((a.d + 4) & 7) + 8) & 7; return t2 <= 1 || t2 >= 7; }));
+          if (trunk) {
+            const br = arms.filter((b) => b !== trunk);
+            const curve = (a: Arm, b: Arm) => {
+              const pts: RP[] = [];
+              const ax = cx + a.ux * a.L, az = cz + a.uz * a.L, bx = cx + b.ux * b.L, bz = cz + b.uz * b.L;
+              for (let s2 = 0; s2 <= 10; s2++) {
+                const u = s2 / 10, p0 = (1 - u) * (1 - u), p1 = 2 * u * (1 - u), p2 = u * u;
+                pts.push({ x: p0 * ax + p1 * cx + p2 * bx, z: p0 * az + p1 * cz + p2 * bz, h: p0 * a.eh + p1 * ch + p2 * b.eh, hw: w / 2, sw: 0, t });
+              }
+              return pts;
+            };
+            const c0 = curve(trunk, br[0]), c1 = curve(trunk, br[1]);
+            for (const [pts, other] of [[c0, br[1]], [c1, br[0]]] as const) {
+              const [px, pz] = rightOf(pts);
+              // もう1本の枝がある側の壁は付けない
+              const inner = other.ux * px + other.uz * pz > 0 ? 1 : 0;
+              const sides: [boolean, boolean] = [true, true];
+              sides[inner] = false;
+              ribbon(pts, t, sides);
+              if (elevated) deckUnder(pts, level ? ground : null);
+            }
+            // 分かれ目の先端の路面の印（ゼブラの代わりの白い縁）
+            const tip = (pts: RP[], other: Arm) => {
+              const [px, pz] = rightOf(pts);
+              const sg = other.ux * px + other.uz * pz > 0 ? 1 : -1;
+              line(pts.slice(5), (q) => sg * (q.hw - 0.4), COL.white, 0.15);
+            };
+            tip(c0, br[1]);
+            tip(c1, br[0]);
+            continue;
+          }
+        }
         if (t === RoadType.Ramp && k === 2) {
           // ランプの途中：まっすぐか曲線の帯。高速道路のすぐ横なら、そちら側の壁は省く
           const [a, b] = arms;
@@ -2729,11 +2803,28 @@ export class RoadLayer {
             const qx = x + DX[sd], qy = y + DY[sd];
             if (!g.inb(qx, qy)) continue;
             const j = qy * n + qx;
-            if (isHighway(level ? g.up[j] : g.road[j])) sides[DX[sd] * px + DY[sd] * pz > 0 ? 1 : 0] = false;
+            // （ジャンクションのランプは、すぐ横の本線と同じくらいの高さのときだけ）
+            if (isHighway(level ? g.up[j] : g.road[j]) && !(g.jct[i] && Math.abs(g.nodeH(level * NC + j) - g.nodeH(node)) > 1.2)) sides[DX[sd] * px + DY[sd] * pz > 0 ? 1 : 0] = false;
           }
+          const hug = hugOf(i, level);
+          if (hug) sides[hug.vx * px + hug.vz * pz > 0 ? 1 : 0] = false;
           ribbon(pts, t, sides);
           markings(pts, t);
           if (elevated) deckUnder(pts, level ? ground : null);
+          if (hug) {
+            // ランプと本線のすきまを路面でうめる（本線の横の加速・減速車線）
+            const mainHalf = drawWidth(level ? g.up[hug.j] : g.road[hug.j]) / 2, rampHalf = w / 2;
+            const gap = hug.dist - mainHalf - rampHalf;
+            if (gap > 0.2) {
+              const off = -(rampHalf + gap / 2), hwf = gap / 2 + 0.25;
+              const hj = g.nodeH(level * NC + hug.j) + ROAD_LIFT;
+              const fp = pts.map((q) => ({ ...q, x: q.x + hug.vx * off, z: q.z + hug.vz * off, h: (q.h + hj) / 2, hw: hwf }));
+              ribbon(fp, t, [false, false]);
+              if (elevated) deckUnder(fp, null);
+              // 本線との境の破線（車線の区切り）
+              line(fp, (q) => (hug.vx * px + hug.vz * pz > 0 ? -1 : 1) * (q.hw - 0.3), COL.white, 0.15, true);
+            }
+          }
           continue;
         }
         if (t === RoadType.Ramp) {
@@ -2777,6 +2868,7 @@ export class RoadLayer {
           const [px, pz] = rightOf(pts);
           const sides: [boolean, boolean] = [true, true];
           for (const r of ramps) sides[r.ux * px + r.uz * pz > 0 ? 1 : 0] = false;
+          for (const [vx, vz] of hugSides.get(node) ?? []) sides[vx * px + vz * pz > 0 ? 1 : 0] = false;
           const cut = urCut(node, pts, Math.min(a.w, b.w) / 2);
           ribbon(pts, t, sides, undefined, 0, cut.length ? { cut } : undefined);
           markings(pts, t);

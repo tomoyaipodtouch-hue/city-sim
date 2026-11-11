@@ -284,7 +284,7 @@ function moveHw(w: Grid, J: Junction, hwIdx: number, bad: Set<number>): boolean 
 // ---------------- ランプの道筋を探す ----------------
 interface RNode { c: number; L: number; hs: number; ins: number[]; outs: number[]; S: number; T: number; cd: number; cdDst: number; s: number; inDir: number; outDir: number }
 interface Mv { from: Arm; to: Arm; kind: 'R' | 'L' | 'CD' | 'loop' | 'outer' }
-interface Ends { dRange: [number, number]; dPref: number; mRange: [number, number]; mPref: number; fresh: boolean; fork: boolean; join: boolean; shape: number }
+interface Ends { dRange: [number, number]; dPref: number; mRange: [number, number]; mPref: number; fresh: boolean; fork: boolean; join: boolean; shape: number; slack?: number }
 
 type PNode = { c: number; L: number; hs: number }
 
@@ -399,6 +399,18 @@ class Router {
   route(mv: Mv, E: Ends, srcId: number, dstId: number, cdOpts?: { forkOk: (p: RNode) => boolean; joinOk: (q: RNode) => boolean; markCd?: boolean }): boolean {
     const w = this.w, B = this.B, gen = ++this.gen;
     const { dist, prev, stamp } = this;
+    // 進んでよい向き：分かれる向きから合わさる向きまで、曲がる側に回る弧（とその両側に slack）。ループは作らない（クローバー型のループは別）
+    let headMask = 0xff;
+    if (mv.kind !== 'loop') {
+      const f = opp(mv.from.dir), t = mv.to.dir, sl = E.slack ?? 1;
+      const sg = mv.kind === 'CD' ? 0 : turnKindOf(f, t) === 1 ? 1 : -1;
+      headMask = 0;
+      if (sg === 0) for (let k = -sl; k <= sl; k++) headMask |= bit(f + 8 + k);
+      else {
+        const span = ((t - f) * sg + 8) & 7;
+        for (let k = -sl; k <= span + sl; k++) headMask |= bit(f + 16 + k * sg);
+      }
+    }
     // 状態：マス・向き・直前に曲がったか（続けては曲がらない = カーブの半径が小さくなりすぎない）・高さの段
     const SID = (lc: number, d: number, hs: number, t = 0) => ((lc * 8 + d) * 2 + t) * NH + hs;
     // 出発点：本線から新しく分かれる、または同じ本線から来るランプから分かれる
@@ -420,6 +432,7 @@ class Router {
           if (turnAbs(p.inDir, nd) > 1) continue;
           const j = stepC(w, p.c, nd), lc = j >= 0 ? this.local(j) : -1;
           if (lc < 0) continue;
+          if (!(headMask & bit(nd))) continue;
           for (let hs = Math.max(0, p.hs - 1); hs <= Math.min(HMAX, p.hs + 1); hs++) {
             const L = hs ? 1 : 0;
             if (!this.okState(j, hs) || !this.okStep(p.c, p.L, nd, L)) continue;
@@ -472,7 +485,7 @@ class Router {
       heap.push(s.g0 + H(s.lc), id);
     }
     let best = Infinity, bestId = -1, bestGoal: Goal | null = null, bestJoin: { q: RNode; nd: number } | null = null;
-    const shapeR = 7;
+    const shapeR = 6.5;
     let iter = 0;
     while (heap.size) {
       const fk = heap.topKey();
@@ -493,6 +506,7 @@ class Router {
           if (tot < best) { best = tot; bestId = id; bestGoal = G; bestJoin = null; }
         }
       for (const nd of tr ? [d] : [(d + 7) & 7, d, (d + 1) & 7]) {
+        if (!(headMask & bit(nd))) continue;
         const j = stepC(w, c, nd);
         if (j < 0) continue;
         const lj = this.local(j);
@@ -637,7 +651,6 @@ class Heap {
 // ---------------- 走れるかの確かめ ----------------
 // 経路探索と同じ決まり（Uターンなし、都市高速のランプへの出入りは中央線をまたがない）で、from（ノード）から to へ行けるか
 export function jctCanDrive(g: Grid, from: number, inDir: number, to: number, limit = 20000): boolean {
-  const N = g.n * g.n;
   const isRamp = (v: number) => g.nodeType(v) === RoadType.Ramp;
   const seen = new Set<number>();
   const q: [number, number, number][] = [[from, inDir, 0]];
@@ -654,7 +667,6 @@ export function jctCanDrive(g: Grid, from: number, inDir: number, to: number, li
       seen.add(k);
       q.push([v, d, isRamp(u) ? 1 : 0]);
     });
-    void N;
   }
   return false;
 }
@@ -666,10 +678,10 @@ function endsFor(form: JctForm, kind: Mv['kind'], attempt = 0): Ends {
   // うまく通せないときは、分かれる・合わさる範囲を広げ、ランプどうしの分岐・合流も使う
   const wide = attempt >= 3 ? 4 : 0;
   const E = (d: [number, number], dp: number, m: [number, number], mp: number, fresh = true, fork = true, join = true, shape = 0): Ends =>
-    ({ dRange: [d[0], d[1] + wide], dPref: dp, mRange: [m[0], m[1] + wide], mPref: mp, fresh, fork: fork || wide > 0, join: join || wide > 0, shape: wide ? shape / 2 : shape });
+    ({ dRange: [d[0], d[1] + wide], dPref: dp, mRange: [m[0], m[1] + wide], mPref: mp, fresh, fork: fork || wide > 0, join: join || wide > 0, shape: wide ? shape / 2 : shape, slack: wide ? 2 : 1 });
   if (form === 'tee') return kind === 'R' ? E([3, 10], 4, [4, 12], 6) : E([3, 12], 5, [4, 14], 7);
   if (form === 'semi') return kind === 'R' ? E([3, 9], 4, [4, 10], 5) : E([4, 14], 6, [5, 14], 7);
-  if (form === 'turbine') return kind === 'R' ? E([3, 12], 4, [4, 12], 5, true, false, false) : E([4, 12], 5, [5, 12], 6, true, false, false, 0.35);
+  if (form === 'turbine') return kind === 'R' ? E([3, 12], 4, [4, 12], 5, true, false, false) : E([4, 12], 6, [5, 12], 7, true, false, false, 0.8);
   // クローバー型：集散路は本線の遠くから分かれて、遠くで合流する
   if (kind === 'CD') return E([9, 13], 10, [10, 14], 11, true, false, false);
   return E([0, 0], 0, [0, 0], 0, false, false, false);
@@ -754,14 +766,11 @@ function routeAll(g0: Grid, w0: Grid, J: Junction, form: JctForm): JctPlan {
         const ok = R.route({ from: A, to: Bo, kind: 'CD' }, endsFor(form, 'CD'), A.id, Bo.id, { forkOk: () => false, joinOk: () => false, markCd: true });
         if (!ok) { failed = { from: A, to: Bo, kind: 'CD' }; break; }
       }
-      // 集散路の上で、交差点の手前（s < 0）と先（s > 0）
       if (failed) { markFail(R, failed, bad); return fail('集散路を通す広さがありません（赤いマスのまわりを空けてください）'); }
     }
     for (const mv of list) {
       let ok: boolean;
       if (form === 'clover') {
-        const loopForks = (cd: number) => [...R.nodes.values()].filter((q) => q.cd === cd && q.outs.length > 1).map((q) => q.s);
-        const loopJoins = (cd: number) => [...R.nodes.values()].filter((q) => q.cdDst === cd && q.cd >= 0 && q.ins.length > 1).map((q) => q.s);
         const fromCd = mv.from.id, toCd = mv.to.id;
         if (mv.kind === 'loop')
           ok = R.route(mv, endsFor(form, 'loop'), mv.from.id, mv.to.id, {
@@ -769,9 +778,9 @@ function routeAll(g0: Grid, w0: Grid, J: Junction, form: JctForm): JctPlan {
             joinOk: (q) => q.cdDst === toCd && q.s < -1.2,
           });
         else {
+          // 外側のランプは、ループが合わさるより手前の集散路から分かれ、ループが分かれるより先の集散路に合わさる（織り込みは集散路のループの間だけ）
           const lj = Math.min(Infinity, ...[...R.nodes.values()].filter((q) => q.cd >= 0 && q.cd === fromCd && q.ins.length > 1).map((q) => q.s));
           const lf = Math.max(-Infinity, ...[...R.nodes.values()].filter((q) => q.cd >= 0 && q.cdDst === toCd && q.outs.length > 1).map((q) => q.s));
-          void loopForks; void loopJoins;
           ok = R.route(mv, endsFor(form, 'outer'), mv.from.id, mv.to.id, {
             forkOk: (p) => p.cd === fromCd && p.s < Math.min(-1.2, lj - 1),
             joinOk: (q) => q.cdDst === toCd && q.s > Math.max(1.2, lf + 1),

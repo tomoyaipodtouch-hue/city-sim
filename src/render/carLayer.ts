@@ -3,10 +3,10 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Grid } from '../sim/grid';
 import { CELL, DX, DY, opp } from '../sim/constants';
-import { CIVIC, CivicId, isHighway, LINES, LineKind, ROADS, RoadType, ZoneType } from '../sim/defs';
+import { CIVIC, CivicId, isHighway, JCT_RAMP_SPEED, LINES, LineKind, ROADS, RoadType, ZoneType } from '../sim/defs';
 import type { Building } from '../sim/world';
 import { RailLayer, TRACK_GAP } from './railLayer';
-import { isUrbanHighway, urbanTurnOk } from '../sim/traffic';
+import { isJctRamp, isUrbanHighway, urbanTurnOk } from '../sim/traffic';
 import { ROAD_LIFT, SIG_STOP, avenueMedianDir, drawWidth } from './roadLayer';
 import { findTurnbacks, Turnback, Island, islandSpread, ISLAND_GAP } from './turnback';
 import { findURamps, urampAt, urampH, urampS, urampSegs, urKey, URSeg, UPt } from './uramp';
@@ -1639,7 +1639,7 @@ export class CarLayer {
         const merging = tf === RoadType.Ramp && isHighway(tt);
         const len = walk && c.wl ? c.wl : CarLayer.cellLen(c);
         const cg = line || walk ? 1 : Math.max(this.cong![c.from], 1);
-        const kmh = walk ? 4.5 + (c.col % 3) * 0.6 : line ? LINES[f.track as LineKind].speedKmh * 1.2 : (merging ? ROADS[tt].speedKmh : def.speedKmh) * (f.track === 'bus' ? 0.8 : f.trailer ? 0.85 : 1);
+        const kmh = walk ? 4.5 + (c.col % 3) * 0.6 : line ? LINES[f.track as LineKind].speedKmh * 1.2 : (merging ? ROADS[tt].speedKmh : tf === RoadType.Ramp && isJctRamp(g, c.from) ? JCT_RAMP_SPEED : def.speedKmh) * (f.track === 'bus' ? 0.8 : f.trailer ? 0.85 : 1);
         // カーブの速さの割合は車の種類ごと。マスの境目で急に変わらないよう、なめらかに近づける（一時停止中は変わらない）
         const turnK = walk ? 1 : line || f.halfLen <= 3 ? TURN_CAR : f.trailer ? TURN_TRAILER : TURN_BIG;
         const vNom = ((kmh / 3.6) * 0.9) / cg;

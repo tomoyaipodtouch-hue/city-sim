@@ -80,7 +80,7 @@ export function findURamps(g: Grid, lift: number): URamp[] {
   const n = g.n, N = n * n, out: URamp[] = [];
   const isRamp = (c: number, lv: number) => (lv ? g.up[c] : g.road[c]) === RoadType.Ramp;
   for (let c = 0; c < N; c++) {
-    if (g.road[c] !== RoadType.Ramp) continue;
+    if (g.road[c] !== RoadType.Ramp || g.jct[c]) continue; // ジャンクションのランプは別
     const x = c % n, y = (c / n) | 0;
     for (const a of [0, 2, 4, 6]) {
       for (const sd of [(a + 2) & 7, (a + 6) & 7]) {

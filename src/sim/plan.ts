@@ -313,7 +313,7 @@ function planLane(
       if (end && degreeOf(g.conn[i]) <= 1) return 0;
       return 1;
     }
-    if (g.up[i] === RoadType.Ramp && !g.road[i]) return 1;
+    if (g.up[i] === RoadType.Ramp && !g.road[i] && !(g.jct[i] & 2)) return 1; // ジャンクションの高架のランプは、下をくぐる
     return 0;
   });
   lane.levels = levels;
@@ -323,6 +323,7 @@ function planLane(
     const i = cells[k];
     const L = levels[k];
     if (g.bldg[i]) { bad.add(i); why('建物があります。先に取り壊してください'); }
+    if (L === 0 && g.jct[i] & 2 && g.upH[i] - g.cellH(i % n, (i / n) | 0) < 5) { bad.add(i); why('ジャンクションのランプが低く、下を通せません'); }
     const cur = L ? g.up[i] : g.road[i];
     const len = k > 0 && isDiag(dirs[k - 1]) ? 1.41 : 1;
     const isW = pairDeck ? pairDeck.has(i) : g.isWater(i % n, (i / n) | 0) || g.deck[i] > 0;
@@ -2567,7 +2568,7 @@ export function linkURampMiddles(g: Grid) {
   const isRamp = (x: number, y: number) => g.inb(x, y) && (g.road[g.idx(x, y)] === RoadType.Ramp || g.up[g.idx(x, y)] === RoadType.Ramp);
   const isUrban = (x: number, y: number) => g.inb(x, y) && (isUrbanGround(g.road[g.idx(x, y)]) || isUrbanElevated(g.up[g.idx(x, y)]));
   for (let c = 0; c < n * n; c++) {
-    if (g.road[c] !== RoadType.Ramp || g.conn[c] & 0b10101010) continue;
+    if (g.road[c] !== RoadType.Ramp || g.conn[c] & 0b10101010 || g.jct[c] & 1) continue; // ジャンクションのランプは一般道につながない
     const x = c % n, y = (c / n) | 0;
     for (const a of [0, 2]) {
       const b = opp(a);
