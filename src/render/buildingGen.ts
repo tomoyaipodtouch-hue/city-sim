@@ -16,6 +16,7 @@ import './resModernA';
 import './resModernB';
 import { forcedRes, pickRes } from './resRegistry';
 import { ciqOffice } from './ciqGen';
+import { eduSchool, eduCollege, townHall } from './civicEduGen';
 import { CIVIC } from '../sim/defs';
 
 // 動くもの（煙、フレアの炎、トラックの道すじ）の位置。世界の座標
@@ -190,9 +191,9 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     case 'fire_l': modernFire(mb, f, tf, true); break;
     case 'clinic': modernClinic(mb, f, tf); break;
     case 'hospital': modernHospital(mb, f, tf); break;
-    case 'school_e': modernSchool(mb, f, tf, false); break;
-    case 'school_h': modernSchool(mb, f, tf, true); break;
-    case 'college': modernCollege(mb, f, tf); break;
+    case 'school_e': eduSchool(mb, f, tf, false, b.seed); break;
+    case 'school_h': eduSchool(mb, f, tf, true, b.seed); break;
+    case 'college': eduCollege(mb, f, tf, b.seed); break;
     case 'library': modernLibrary(mb, f, tf); break;
     case 'landfill': landfill(mb, f, rng); break;
     case 'incinerator': incinerator(mb, f, tf, false); break;
@@ -203,7 +204,7 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     case 'cemetery': cemetery(mb, f, rng, tf, cemeteryStage(b)); break;
     case 'crematorium': crematorium(mb, f, rng, tf, pond); break;
     case 'mayor_house': mansion(mb, f, rng, tf); break;
-    case 'city_hall': cityHall(mb, f, tf); break;
+    case 'city_hall': townHall(mb, f, tf); break;
     case 'statue': statue(mb, f, tf); break;
     case 'museum': modernMuseum(mb, f, tf); break;
     case 'stadium': stadium(mb, f, rng); break;
@@ -4287,26 +4288,7 @@ function techHQ(mb: MeshBuilder, f: LotFrame, rng: Rng, tf: TF) {
 }
 
 // ---------------- 記念施設 ----------------
-const STONE = new THREE.Color(0xe4dccb), BRONZE = new THREE.Color(0x7a5a33), DOME = new THREE.Color(0x6f9a8c);
-
-function columns(mb: MeshBuilder, x0: number, x1: number, z: number, h: number, step: number) {
-  for (let x = x0; x <= x1 + 0.01; x += step) mb.cylinder(x, z, 1.2, h, 0.55, 8, PALETTE.white);
-}
-
-function cityHall(mb: MeshBuilder, f: LotFrame, tf: TF) {
-  mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.pavement);
-  const W = f.W - 8, z0 = -f.D / 2 + 4, z1 = f.D / 2 - 10;
-  mb.box(-W / 2, 0, z0, W / 2, 1.2, z1 + 4, STONE);
-  mb.box(-W / 2 + 1, 1.2, z0 + 1, W / 2 - 1, 14, z1, STONE, PAT.house, PALETTE.concrete);
-  columns(mb, -10, 10, z1 + 2, 12, 4);
-  mb.box(-11.5, 12, z1 - 0.5, 11.5, 13, z1 + 3.5, PALETTE.white);
-  mb.quad([-12, 13, z1 + 3.6], [12, 13, z1 + 3.6], [0, 17, z1 + 3.6], [0, 17, z1 + 3.6], PALETTE.white);
-  // ドーム
-  mb.cylinder(0, (z0 + z1) / 2, 14, 20, 6, 16, STONE);
-  mb.cylinder(0, (z0 + z1) / 2, 20, 26, 6, 16, DOME, DOME, 1);
-  mb.box(-0.15, 26, (z0 + z1) / 2 - 0.15, 0.15, 30, (z0 + z1) / 2 + 0.15, PALETTE.steel);
-  for (const x of [-f.W / 2 + 3, f.W / 2 - 3]) tf(x, f.D / 2 - 3, 1.1);
-}
+const STONE = new THREE.Color(0xe4dccb), BRONZE = new THREE.Color(0x7a5a33);
 
 function statue(mb: MeshBuilder, f: LotFrame, tf: TF) {
   mb.ground(-f.W / 2 + 0.2, -f.D / 2 + 0.2, f.W / 2 - 0.2, f.D / 2 - 0.2, 0.08, PALETTE.lawn2);
@@ -4569,53 +4551,6 @@ function modernClinic(mb: MeshBuilder, f: LotFrame, tf: TF) {
   redCross(mb, hw - 6, 6.8, z1 + 0.05, 2.6);
   parking(mb, -hw + 2, z1 + 4.5, hw - 2, hd - 1);
   planter(mb, tf, -hw + 2, z1 + 0.5, -hw + 5, z1 + 3);
-}
-
-// 学校：横長の教室棟（ガラスの1階、ベランダの手すりの帯、木のルーバー）、屋上の太陽光パネル、かまぼこ屋根の体育館、校庭
-function modernSchool(mb: MeshBuilder, f: LotFrame, tf: TF, high: boolean) {
-  civicStart(mb);
-  const hw = f.W / 2, hd = f.D / 2;
-  const wood = C(0xb88a5a);
-  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.07, PALETTE.lawn2);
-  const yz1 = -hd + f.D * (high ? 0.42 : 0.45);
-  mb.ground(-hw + 2, -hd + 2, hw - 2, yz1, 0.09, C(0xc9a77a));
-  if (high) {
-    mb.ground(-hw + 5, -hd + 5, hw - 5, yz1 - 3, 0.1, C(0xb5523b));
-    mb.ground(-hw + 8, -hd + 8, hw - 8, yz1 - 6, 0.11, PALETTE.lawn);
-  }
-  const cw = f.W * 0.62, cz1 = hd - 4, cz0 = cz1 - 11, ch = high ? 14 : 10.5;
-  const cx0 = -hw + 3, cx1 = cx0 + cw;
-  mBlock(mb, cx0, cz0, cx1, cz1, ch, { pat: PAT.ribbon, roofKit: false });
-  // ベランダの手すり（各階のガラスの帯）と、端の木のルーバー
-  for (let y = 4.5 + 3.2; y < ch - 0.5; y += 3.2) mb.box(cx0, y - 0.1, cz1, cx1, y + 1.0, cz1 + 1.2, C(0x9cc9d4));
-  for (let x = cx1 - 7; x < cx1 - 0.3; x += 0.9) mb.box(x, 0.5, cz1 + 0.2, x + 0.3, ch, cz1 + 1.3, wood);
-  for (let x = cx0 + 1; x < cx1 - 8; x += 4.2) mb.quad([x, ch + 0.8, cz0 + 9], [x + 3.6, ch + 0.8, cz0 + 9], [x + 3.6, ch + 2.0, cz0 + 4], [x, ch + 2.0, cz0 + 4], C(0x22355a));
-  const gx0 = cx1 + 2, gx1 = hw - 3, gz0 = yz1 + 2, gz1 = hd - 4;
-  if (gx1 - gx0 > 8) {
-    mb.box(gx0, 0, gz0, gx1, 7, gz1, MW, PAT.ribbon, MW2);
-    archRoof(mb, gx0 - 0.5, gz0 - 0.5, gx1 + 0.5, gz1 + 0.5, 7, 4, C(0xc9cdd2), false);
-  }
-  tf(-hw + 2, hd - 1.5, 0.8);
-  tf(hw - 2, -hd + 3, 0.9);
-}
-
-// 大学：中庭を囲む四角い研究棟と、片持ちで張り出すガラスの図書館棟
-function modernCollege(mb: MeshBuilder, f: LotFrame, tf: TF) {
-  civicStart(mb);
-  const hw = f.W / 2, hd = f.D / 2;
-  mb.ground(-hw + 0.2, -hd + 0.2, hw - 0.2, hd - 0.2, 0.07, PALETTE.lawn);
-  mb.ground(-2, -hd + 2, 2, hd - 0.5, 0.09, PALETTE.pavement);
-  mb.ground(-hw + 2, -2, hw - 2, 2, 0.09, PALETTE.pavement);
-  mBlock(mb, -hw + 3, -hd + 3, -4, -5, 16, { pat: PAT.ribbon, fins: true });
-  mBlock(mb, 4, -hd + 3, hw - 3, -5, 13, { pat: PAT.curtain });
-  mBlock(mb, -hw + 3, 5, -4, hd - 3, 12, { pat: PAT.ribbon });
-  // 図書館棟：細い柱の上に、ガラスの箱が張り出す
-  const lx0 = 4, lx1 = hw - 3, lz0 = 5, lz1 = hd - 6;
-  mb.box(lx0 + 4, 0, lz0 + 3, lx1 - 4, 5, lz1 - 3, MGL, PAT.fullglass, MW2);
-  mb.box(lx0 - 2, 5, lz0, lx1, 15, lz1 + 3, MGL, PAT.curtain, MW2);
-  mb.box(lx0 - 2.3, 15, lz0 - 0.3, lx1 + 0.3, 15.8, lz1 + 3.3, MW, PAT.none, MW2);
-  for (const [x, z] of [[lx0, lz1 + 2], [lx1 - 2, lz1 + 2]]) mb.box(x - 0.3, 0, z - 0.3, x + 0.3, 5, z + 0.3, MW);
-  for (let k = 0; k < 8; k++) tf(-hw + 5 + (k % 4) * (f.W - 10) / 3, k < 4 ? -3.5 : 3.5, 0.9);
 }
 
 // 図書館：ガラスの閲覧室の上に、張り出した波の屋根（細い柱で支える）
