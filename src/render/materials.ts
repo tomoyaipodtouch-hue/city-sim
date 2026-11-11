@@ -197,10 +197,10 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
             vec4 nM = texture2D(uSurf, mat2(0.8, -0.6, 0.6, 0.8) * p * (1.0 / 151.0));
             vec4 nS = texture2D(uSurf, mat2(0.28, 0.96, -0.96, 0.28) * p * (1.0 / 31.0) + 0.37);
             vec4 nP = texture2D(uSurf, mat2(-0.6, 0.8, -0.8, -0.6) * p * (1.0 / 11.0) + 0.53);
-            // 細かいむら（5m）：遠くて1画素が 2.5m を超えると、ならした値（0.5）と見分けがつかないので読まない（遠景の読み出しを1つ減らす）
+            // 細かいむら（5m）：遠くて1画素が 2.5m を超えると、ならした値（0.5）に寄せる。
+            // 読み出しは分岐の外で毎回行う（iPhone の GPU では、読み出しを if で囲むと、いつも読むより遅くなる）
             float fl = length(fwidth(p));
-            vec4 nF = vec4(0.5);
-            if (fl < 2.5) nF = mix(texture2D(uSurf, mat2(0.6, 0.8, -0.8, 0.6) * p * (1.0 / 5.3)), vec4(0.5), smoothstep(1.6, 2.5, fl));
+            vec4 nF = mix(texture2D(uSurf, mat2(0.6, 0.8, -0.8, 0.6) * p * (1.0 / 5.3)), vec4(0.5), smoothstep(1.6, 2.5, fl));
             float macro = nL.a * 0.6 + nM.g * 0.4;
             float mid = nS.g;
             vec3 g = mix(vec3(dot(c, vec3(0.3, 0.59, 0.11))), c, 0.84) * vec3(0.88, 0.86, 0.76);
