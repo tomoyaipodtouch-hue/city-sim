@@ -20,7 +20,7 @@ export const HW_ROAD_LIFT = 0.3; // upH から路面まで（roadLayer の ROAD_
 export const HWR_MARGIN = 0.5; // 架線柱の上端と桁の下面の間の余裕
 export const HWR_CLEAR = ERAIL_CATENARY + HWR_MARGIN + HW_STRUCT - HW_ROAD_LIFT; // 鉄道の床版から必要な upH まで（8.43m）
 export const HWR_GRADE = 0.1; // 坂の勾配（10%）
-const CREST = CELL; // 頂上と坂の下の、勾配がなめらかに変わる長さ（m）
+const CREST = 2 * CELL; // 頂上と坂の下の、勾配がなめらかに変わる長さ（m）
 const SOFT = (HWR_GRADE * CREST) / 2; // 坂の下のなめらかな曲がりの幅（高さ、m）
 const RAIL_HALF = 5.35; // 鉄道の線路の中心から架線柱の外側まで（m）
 const HW_HALF = 3.0; // 高速道路の中心から桁の下面の縁まで（m）
@@ -230,6 +230,11 @@ function plan(g: Grid, cells: number[], rail: number[], blocked: Set<number>): H
       const nat = natH(g, j);
       const want = soft(r, nat);
       const need2 = want > g.upH[j] + 0.01;
+      if (bits(g.conn1[j]).length === 1) {
+        // 行き止まりの端
+        if (need2) fail(HWR_MSG_END, [j]);
+        break;
+      }
       if (!plain(j)) {
         if (need2) fail(HWR_MSG_RAMP, [j]);
         break;
