@@ -6,7 +6,7 @@ import { CELL, DX, DY, opp } from '../sim/constants';
 import { CIVIC, CivicId, isHighway, JCT_RAMP_SPEED, LINES, LineKind, ROADS, RoadType, ZoneType } from '../sim/defs';
 import type { Building } from '../sim/world';
 import { RailLayer, TRACK_GAP } from './railLayer';
-import { isJctRamp, isUrbanHighway, urbanTurnOk } from '../sim/traffic';
+import { isJctRamp, isUrbanHighway, TRUCK_PCE, urbanTurnOk } from '../sim/traffic';
 import { ROAD_LIFT, SIG_STOP, avenueMedianDir, drawWidth } from './roadLayer';
 import { findTurnbacks, Turnback, Island, islandSpread, ISLAND_GAP } from './turnback';
 import { findJctChains, jAt, jctSegs, JSeg, jKey, JPt } from './jctCurve';
@@ -226,6 +226,7 @@ export class CarLayer {
   private lightsTail: THREE.Points;
   private grid: Grid | null = null;
   private traffic: Float32Array | null = null;
+  private freight: Float32Array | null = null; // トラックの交通量（シミュレーションの貨物の経路）。トラックはこれに沿って走る
   private cong: Float32Array | null = null;
   private mtx = new THREE.Matrix4();
   private q = new THREE.Quaternion();
@@ -408,6 +409,7 @@ export class CarLayer {
   private clReq = new Float64Array(0); // 軸ごとの、入りたい車がいた最後の時刻
   private clFirst = new Float64Array(0); // 軸ごとの、入りたい車が止められ始めた時刻（止められている間だけ古くなる）
   private clCnt = new Int32Array(0); // 軸ごとの、まとまりの中にいる車の数（コマごとに数え直す）
+  private clOcc: (Car | null)[] = []; // 軸ごとの、まとまりの中にいる車の1台（手前で待つ車の「前の車」にする。待ち合いの輪を見つけるため）
   // まとまりの入口（縦横の進む向き 0..3）ごとの、まとまりの縁から描いた停止線までの長さ（信号の交差点。ほかは 0）
   private clStop = new Float32Array(0);
   private simT = 0;
@@ -819,6 +821,7 @@ export class CarLayer {
       OR_LENS.set(orKey(G.from, G.to), orLen(G));
     }
     this.traffic = traffic;
+    this.freight = freight;
     this.cong = cong;
     this.scanEdges(g, traffic);
     // 道路が変わったかもしれないので、先に決めた行き先は決め直す
@@ -845,6 +848,7 @@ export class CarLayer {
       f.target = Math.min(f.max, Math.round((count ? ctotal : total) * scale * f.share));
       // 道路や線路がなくなった車両は消す
       f.cars = f.cars.filter((c) => exists(f, c.from) && exists(f, c.to));
+      return (count ? ctotal : total) * scale * f.share;
     };
     // 乗用車：トラックの分（交通量に重み 2.5 で入っている）を除いた交通量から
     // 混みすぎないように：マスごとに、そこにいる車の台数の見込みを、車線に入る台数の ROAD_FILL 倍までにする
@@ -852,12 +856,21 @@ export class CarLayer {
     const clip = this.roadClip(g, traffic);
     const carVol = new Float32Array(traffic.length);
     for (let v = 0; v < traffic.length; v++) carVol[v] = Math.max(0, traffic[v] - freight[v]) * clip[v];
-    for (const f of this.cars) build(f, carVol, 0.012);
-    // トラック：箱型が多く、トレーラーは港・貨物駅・倉庫業のまわりから出てくる
+    let carWant = 0, carGot = 0;
+    for (const f of this.cars) {
+      carWant += build(f, carVol, 0.012);
+      carGot += f.target;
+    }
+    // トラック：箱型が多く、トレーラーは港・貨物駅・倉庫業のまわりから出てくる。
+    // 貨物の交通量は乗用車換算（1台 TRUCK_PCE 台分）なので、1台あたりは乗用車と同じ割合で出す。
+    // 乗用車が台数の上限で減るときは、トラックも同じ割合で減らす（トラックの割合がシミュレーションと同じになるように）
     const fr = freight.map((v, i) => v * clip[i]);
-    build(this.trucks[0], fr, 0.003);
     const tv = this.trailerVol(g, fr);
-    for (let k = 1; k < this.trucks.length; k++) build(this.trucks[k], tv, 0.003, fr);
+    const kCar = carWant > 0 ? Math.min(1, carGot / carWant) : 1;
+    this.trucks.forEach((f, k) => {
+      const want = k ? build(f, tv, 0.012 / TRUCK_PCE, fr) : build(f, fr, 0.012 / TRUCK_PCE);
+      f.target = Math.min(f.max, Math.round(want * kCar));
+    });
     // ゴミ収集車：ゴミの多い場所の一般の道路を回る。処理施設があって、処理できている分だけ走る
     if (garbage && garbageLeft) {
       const n = g.n;
@@ -1077,7 +1090,8 @@ export class CarLayer {
   }
   // 次のノードを、交通量の多い方を選びやすくして決める（Uターンはしない）
   private pickNext(f: Fleet, node: number, din: number): [number, number] | null {
-    const g = this.grid!, tr = f.track === 'road' && f !== this.packers ? this.traffic! : f.vol;
+    // トラックは貨物の交通量の多い方へ（シミュレーションでトラックが通る幹線道路・高速道路。街路や住宅地には入りにくい）
+    const g = this.grid!, tr = f.track === 'road' && f !== this.packers ? (this.freight && this.trucks.includes(f) ? this.freight : this.traffic!) : f.vol;
     const opts: [number, number][] = [];
     const ws: number[] = [];
     const sharp: [number, number, number][] = [];
@@ -1587,7 +1601,8 @@ export class CarLayer {
     // 交差点のまとまりの出口の車線ごとに、まとまりの中からそこへ出ていく車が使う長さ（m）。
     // 入る前に、出口の先にこの分のあとで自分が入る余地があるかを見る（交差点の中で止まって、横切る車をふさがないように）
     const resv = new Map<number, number>();
-    const need = (f: Fleet) => Math.min(14, (f.trailer ? TRAILER_REAR + f.halfLen : 2 * f.halfLen) + 2);
+    // トレーラーは荷台の後ろの端まで全部（以前は 14m までにしていたので、出口の先に入りきらず、荷台が交差点に残ってふさいでいた）
+    const need = (f: Fleet) => (f.trailer ? TRAILER_REAR + f.halfLen + 2 : Math.min(14, 2 * f.halfLen + 2));
     const exitKey = (c: Car) => (c.ex![0] * 8 + c.ex![1]) * 2 + laneAt(c, c.ex![0]);
     const reserve = (f: Fleet, c: Car) => {
       const key = exitKey(c);
@@ -1595,7 +1610,9 @@ export class CarLayer {
     };
     // 交差点のまとまり：中にいる車を、入ってきた軸ごとに数える（横切る向きの車が中にいる間は、入らずに待つため）
     this.simT += dt;
-    const now = this.simT, CL = this.avCl, cnt = this.clCnt.fill(0);
+    const now = this.simT, CL = this.avCl, cnt = this.clCnt.fill(0), occ4 = this.clOcc;
+    if (occ4.length !== cnt.length) occ4.length = cnt.length;
+    occ4.fill(null);
     if (CL.length === g.n * g.n) {
       for (const f of this.fleets) {
         if (f.track !== 'road' && f.track !== 'bus') continue;
@@ -1619,6 +1636,7 @@ export class CarLayer {
           }
           if (c.bx === undefined) c.bx = c.din & 3;
           cnt[k * 4 + c.bx]++;
+          occ4[k * 4 + c.bx] = c;
           if (c.ex && c.from < CL.length && CL[c.from] >= 0) reserve(f, c);
         }
       }
@@ -1863,6 +1881,23 @@ export class CarLayer {
                   blk = o.c;
                 }
               }
+              // 出口のマスが空いていても、その先のマスで止まっている列の最後の車の後ろまでしか入れない
+              // （トレーラーは出口のマスより長いので、先のマスの列も見ないと、荷台が交差点に残ってふさぐ）
+              if (!blk) {
+                const n = g.n, N2 = n * n, e0 = E[0] % N2, ex2 = (e0 % n) + DX[E[1]], ey2 = ((e0 / n) | 0) + DY[E[1]];
+                if (g.inb(ex2, ey2)) {
+                  const nx2 = E[0] - e0 + ey2 * n + ex2, L0 = CELL * (E[1] & 1 ? Math.SQRT2 : 1);
+                  for (let d = 0; d < 8; d++)
+                    for (const o of lanes.get((nx2 * 8 + d) * 2 + laneAt(c, nx2)) ?? []) {
+                      if ((o.c.v ?? 0) > 2 || o.c.din !== E[1]) continue;
+                      const s = L0 + o.t * o.L - o.r;
+                      if (s < free) {
+                        free = s;
+                        blk = o.c;
+                      }
+                    }
+                }
+              }
               if (free - (resv.get(exitKey(c)) ?? 0) < need(f) && sv < gap) {
                 gap = sv;
                 lim = blk;
@@ -1873,11 +1908,16 @@ export class CarLayer {
             if (kc >= 0) {
               const q = kc * 4;
               const fresh = now - this.clReq[q + a] > 0.5; // 待ち始め
-              this.clReq[q + a] = now;
-              let stop = false;
+              // 出口の先がふさがっている・最初のマスがいっぱいで入れない車は、入りたい車に数えない
+              // （数えると、ほかの軸の車が入れない車にゆずって待ち続け、どちらも動かなくなる）
+              if (!hold) this.clReq[q + a] = now;
+              let stop = false, by: Car | null = null;
               for (let b = 0; b < 4; b++) {
                 if (b === a) continue;
-                if (cnt[q + b] > 0) stop = true;
+                if (cnt[q + b] > 0) {
+                  stop = true;
+                  by ??= occ4[q + b];
+                }
                 // ほかの軸が、自分より先から CL_YIELD 秒以上待っている
                 else if (now - this.clReq[q + b] < 0.5 && now - this.clFirst[q + b] > CL_YIELD && this.clFirst[q + b] < this.clFirst[q + a]) stop = true;
               }
@@ -1888,7 +1928,8 @@ export class CarLayer {
                 hold = true;
                 if (sv < gap) {
                   gap = sv;
-                  lim = null;
+                  // まとまりの中にいるほかの軸の車を待つ（その車が、自分の後ろにつながる列で止まっていれば待ち合いの輪）
+                  lim = by;
                 }
               }
             }
@@ -1908,7 +1949,12 @@ export class CarLayer {
             let cyc = false;
             // 待ち合いの輪（止められている前の車をたどると自分にもどる）：6 秒待ったら、3 秒ごとに調べる
             if (c.lim && w >= 6 && Math.floor(w / 3) !== Math.floor((w - dt) / 3)) for (let o: Car | null = c.lim, j = 0; o && j < 24 && !cyc; o = o.lim ?? null, j++) cyc = o === c;
-            if ((c.wait ?? 0) > STUCK || (c.rw ?? 0) > STUCK_HOLD || cyc) {
+            if (cyc && hold && lim && lim.alive && lim.bx !== undefined) {
+              // 交差点の中で止まっている車が輪をつくっている：その車を消す（交差点が空いて、横切る向きの車が動けるようになる）
+              drop(lim);
+              this.drops++;
+              c.wait = c.rw = 0;
+            } else if ((c.wait ?? 0) > STUCK || (c.rw ?? 0) > STUCK_HOLD || cyc) {
               adv = 0;
               drop(c);
               this.drops++;
@@ -2003,6 +2049,7 @@ export class CarLayer {
             // 出口の先の余地も、このコマのうちに続けて入る車のために使った分にしておく
             c.bx = c.din & 3;
             cnt[CL[c.from] * 4 + c.bx]++;
+            occ4[CL[c.from] * 4 + c.bx] = c;
             if (!line && c.ex) reserve(f, c);
           } else if (!line && !(c.from < CL.length && CL[c.from] >= 0)) {
             // まとまりを出た：決めておいた出口と道すじは使い終わった
