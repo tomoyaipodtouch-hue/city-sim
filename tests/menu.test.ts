@@ -30,7 +30,9 @@ describe('menu', () => {
         if (it.tool.startsWith('plop:')) {
           const id = it.tool.slice(5) as CivicId;
           expect(CIVIC[id], it.tool).toBeDefined();
-          expect(it.thumb, it.tool).toEqual({ k: 'civic', id });
+          // 空港は細長いので、ターミナルのあたりを切り取った絵
+          if (CIVIC[id].airfield) expect(it.thumb, it.tool).toEqual({ k: 'airport', size: CIVIC[id].airfield });
+          else expect(it.thumb, it.tool).toEqual({ k: 'civic', id });
         }
         expect(thumbKey(it.thumb).length).toBeGreaterThan(0);
       }
@@ -40,6 +42,7 @@ describe('menu', () => {
     const inMenu = new Set(TOOL_GROUPS.flatMap((g) => allItems(g)).map((i) => i.tool));
     for (const id of Object.keys(CIVIC)) {
       if (id === 'busstop') continue; // バス停は道路をタップして置く（busstop ツール）
+      if (id === 'airport_s' || id === 'airport_l') continue; // 以前の空港（保存データのためだけに残す）
       expect(inMenu.has(`plop:${id}`), id).toBe(true);
     }
   });

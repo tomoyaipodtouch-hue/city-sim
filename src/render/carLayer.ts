@@ -1,4 +1,5 @@
 // 車・トラック・バス・電車・歩く人の表示（交通量に比例した台数を走らせる）
+import { AIRPORT_SPECS, airportCells, airportLayout, airportPorts, frameOf, stationLines } from '../sim/airport';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Grid } from '../sim/grid';
@@ -1420,6 +1421,17 @@ export class CarLayer {
     this.busStopBuildings = list.filter((b) => b.civic && CIVIC[b.type as CivicId].transit === 'bus').length;
     for (const b of list) {
       if (!b.civic) continue;
+      const af = CIVIC[b.type as CivicId].airfield;
+      if (af) {
+        // 空港駅：駅の範囲に接して引いた線路に列車が止まる
+        const spec = AIRPORT_SPECS[af], cells = airportCells(g.n, b, spec), lot = new Set(cells);
+        const P = airportPorts(g.n, frameOf(b, spec), airportLayout(af), cells, (i) => lot.has(i));
+        for (const [kind, lc] of stationLines(g, P)) {
+          const set = this.stations.get(kind) ?? this.stations.set(kind, new Set()).get(kind)!;
+          for (const c of lc) set.add(c);
+        }
+        continue;
+      }
       const k = CIVIC[b.type as CivicId].transit;
       if (!k || k === 'bus') continue;
       const mask = g[k];

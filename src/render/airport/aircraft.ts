@@ -1,0 +1,211 @@
+// 旅客機・貨物機の形（実寸）と塗装（架空の航空会社）。
+// 形は MeshBuilder で作る。塗装の部分（尾翼・胴体の線・窓の帯）は「塗装の番号」（aSlot）で印をつけ、
+// インスタンスごとの色（iTail・iStripe・iWin）で塗る。1 種類の機体 = 1 回の描画（InstancedMesh）
+import * as THREE from 'three';
+import { MeshBuilder } from '../builder';
+
+export type AcType = 'atr' | 'a220' | 'e190';
+export const AC_TYPES: AcType[] = ['atr', 'a220', 'e190'];
+
+// 機体の大きさ（m）。len = 全長、span = 翼幅、R = 胴体の半径、fy = 胴体の中心の高さ
+export interface AcDims { len: number; span: number; R: number; fy: number; high: boolean; tTail: boolean; props: boolean }
+export const AC: Record<AcType, AcDims> = {
+  atr: { len: 27.2, span: 27.1, R: 1.33, fy: 1.95, high: true, tTail: true, props: true }, // ATR72-600
+  a220: { len: 38.7, span: 35.1, R: 1.85, fy: 2.55, high: false, tTail: false, props: false }, // A220-300
+  e190: { len: 36.2, span: 28.7, R: 1.5, fy: 2.3, high: false, tTail: false, props: false }, // E190
+};
+
+// 架空の航空会社（実在の会社は使わない）。白地に、尾翼と胴体の線の色を変える
+export interface Livery { name: string; tail: number; stripe: number; win: number; fleet: AcType[]; cargo?: boolean }
+export const LIVERIES: Livery[] = [
+  { name: 'エアロルーメン', tail: 0x16697a, stripe: 0xf2a541, win: 0x1c2530, fleet: ['a220'] },
+  { name: 'ケストレルライン', tail: 0xc22f3a, stripe: 0x2b2d42, win: 0x1c2530, fleet: ['e190', 'a220'] },
+  { name: 'マリーヴォ航空', tail: 0x2754a6, stripe: 0x6fb7f2, win: 0x1c2530, fleet: ['atr'] },
+  { name: 'テッセラ・リージョナル', tail: 0x5e3f8f, stripe: 0xe8559f, win: 0x1c2530, fleet: ['atr', 'e190'] },
+  { name: 'ヴェローラ', tail: 0x23855a, stripe: 0xa9d86e, win: 0x1c2530, fleet: ['a220', 'e190'] },
+];
+// 貨物機（窓がないので、窓の帯は白）
+export const CARGO_LIVERY: Livery = { name: 'クイルカーゴ', tail: 0xe0661c, stripe: 0x3b3b3b, win: 0xf1f2f3, fleet: ['atr'], cargo: true };
+export const ALL_LIVERIES = [...LIVERIES, CARGO_LIVERY];
+
+const C = (h: number) => new THREE.Color(h);
+// 塗装の印の色（形を作るときだけ使う。あとで白に置きかえて aSlot をつける）
+const SLOT_TAIL = C(0xff0000), SLOT_STRIPE = C(0x00ff00), SLOT_WIN = C(0x0000ff);
+const WHITE = C(0xf3f4f5), BELLY = C(0xd9dcdf), WING = C(0xd5d9de), GREY = C(0x8d939a), DARK = C(0x23262a), GLASS = C(0x1b232d), TYRE = C(0x1a1a1a);
+
+type V3 = [number, number, number];
+
+// 胴体：z に沿った輪を、半径と高さのずれの表で結ぶ（機首が +z）
+function fuselage(mb: MeshBuilder, d: AcDims, col: THREE.Color) {
+  const L = d.len, R = d.R, seg = 12;
+  // [z（全長に対する割合）, 半径の割合, 中心の高さのずれ（R に対する割合）]
+  const prof: [number, number, number][] = [
+    [0.5, 0.04, -0.25], [0.485, 0.38, -0.15], [0.465, 0.62, -0.08], [0.44, 0.82, -0.03], [0.405, 0.95, 0], [0.36, 1, 0],
+    [-0.24, 1, 0], [-0.3, 0.92, 0.12], [-0.37, 0.72, 0.32], [-0.44, 0.45, 0.5], [-0.5, 0.12, 0.62],
+  ];
+  const ring = (k: number): V3[] => {
+    const [zf, rf, dy] = prof[k];
+    const out: V3[] = [];
+    for (let s = 0; s < seg; s++) {
+      const a = (s / seg) * Math.PI * 2;
+      out.push([Math.cos(a) * R * rf, d.fy + dy * R + Math.sin(a) * R * rf * 0.98, zf * L]);
+    }
+    return out;
+  };
+  for (let k = 0; k + 1 < prof.length; k++) {
+    const A = ring(k), B = ring(k + 1);
+    for (let s = 0; s < seg; s++) {
+      const s2 = (s + 1) % seg;
+      const ang = ((s + 0.5) / seg) * Math.PI * 2;
+      const nA: V3 = [Math.cos((s / seg) * Math.PI * 2), Math.sin((s / seg) * Math.PI * 2), 0];
+      const nB: V3 = [Math.cos((s2 / seg) * Math.PI * 2), Math.sin((s2 / seg) * Math.PI * 2), 0];
+      // 下半分は少し灰色（汚れ・下面の塗装）
+      const c = Math.sin(ang) < -0.55 ? BELLY : col;
+      mb.quadN(A[s2], A[s], B[s], B[s2], nB, nA, nA, nB, c);
+    }
+  }
+}
+
+// 平らな翼（上下 2 枚と、前と後ろのへり）。root/tip = [x, y, 前縁の z, 後縁の z]
+function wingPanel(mb: MeshBuilder, root: [number, number, number, number], tip: [number, number, number, number], th: number, col: THREE.Color) {
+  const [rx, ry, rl, rt] = root, [tx, ty, tl, tt] = tip;
+  const up = (x: number, y: number, z: number): V3 => [x, y + th / 2, z];
+  const dn = (x: number, y: number, z: number): V3 => [x, y - th / 2, z];
+  const flip = tx < rx;
+  const q = (a: V3, b: V3, c2: V3, e: V3, cc: THREE.Color) => (flip ? mb.quad(e, c2, b, a, cc) : mb.quad(a, b, c2, e, cc));
+  q(up(rx, ry, rt), up(tx, ty, tt), up(tx, ty, tl), up(rx, ry, rl), col);
+  q(dn(rx, ry, rl), dn(tx, ty, tl), dn(tx, ty, tt), dn(rx, ry, rt), col);
+  q(dn(rx, ry, rl), up(rx, ry, rl), up(tx, ty, tl), dn(tx, ty, tl), col);
+  q(up(rx, ry, rt), dn(rx, ry, rt), dn(tx, ty, tt), up(tx, ty, tt), col);
+  q(dn(tx, ty, tt), dn(tx, ty, tl), up(tx, ty, tl), up(tx, ty, tt), col);
+}
+// 縦の板（垂直尾翼）：root/tip = [y, 前縁の z, 後縁の z]
+function finPanel(mb: MeshBuilder, root: [number, number, number], tip: [number, number, number], th: number, col: THREE.Color) {
+  const [ry, rl, rt] = root, [ty, tl, tt] = tip;
+  const h = th / 2;
+  mb.quad([h, ry, rt], [h, ry, rl], [h * 0.6, ty, tl], [h * 0.6, ty, tt], col);
+  mb.quad([-h, ry, rl], [-h, ry, rt], [-h * 0.6, ty, tt], [-h * 0.6, ty, tl], col);
+  mb.quad([-h, ry, rl], [-h * 0.6, ty, tl], [h * 0.6, ty, tl], [h, ry, rl], col);
+  mb.quad([h, ry, rt], [h * 0.6, ty, tt], [-h * 0.6, ty, tt], [-h, ry, rt], col);
+  mb.quad([-h * 0.6, ty, tl], [-h * 0.6, ty, tt], [h * 0.6, ty, tt], [h * 0.6, ty, tl], col);
+}
+// エンジン（z に沿った円筒）
+function nacelle(mb: MeshBuilder, x: number, y: number, z0: number, z1: number, r: number, col: THREE.Color, lip: THREE.Color, seg = 10) {
+  for (let s = 0; s < seg; s++) {
+    const a0 = (s / seg) * Math.PI * 2, a1 = ((s + 1) / seg) * Math.PI * 2;
+    const p = (a: number, z: number, rr: number): V3 => [x + Math.cos(a) * rr, y + Math.sin(a) * rr, z];
+    const n0: V3 = [Math.cos(a0), Math.sin(a0), 0], n1: V3 = [Math.cos(a1), Math.sin(a1), 0];
+    const zl = z1 - (z1 - z0) * 0.12;
+    mb.quadN(p(a1, z0, r * 0.75), p(a0, z0, r * 0.75), p(a0, zl, r), p(a1, zl, r), n1, n0, n0, n1, col);
+    mb.quadN(p(a1, zl, r), p(a0, zl, r), p(a0, z1, r * 0.95), p(a1, z1, r * 0.95), n1, n0, n0, n1, lip);
+    mb.tri([x, y, z1 - 0.3], p(a1, z1, r * 0.9), p(a0, z1, r * 0.9), DARK);
+  }
+}
+
+// 機体の形（鼻先が +z、主脚の接地点が y = 0）。static = 塗装の色をそのまま塗る（格納庫の中の機体など）
+export function buildAircraft(mb: MeshBuilder, type: AcType, livery?: Livery) {
+  const d = AC[type], L = d.len, R = d.R, fy = d.fy;
+  const tail = livery ? C(livery.tail) : SLOT_TAIL, stripe = livery ? C(livery.stripe) : SLOT_STRIPE, win = livery ? C(livery.win) : SLOT_WIN;
+  fuselage(mb, d, WHITE);
+  // 窓の帯（左右）と操縦席の窓
+  for (const sd of [-1, 1]) {
+    const x = sd * R * 1.0;
+    const y0 = fy + R * 0.18, y1 = fy + R * 0.36, z0 = -L * 0.3, z1 = L * 0.34;
+    if (sd > 0) mb.quad([x, y0, z0], [x, y0, z1], [x, y1, z1], [x, y1, z0], win);
+    else mb.quad([x, y0, z1], [x, y0, z0], [x, y1, z0], [x, y1, z1], win);
+    // 胴体の線（窓の下）
+    const s0 = fy - R * 0.12, s1 = fy + R * 0.02;
+    const xs = sd * R * 1.005;
+    if (sd > 0) mb.quad([xs, s0, -L * 0.36], [xs, s0, L * 0.4], [xs, s1, L * 0.4], [xs, s1, -L * 0.36], stripe);
+    else mb.quad([xs, s0, L * 0.4], [xs, s0, -L * 0.36], [xs, s1, -L * 0.36], [xs, s1, L * 0.4], stripe);
+    // 操縦席の窓
+    const cz = L * 0.445, cy = fy + R * 0.35;
+    const cx = sd * R * 0.52;
+    if (sd > 0) mb.quad([cx, cy, cz - 0.9], [cx * 0.55, cy, cz + 0.35], [cx * 0.45, cy + R * 0.28, cz - 0.2], [cx * 0.95, cy + R * 0.28, cz - 1.1], GLASS);
+    else mb.quad([cx * 0.55, cy, cz + 0.35], [cx, cy, cz - 0.9], [cx * 0.95, cy + R * 0.28, cz - 1.1], [cx * 0.45, cy + R * 0.28, cz - 0.2], GLASS);
+  }
+  const half = d.span / 2;
+  if (d.high) {
+    // ATR72：胴体の上の高翼（まっすぐ）、主翼の前のプロペラ機のエンジン、T 字の尾翼、胴体の横の脚のふくらみ
+    const wy = fy + R * 0.95;
+    for (const sd of [-1, 1]) {
+      wingPanel(mb, [sd * R * 0.6, wy, 1.7, -1.1], [sd * half, wy - 0.15, 0.95, -0.45], 0.32, WING);
+      const ex = sd * 4.1;
+      nacelle(mb, ex, wy - 0.45, -1.6, 3.3, 0.62, WHITE, stripe, 10);
+      // プロペラ（6 枚。止まって見える）
+      for (let k = 0; k < 6; k++) {
+        const a = (k / 6) * Math.PI * 2 + 0.3;
+        const bx = Math.cos(a), by = Math.sin(a);
+        const r0 = 0.3, r1 = 1.95, w = 0.14;
+        const p = (r: number, o: number): V3 => [ex + bx * r - by * o, wy - 0.45 + by * r + bx * o, 3.45];
+        mb.quad(p(r0, -w), p(r1, -w * 0.6), p(r1, w * 0.6), p(r0, w), DARK);
+        mb.quad(p(r0, w), p(r1, w * 0.6), p(r1, -w * 0.6), p(r0, -w), DARK);
+      }
+      mb.box(ex - 0.25, wy - 0.7, 3.3, ex + 0.25, wy - 0.2, 3.7, GREY);
+      // 脚のふくらみ
+      mb.box(sd * R * 0.75 - 0.5, 0.65, -2.4, sd * R * 0.75 + 0.5, fy - 0.3, 1.2, BELLY);
+      mb.box(sd * R * 0.75 - 0.25, 0, -0.9, sd * R * 0.75 + 0.25, 0.75, 0.0, TYRE);
+    }
+    // 垂直尾翼（塗装）と、その上の水平尾翼
+    finPanel(mb, [fy + R * 0.5, -L * 0.3, -L * 0.47], [fy + R + 4.6, -L * 0.44, -L * 0.52], 0.34, tail);
+    for (const sd of [-1, 1]) wingPanel(mb, [0, fy + R + 4.5, -L * 0.45, -L * 0.52], [sd * 3.65, fy + R + 4.45, -L * 0.48, -L * 0.53], 0.18, tail);
+    mb.box(-0.12, 0, L * 0.38, 0.12, fy - R * 0.8, L * 0.4, DARK);
+    mb.box(-0.2, 0, L * 0.38, 0.2, 0.6, L * 0.405, TYRE);
+  } else {
+    // A220・E190：胴体の下の低翼（後退翼）、翼の下のターボファン、ふつうの尾翼
+    const wy = fy - R * 0.62, sweep = type === 'a220' ? 0.47 : 0.45;
+    const rootLE = type === 'a220' ? 3.4 : 3.0, rootTE = type === 'a220' ? -3.9 : -3.6, tipC = type === 'a220' ? 1.9 : 1.6;
+    for (const sd of [-1, 1]) {
+      const tipLE = rootLE - (half - R) * sweep;
+      wingPanel(mb, [sd * R * 0.4, wy, rootLE, rootTE], [sd * half, wy + 1.4, tipLE, tipLE - tipC], 0.36, WING);
+      // 翼端の小さな翼（塗装）
+      const wx = sd * half;
+      mb.quad([wx, wy + 1.4, tipLE - tipC], [wx, wy + 1.4, tipLE], [wx, wy + 3.0, tipLE - tipC * 0.9], [wx, wy + 3.0, tipLE - tipC * 1.3], tail);
+      mb.quad([wx, wy + 1.4, tipLE], [wx, wy + 1.4, tipLE - tipC], [wx, wy + 3.0, tipLE - tipC * 1.3], [wx, wy + 3.0, tipLE - tipC * 0.9], tail);
+      const ex = sd * (type === 'a220' ? 6.3 : 5.4), er = type === 'a220' ? 1.08 : 0.86;
+      nacelle(mb, ex, wy - er * 0.55, rootLE - (Math.abs(ex) - R) * sweep - 1.8, rootLE - (Math.abs(ex) - R) * sweep + 2.6, er, GREY, stripe, 12);
+      // 主脚
+      mb.box(sd * 2.6 - 0.25, 0, -1.6, sd * 2.6 + 0.25, wy, -1.0, DARK);
+      mb.box(sd * 2.6 - 0.4, 0, -1.8, sd * 2.6 + 0.4, 1.0, -0.8, TYRE);
+    }
+    // 翼の付け根のふくらみ
+    mb.box(-R * 0.75, wy - 0.3, rootTE - 1.0, R * 0.75, fy - R * 0.3, rootLE + 1.2, BELLY);
+    finPanel(mb, [fy + R * 0.55, -L * 0.3, -L * 0.47], [fy + R + (type === 'a220' ? 6.0 : 5.2), -L * 0.45, -L * 0.52], 0.4, tail);
+    const hs = type === 'a220' ? 5.8 : 5.0;
+    for (const sd of [-1, 1]) wingPanel(mb, [0, fy + R * 0.25, -L * 0.37, -L * 0.47], [sd * hs, fy + R * 0.25 + 0.7, -L * 0.45, -L * 0.5], 0.22, WING);
+    mb.box(-0.15, 0, L * 0.36, 0.15, fy - R * 0.8, L * 0.38, DARK);
+    mb.box(-0.25, 0, L * 0.355, 0.25, 0.75, L * 0.385, TYRE);
+  }
+}
+
+// インスタンス用の形：塗装の印の色を白にして、塗装の番号 aSlot（0 = そのまま, 1 = 尾翼, 2 = 線, 3 = 窓）をつける
+export function aircraftGeometry(type: AcType): THREE.BufferGeometry {
+  const mb = new MeshBuilder();
+  mb.setTransform(0, 0, 0, 0);
+  buildAircraft(mb, type);
+  const g = mb.toGeometry();
+  const col = g.getAttribute('color') as THREE.BufferAttribute;
+  const slot = new Float32Array(col.count);
+  for (let i = 0; i < col.count; i++) {
+    const r = col.getX(i), gg = col.getY(i), b = col.getZ(i);
+    const s = r > 0.99 && gg < 0.01 && b < 0.01 ? 1 : gg > 0.99 && r < 0.01 && b < 0.01 ? 2 : b > 0.99 && r < 0.01 && gg < 0.01 ? 3 : 0;
+    slot[i] = s;
+    if (s) col.setXYZ(i, 1, 1, 1);
+  }
+  g.setAttribute('aSlot', new THREE.BufferAttribute(slot, 1));
+  // 建物用の属性はいらない
+  for (const k of ['aUvm', 'aPat', 'aMat']) g.deleteAttribute(k);
+  return g;
+}
+
+// 機体のマテリアル：インスタンスごとの塗装の色（iTail・iStripe・iWin）
+export function aircraftMaterial(): THREE.MeshStandardMaterial {
+  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.42, metalness: 0.08 });
+  m.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float aSlot;\nattribute vec3 iTail;\nattribute vec3 iStripe;\nattribute vec3 iWin;')
+      .replace('#include <color_vertex>', '#include <color_vertex>\n  if (aSlot > 0.5) vColor.rgb = aSlot < 1.5 ? iTail : (aSlot < 2.5 ? iStripe : iWin);');
+  };
+  m.customProgramCacheKey = () => 'aircraft-livery';
+  return m;
+}

@@ -25,6 +25,7 @@ import { shared, bldQuality } from './materials';
 import { findIslands } from './turnback';
 import { pondUniforms } from './parkPond';
 import { updateGardenLights } from './gardenLight';
+import { AirportLayer, isAirfield } from './airport/layer';
 
 export interface Quality {
   shadows: boolean;
@@ -49,6 +50,7 @@ export class CityRenderer {
   props = new PropsLayer();
   underground = false;
   buildings = new BuildingLayer();
+  airports = new AirportLayer(); // 新しい空港（舗装・建物・灯火・飛行機・地上の車両）
   trees = new TreeLayer();
   quays = new QuayLayer(); // 埋め立て地の岸壁
   outskirts = new OutskirtsLayer(); // 町はずれの田園（畑、生け垣、農家、農道、風車）
@@ -113,7 +115,7 @@ export class CityRenderer {
     this.sun.shadow.bias = -0.0002;
     this.sun.shadow.normalBias = 0.3;
     this.scene.add(this.sun, this.sun.target);
-    this.scene.add(this.roads.group, this.roadBridges.mesh, this.rails.group, this.props.group, this.buildings.group, this.quays.group, this.outskirts.group, this.trees.group, this.cars.group, this.preview.mesh, this.preview.line);
+    this.scene.add(this.roads.group, this.roadBridges.mesh, this.rails.group, this.props.group, this.buildings.group, this.airports.group, this.quays.group, this.outskirts.group, this.trees.group, this.cars.group, this.preview.mesh, this.preview.line);
     this.resize();
     window.addEventListener('resize', () => this.resize());
     requestAnimationFrame(this.loop);
@@ -170,6 +172,9 @@ export class CityRenderer {
     this.scene.remove(this.buildings.group);
     this.buildings = new BuildingLayer();
     this.scene.add(this.buildings.group);
+    this.scene.remove(this.airports.group);
+    this.airports = new AirportLayer();
+    this.scene.add(this.airports.group);
     this.scene.remove(this.quays.group);
     this.quays = new QuayLayer();
     this.scene.add(this.quays.group);
@@ -277,6 +282,8 @@ export class CityRenderer {
       if ((o as THREE.Mesh).isMesh) o.castShadow = !data && !this.underground;
     });
     fade(this.buildings.material);
+    fade(this.airports.material);
+    for (const o of this.airports.group.children) if ((o as THREE.Mesh).isMesh && !(o as THREE.InstancedMesh).isInstancedMesh) o.castShadow = !data && !this.underground;
   }
 
   setShowGrid(on: boolean) {
@@ -341,19 +348,28 @@ export class CityRenderer {
       const sc = this.stationCells();
       const sig = [...sc].sort((a, b) => a - b).join(',');
       if (sig !== this.lastStationSig) { this.lastStationSig = sig; const isl = findIslands(g, this.buildingList); this.rails.rebuild(g, sc, isl); this.cars.setIslands(isl); }
-      if (this.buildings.update(g, this.buildingList, heights)) this.dirty.trees = true;
+      // 新しい空港は空港の層が描く（敷地が大きく斜めにもなるので、建物の区画には入れない）
+      const plain = this.buildingList.filter((b) => !isAirfield(b));
+      if (this.buildings.update(g, plain, heights)) this.dirty.trees = true;
+      if (this.airports.update(g, this.buildingList)) this.dirty.trees = true;
       if (this.dataView !== 'none' || this.underground) this.fadeBuildings();
-      updateAO(g, this.buildingList);
-      this.lights.setBeacons(this.buildings.allBeacons());
+      updateAO(g, plain);
+      this.lights.setBeacons(this.airports.count ? this.buildings.allBeacons().concat(this.airports.beacons()) : this.buildings.allBeacons());
       this.props.setFx(this.buildings.allFx());
       this.props.setBuildings(g, this.buildingList);
       this.cars.setStations(g, this.buildingList);
       this.stationsMesh.rebuild(g, this.buildingList);
     }
+    // 空港駅の線路・高速道路の出入口・一般道の入口が変わったら、空港の形を作り直す
+    else if (this.dirty.grid && this.airports.count) {
+      const v = this.airports.version;
+      if (this.airports.update(g, this.buildingList)) this.dirty.trees = true;
+      if (v !== this.airports.version) this.lights.setBeacons(this.buildings.allBeacons().concat(this.airports.beacons()));
+    }
     // 町はずれの田園：マスが変わったとき、変わった区画だけ作り直す
     if (heights || this.dirty.grid) if (this.outskirts.rebuild(g, heights)) this.dirty.trees = true;
     // 大通りの中央分離帯のケヤキは、道路の層が分離帯の形から決めた位置に植える
-    if (this.dirty.trees) this.trees.rebuild(g, this.buildings.allTrees().concat(this.quays.allTrees(), this.outskirts.allTrees()), this.roads.medianTrees);
+    if (this.dirty.trees) this.trees.rebuild(g, this.buildings.allTrees().concat(this.quays.allTrees(), this.outskirts.allTrees(), this.airports.trees()), this.roads.medianTrees);
     if (this.dirty.overlay) {
       buildOverlay(this.terrain.overlayData, g, this.maps, this.dataView);
       this.terrain.commitOverlay();
@@ -438,6 +454,7 @@ export class CityRenderer {
     }
     this.cars.group.visible = carsMoving;
     this.props.update(mdt);
+    this.airports.tick(mdt, this.timeOfDay);
     this.outskirts.update(dt);
     this.updateDayNight(dt);
     this.updateShadow();
@@ -461,6 +478,7 @@ export class CityRenderer {
     updateGardenLights(this.buildings.gardenLights(), this.buildings.gardenFalls(), this.rig.target.x, this.rig.target.z, shared.uNight.value);
     this.sky.follow(this.rig.camera);
     this.lights.update(now / 1000);
+    this.airports.setNight(this.night, this.renderer.domElement.height / 2);
     this.trees.setLod(this.rig.dist);
     if (this.post) {
       this.post.setNight(this.night);

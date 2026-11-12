@@ -337,6 +337,16 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
             metalPart = max(line, mull);
             cellId = floor(vec2(uv.x / 4.5, uv.y / 3.8));
             gRefl = 1.35;
+          } else if (pat > 18.5 && pat < 19.5) { // 空港のターミナルの大きなガラス（3m の板、4.5m ごとの横の枠）
+            vec2 w = max(fwidth(uv) * 0.7, vec2(1e-4));
+            float fy = mod(uv.y, 4.5);
+            float line = 1.0 - box1(0.09, 4.5, fy, w.y);
+            float mull = 1.0 - box1(0.06, 2.94, mod(uv.x, 3.0), w.x);
+            win = 1.0 - max(line, mull) * 0.85;
+            diffuseColor.rgb = mix(diffuseColor.rgb * 0.5, vec3(0.42, 0.44, 0.46), max(line, mull));
+            metalPart = max(line, mull);
+            cellId = floor(vec2(uv.x / 9.0, uv.y / 4.5));
+            gRefl = 1.2;
           } else if (pat > 11.5 && pat < 12.5) { // 夜に照明で明るくなる面
             gLit = 1.0;
           } else if (pat > 12.5 && pat < 13.5) { // 夜に色がゆっくり変わる LED の面（光の冠）
@@ -485,7 +495,8 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
           }
           float r = h21(cellId + floor(vWp.xz * 0.05));
           vec3 glass = mix(vec3(0.13, 0.17, 0.23), vec3(0.32, 0.4, 0.5), r * 0.6);
-          bool modern = pat > 6.5 && pat < 10.5;
+          bool term = abs(pat - 19.0) < 0.5;
+          bool modern = (pat > 6.5 && pat < 10.5) || term;
           // 近代的なガラスは、建物の色（ガラスの色合い）を暗くしたもの。映り込みは光の計算のところで足す
           // 一枚もののガラス：マスごとの色のばらつきはつけない（モザイクに見えないように）
           if (modern) glass = vColor.rgb * 0.42;
@@ -517,6 +528,8 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
           // オフィス：建物ごとの忙しさ（0.5〜1.5倍）。点いた階では 85% の区画が点く
           float pOff = mix(0.21, 0.03, uLate) * (0.5 + hb) * (1.0 / 0.85);
           float litOn = isRes * step(hw, pRes) + isShow * step(hw, pShow) + isOff * step(hf, pOff) * step(hw, 0.85);
+          // 空港のターミナル：夜も深夜も、ほとんどの区画が明るい（オフィスと同じ 4000〜5000K）
+          if (term) litOn = step(hw, mix(0.96, 0.8, uLate));
           lit = win * litOn * (1.0 - aband);
           // 色：住宅は家ごと（0..1 = 昼白色..電球色、両方の家は 0.5）、オフィスは階ごとに 4000〜5000K、店は 3000〜3500K
           float hc = fract(hw * 13.7 + hf * 3.1);

@@ -2,7 +2,8 @@
 import type { GameClient } from '../game';
 import type { CityRenderer } from '../render/renderer';
 import { DATA_VIEWS, DataView } from '../render/overlay';
-import { ToolController, TOOL_GROUPS, PreviewInfo } from './tools';
+import { ToolController, TOOL_GROUPS, PreviewInfo, airRotLabel } from './tools';
+import { airportRows } from './airportPanel';
 import { metaParts } from './menu';
 import { ThumbService } from './thumbs';
 import { ADVISORS, AdvisorId, LOAN_AMOUNTS, MAX_LOANS, ordinanceCost, ORDINANCES, REWARD_REQ, rewardUnlocked } from '../sim/governance';
@@ -97,6 +98,7 @@ export class Hud {
   private cancelZone = el('div', 'cancel hidden', '✕　ここで指を離すとキャンセル');
   private chips = el('div', 'chips hidden');
   private dlayer = el('div', 'dlayer seg hidden'); // 取り壊す階層の切り替え（取り壊しモードのときだけ）
+  private arot = el('div', 'dlayer seg arot hidden'); // 空港の向き（空港を置くときだけ）
   private restore = el('button', 'restore hidden', svg('show'));
   private fpsEl = el('div', 'fps hidden');
   private sheetBg = el('div', 'sheet-bg hidden');
@@ -120,8 +122,9 @@ export class Hud {
     this.root = document.getElementById('ui')!;
     this.buildToolbar();
     this.buildLayerToggle();
+    this.buildAirRot();
     this.buildBar();
-    this.root.append(this.toolbar, this.sub, this.bar, this.news, this.info, this.chips, this.dlayer, this.cancelZone, this.cost, this.toast, this.restore, this.fpsEl, this.sheetBg, this.sheet, this.title);
+    this.root.append(this.toolbar, this.sub, this.bar, this.news, this.info, this.chips, this.dlayer, this.arot, this.cancelZone, this.cost, this.toast, this.restore, this.fpsEl, this.sheetBg, this.sheet, this.title);
     this.restore.onclick = () => this.setHidden(false);
     this.sheetBg.onclick = () => this.closeSheet();
     this.setInGame(false);
@@ -133,7 +136,7 @@ export class Hud {
 
   setInGame(on: boolean) {
     for (const e of [this.toolbar, this.bar, this.news]) e.classList.toggle('hidden', !on || this.hidden);
-    if (!on) this.dlayer.classList.add('hidden');
+    if (!on) { this.dlayer.classList.add('hidden'); this.arot.classList.add('hidden'); }
     if (!on) {
       this.closeSub();
       this.info.classList.add('hidden');
@@ -191,6 +194,22 @@ export class Hud {
 
   private syncLayerToggle() {
     this.dlayer.classList.toggle('hidden', this.tools.tool !== 'bulldoze' || this.hidden);
+    this.arot.classList.toggle('hidden', !this.tools.isAirportTool() || this.hidden);
+  }
+
+  // 空港の向き：45° ずつ回す（縦横 4 方向と斜め 4 方向）
+  private buildAirRot() {
+    const label = el('span', 'lbl', airRotLabel(this.tools.airRot));
+    const turn = (k: number) => {
+      sfx.click();
+      this.tools.airRot = (this.tools.airRot + k + 8) & 7;
+      label.textContent = airRotLabel(this.tools.airRot);
+      this.showToast(`空港の向き：${airRotLabel(this.tools.airRot)}`);
+    };
+    const l = el('button', '', '↺ 45°'), r = el('button', '', '45° ↻');
+    l.onclick = () => turn(-1);
+    r.onclick = () => turn(1);
+    this.arot.append(l, label, r);
   }
 
   private openSub(id: string) {
@@ -486,7 +505,8 @@ export class Hud {
           if (def.power) rows.push(['発電量', `${plantPower(b.type as CivicId, g.cellH(b.x, b.y))} MW`]);
           if (def.power && def.pollution === 0) rows.push(['大気汚染', 'なし']);
           if (def.water) rows.push(['給水量', `${def.water}`], ['電力', b.powered ? 'あり' : '<span class="neg">なし</span>']);
-          if (def.pollution) rows.push(['大気汚染', def.pollution > 20 ? 'ひどい' : 'ややある']);
+          if (def.pollution && !def.airfield) rows.push(['大気汚染', def.pollution > 20 ? 'ひどい' : 'ややある']);
+          if (def.airfield) rows.push(...airportRows(def.airfield, b.air, def.upkeep));
           if (def.transit && m) {
             // 駅のまわりの線路（バス停は道路）の乗客数
             const N = g.n * g.n;
@@ -497,7 +517,7 @@ export class Hud {
           }
           if (b.note) rows.push(['状態', b.note]);
           if (def.service) this.facilityId = b.id;
-          rows.push(['維持費', `${yen(def.upkeep)}/月`]);
+          if (!def.airfield) rows.push(['維持費', `${yen(def.upkeep)}/月`]);
         } else {
           const def = GROW[b.type as GrowKind];
           const isR = def.zone === 1;
@@ -552,6 +572,7 @@ export class Hud {
       rows.push(['地価', `${Math.round(lv * 100)}${meter(lv, 'var(--accent)')}`]);
       const p = Math.min(1, m.pollution[i] / 140);
       rows.push(['大気汚染', `${Math.round(p * 100)}${meter(p, '#b07a3a')}`]);
+      if (m.noise && m.noise[i]) rows.push(['空港の騒音', `${Math.round((m.noise[i] / 255) * 100)}${meter(m.noise[i] / 255, '#c0504d')}`]);
       if (!bid && g.zone[i]) rows.push(['電力', m.power[i] ? 'あり' : '<span class="neg">なし</span>'], ['水道', m.water[i] ? 'あり' : 'なし']);
     }
     rows.push(['場所', `${c.x}, ${c.y}`]);
@@ -573,7 +594,7 @@ export class Hud {
     // 建物の向き
     if (bid) {
       const b = this.game.buildings.get(bid);
-      if (b) {
+      if (b && !(b.civic && CIVIC[b.type as CivicId]?.airfield)) {
         const box = el('div', 'jpanel');
         const btn = el('button', 'btn', b.w === b.h ? '向きを変える（90°）' : '向きを変える（180°）');
         btn.onclick = () => { sfx.click(); void this.game.exec({ t: 'rotate', id: b.id }); };

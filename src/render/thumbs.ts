@@ -13,6 +13,7 @@ import { MAT } from './textures';
 import { PondBuilder, createPondMaterial, createFallMaterial, pondUniforms } from './parkPond';
 import { gardenU } from './gardenLight';
 import { SkyEnv } from './env';
+import { airportThumbModel, AIRPORT_THUMB_CELLS } from './airport/thumb';
 
 export const THUMB_PX = 128;
 const SEED = 20240611; // 絵が毎回同じになるよう、建物の種は決めておく
@@ -110,7 +111,7 @@ function addTrees(mb: MeshBuilder, trees: TreeSpot[]) {
 
 // 項目の絵の形を作る（建物 + 地面の台 + 木 + 池）
 function buildModel(spec: ThumbSpec) {
-  const mb = new MeshBuilder();
+  const mb = spec.k === 'airport' ? airportThumbModel(spec.size) : new MeshBuilder();
   const trees: TreeSpot[] = [];
   const pb = new PondBuilder();
   let w = 2, h = 2, tint: THREE.Color | null = null;
@@ -130,6 +131,9 @@ function buildModel(spec: ThumbSpec) {
     const f = setupLot(mb, b, () => 0, () => 0);
     generateBuilding(mb, b, f, trees, () => false, pb, [], 0);
     if (spec.k === 'civic') ext = context(mb, spec.id, f.W, f.D);
+  } else if (spec.k === 'airport') {
+    w = AIRPORT_THUMB_CELLS.w;
+    h = AIRPORT_THUMB_CELLS.h;
   } else if (spec.k === 'trees') {
     w = h = 2;
     const S = 2 * CELL;

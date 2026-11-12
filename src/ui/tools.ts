@@ -8,6 +8,14 @@ import type { Command } from '../sim/world';
 import type { GameClient } from '../game';
 import type { CityRenderer } from '../render/renderer';
 import { sfx } from '../sound';
+import { planAirport } from '../sim/airport';
+
+// 空港の向き（8 方向。陸側（ターミナル）が向く方角）の名前
+const DIR_NAMES = ['東', '南東', '南', '南西', '西', '北西', '北', '北東'];
+export function airRotLabel(rot: number) {
+  const axis = rot & 1 ? ((rot & 3) === 1 ? '北東―南西' : '北西―南東') : rot % 4 === 2 ? '東西' : '南北';
+  return `滑走路 ${axis}・ターミナルは${DIR_NAMES[rot & 7]}側`;
+}
 
 export { TOOL_GROUPS } from './menu';
 const yen = (v: number) => `§${Math.round(v).toLocaleString()}`;
@@ -74,6 +82,11 @@ export class ToolController {
   // 取り壊す階層（地上・高架・地下・すべて）。このセッションの間は覚えておく
   bulldozeLayer: BulldozeLayer = loadBulldozeLayer();
   onResult: ((ok: boolean, msg: string) => void) | null = null;
+  // 空港を置く向き（8 方向。0 = 陸側が東、2 = 南、奇数は斜め）
+  airRot = 2;
+  isAirportTool() {
+    return this.tool.startsWith('plop:') && !!CIVIC[this.tool.split(':')[1] as CivicId]?.airfield;
+  }
 
   constructor(private game: GameClient, private r: CityRenderer) {}
 
@@ -306,6 +319,17 @@ export class ToolController {
       pv.setPath(g, []);
       return plan.ok ? { text: `インターチェンジ　${yen(plan.cost)}`, bad: false } : { text: plan.reason, bad: true };
     }
+    if (t.startsWith('plop:') && CIVIC[t.split(':')[1] as CivicId]?.airfield) {
+      // 空港：敷地（緑）、埋め立て（土色）、置けないマス（赤）。空港駅の線路を引く場所（紫）と、高速道路をつなげる場所（水色）
+      const id = t.split(':')[1] as CivicId;
+      const plan = planAirport(g, CIVIC[id].airfield!, x, y, this.airRot);
+      const fill = new Set(plan.fill), st = new Set(plan.ports.stationNear), lot = new Set(plan.cells);
+      const hw = plan.ports.highwayNear.filter((i) => !st.has(i));
+      pv.setTiles(g, [...plan.cells, ...st, ...hw], (i) => (plan.bad.has(i) ? 0xe5534b : st.has(i) ? 0xb07cff : !lot.has(i) ? 0x6fc3ff : fill.has(i) ? 0xc9a26b : plan.ok ? 0x5cc46a : 0x9fb7a0));
+      pv.setPath(g, []);
+      const extra = plan.fill.length ? `（埋め立て ${plan.fill.length} マス・岸壁 ${plan.quay.length} マス）` : '';
+      return plan.ok ? { text: `${CIVIC[id].name}　${yen(plan.cost)}${extra}　紫＝駅の線路、水色＝高速道路`, bad: false } : { text: plan.reason, bad: true };
+    }
     if (t.startsWith('plop:')) {
       const id = t.split(':')[1] as CivicId;
       const plan = planPlop(g, id, x, y);
@@ -341,7 +365,7 @@ export class ToolController {
     else if (t.startsWith('terrain:')) cmd = { t: 'terrain', op: t.split(':')[1] as TerrainOp, x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1 };
     else if (t === 'trees') cmd = { t: 'trees', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1 };
     else if (t === 'bulldoze') cmd = { t: 'bulldoze', x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1, layer: this.bulldozeLayer };
-    else if (t.startsWith('plop:')) cmd = { t: 'plop', id: t.split(':')[1] as CivicId, x: d.x1, y: d.y1 };
+    else if (t.startsWith('plop:')) cmd = { t: 'plop', id: t.split(':')[1] as CivicId, x: d.x1, y: d.y1, ...(this.isAirportTool() ? { rot: this.airRot } : {}) };
     else if (t === 'ramp') cmd = { t: 'ramp', x: d.x1, y: d.y1 };
     else if (t === 'uramp') cmd = { t: 'uramp', x: d.x1, y: d.y1 };
     else if (t === 'busstop') cmd = { t: 'busstop', x: d.x1, y: d.y1 };

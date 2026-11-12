@@ -316,3 +316,6 @@ html.portrait .sheet { left: 0; right: 0; }
 html.portrait .cols { grid-template-columns: 1fr; }
 html.portrait .title-in { grid-template-columns: 1fr; gap: 18px; }
 html.portrait .row { flex-wrap: wrap; }
+/* 空港の向き（空港を置くときだけ）：取り壊す階層の切り替えと同じ場所 */
+.arot { align-items: center; }
+.arot .lbl { padding: 0 8px; font-size: var(--fs-s, 12px); white-space: nowrap; }
