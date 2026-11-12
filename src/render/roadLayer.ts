@@ -2497,6 +2497,18 @@ export class RoadLayer {
       jDraw.set(C, [d0, d1]);
     }
     // 本線の帯（pts の向き）での、欄干を切る範囲
+    // 空港の車寄せ（ターミナル前の 1 列目の、ターミナルに面した側）：欄干・壁を付けない（空港の層が歩道をつなぐ）
+    const apCut = (i: number, level: number, a: Arm, b: Arm, pts: RP[]): Cut[] => {
+      if (!(g.aport[i] & (level ? 4 : 2))) return [];
+      const fl = level ? g.flow1[i] : g.flow[i];
+      const to = fl & (1 << b.d) ? b : fl & (1 << a.d) ? a : null;
+      if (!to) return [];
+      const p = pts[0], q = pts[pts.length - 1], dx = q.x - p.x, dz = q.z - p.z, l = Math.hypot(dx, dz) || 1;
+      const side = -to.uz * (-dz / l) + to.ux * (dx / l) > 0 ? 1 : 0;
+      let tot = 0;
+      for (let k = 1; k < pts.length; k++) tot += Math.hypot(pts[k].x - pts[k - 1].x, pts[k].z - pts[k - 1].z);
+      return [{ side, s0: -1, s1: tot + 1 }];
+    };
     const jCut = (node: number, pts: RP[]): Cut[] => {
       const list = jCuts.get(node);
       if (!list) return [];
@@ -2878,7 +2890,7 @@ export class RoadLayer {
           const fl = g.flow[i] | g.flow1[i];
           med = avRibbon(pts, fl & (1 << b.d) ? true : fl & (1 << a.d) ? false : null, [a, b], undefined, endN);
         } else {
-          const cut = opposite ? [...(urHwCells.has(node) ? urCut(node, pts, Math.min(a.w, b.w) / 2) : []), ...jCut(node, pts)] : [];
+          const cut = opposite ? [...(urHwCells.has(node) ? urCut(node, pts, Math.min(a.w, b.w) / 2) : []), ...jCut(node, pts), ...apCut(i, level, a, b, pts)] : [];
           ribbon(pts, t, undefined, undefined, 0, { endN, cut: cut.length ? cut : undefined });
         }
         lineEnds = endN ? [endN[0], endN[1]] : null;

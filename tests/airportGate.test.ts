@@ -1,9 +1,9 @@
-// 空港の門：正門へ都市高速・大通りを引いて終わらせるとつながり、車が 都市高速 → 正門 → ループ（2 層の U ターン）→ 車寄せ → 正門 → 都市高速 と走れる。
+// 空港の門：正門へ都市高速・大通りを引いて終わらせるとつながり、車が 都市高速 → 正門 → ターミナル前の道路（本物の道路のマス、2 層）→ 車寄せ → 正門 → 都市高速 と走れる。
 // 通用門は一般道でつながる。敷地のほかの場所に道路が接しても、つながらない。以前の空港は、読み込むときに正門へつなぎ直す
 import { describe, expect, it } from 'vitest';
 import { World } from '../src/sim/world';
 import { RoadType } from '../src/sim/defs';
-import { AIRPORT_SPECS, airportLayout, footprintAt, landLoop, loopRoute, makeFrame, placeCentre, planAirport, type AirportSize } from '../src/sim/airport';
+import { AIRPORT_SPECS, footprintAt, makeFrame, placeCentre, planAirport, type AirportSize } from '../src/sim/airport';
 import { DX, DY } from '../src/sim/constants';
 
 type Cmd = Parameters<World['exec']>[0];
@@ -59,15 +59,13 @@ describe('airport gates and the landside loop', () => {
           // 都市高速 → 正門 → ターミナル、ターミナル → 正門 → 都市高速
           expect(reach(w, A.links, far, n.term), `rot ${rot} in`).toBe(true);
           expect(reach(w, A.links, n.term, far), `rot ${rot} out`).toBe(true);
-          // 両方の階の U ターン：正門 → 車寄せ → U ターン → 戻りの道 → 正門 → 都市高速
-          for (const [curb, u] of [[n.arrCurb, n.arrU], [n.depCurb, n.depU]]) {
-            expect(reach(w, A.links, A.main!.node, curb)).toBe(true);
-            const via = A.links.filter(([p]) => p === curb).map(([, q]) => q);
-            expect(via).toContain(u);
-            expect(A.links.filter(([p]) => p === u).map(([, q]) => q)).toContain(n.ret);
-            expect(reach(w, A.links, n.ret, far)).toBe(true);
+          // 両方の階の車寄せ（出発 = 高架、到着 = 地上）へ道路だけで行けて、そこから U ターンして都市高速へ戻れる
+          const N2 = w.g.n * w.g.n;
+          for (const curb of [A.curb.find((v) => v >= N2)!, A.curb.find((v) => v < N2)!]) {
+            expect(curb, `rot ${rot}`).toBeDefined();
+            expect(reach(w, [], far, curb)).toBe(true);
+            expect(reach(w, [], curb, far)).toBe(true);
           }
-          expect(new Set(Object.values(n)).size).toBe(Object.values(n).length);
         }
       }
     });
@@ -118,31 +116,6 @@ describe('airport gates and the landside loop', () => {
       }
     });
   }
-
-  it('the loop routes run both levels with their own U-turn, curb on the right (terminal side)', () => {
-    for (const size of [1, 2, 3] as const) {
-      const L = airportLayout(size), P = landLoop(L);
-      const term = L.buildings.find((b) => b.kind === 'terminal')!.r;
-      for (const gateH of [0, 9]) {
-        const g: [number, number, number] = [L.gate, L.land.edge + 8, gateH];
-        const arr = loopRoute(L, 'arrCar', 0, g), dep = loopRoute(L, 'depCar', 0, g);
-        // 到着は地上だけ、出発は高架の車寄せ（高さ h）を通る
-        expect(arr.pts.filter((p) => p[1] < P.r1 + 0.5).every((p) => p[2] === 0)).toBe(true);
-        expect(dep.pts.filter((p) => p[2] === P.h).length).toBeGreaterThan(4);
-        for (const R of [arr, dep]) {
-          // 車寄せの車線はターミナルの側：-a へ走るとき c が小さいほうが右（右側通行）
-          const cs = R.pts.filter((p) => Math.abs(p[1] - P.curb) < 0.01);
-          expect(cs.length).toBe(2);
-          expect(cs[0][0]).toBeGreaterThan(cs[1][0]);
-          expect(P.curb).toBeGreaterThan(term.c1 - 0.01);
-          // U ターン：a のいちばん小さいところで、c が内側から外側へ
-          const k = R.pts.findIndex((p, i) => i > 0 && Math.abs(p[1] - P.ret1) < 0.01 && Math.abs(R.pts[i - 1][1] - P.thru) < 0.01);
-          expect(k).toBeGreaterThan(0);
-          expect(R.pts[k][0]).toBeCloseTo(R.pts[k - 1][0], 5);
-        }
-      }
-    }
-  });
 
   it('a legacy airport with an urban highway beside it is reconnected to the gate on load', () => {
     const { w, b } = place(2, 1);

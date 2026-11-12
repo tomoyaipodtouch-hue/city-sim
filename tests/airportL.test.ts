@@ -50,7 +50,11 @@ describe('large airport placement', () => {
       const cells = new Set(airportCells(w.g.n, b, SPEC));
       let marked = 0;
       for (let i = 0; i < w.g.bldg.length; i++) if (w.g.bldg[i] === b.id) { marked++; expect(cells.has(i)).toBe(true); }
-      expect(marked).toBe(cells.size);
+      // ターミナル前の道路のマス（空港の道路）には、建物の印をつけない
+      let road = 0;
+      for (const i of cells) if (w.g.aport[i]) { road++; expect(w.g.bldg[i]).toBe(0); }
+      expect(road).toBeGreaterThan(40);
+      expect(marked + road).toBe(cells.size);
       expect(frameOf(b, SPEC).cx).toBeCloseTo(p.cx, 5);
     }
   });

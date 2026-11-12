@@ -299,7 +299,7 @@ function layoutS(spec: AirportSpec): AirportLayout {
       { a0: -150, c0: taxiC + taxiW / 2, a1: 150, c1: 38 }, // 旅客ターミナルの前
       { a0: 235, c0: taxiC + taxiW / 2, a1: 335, c1: 24 }, // 貨物
       { a0: -372, c0: taxiC + taxiW / 2, a1: -282, c1: 10 }, // 格納庫の前
-      { a0: -258, c0: taxiC + taxiW / 2, a1: -200, c1: 4 }, // 消防署の前
+      { a0: 410, c0: taxiC + taxiW / 2, a1: 468, c1: 4 }, // 消防署の前
     ],
     stands,
     types: ['atr', 'a220', 'e190'], wideTypes: [], cargoTypes: ['atr'], walk: true,
@@ -315,7 +315,7 @@ function layoutS(spec: AirportSpec): AirportLayout {
       { kind: 'station', r: { a0: -66, c0: 86, a1: 66, c1: 95 }, h: 7 },
       { kind: 'hangar', r: { a0: -365, c0: 10, a1: -290, c1: 58 }, h: 19 },
       { kind: 'fuel', r: { a0: 344, c0: 26, a1: 404, c1: 56 }, h: 12 },
-      { kind: 'fire', r: { a0: -256, c0: 4, a1: -204, c1: 30 }, h: 8 },
+      { kind: 'fire', r: { a0: 412, c0: 4, a1: 464, c1: 30 }, h: 8 },
       { kind: 'cargo', r: { a0: 240, c0: 26, a1: 334, c1: 62 }, h: 12 },
     ],
     roadC: [64, 85],
@@ -328,7 +328,7 @@ function layoutS(spec: AirportSpec): AirportLayout {
     masts: [[-110, 36.5], [-27.5, 36.5], [27.5, 36.5], [110, 36.5], [239, 22], [-286, 8]],
     glide: 5.5,
     hangarType: 'a220',
-    fc: { cF: 72, cR: 88, cD: 56, aDiv: [236, 140], variant: 'merge', cM: 56, aMerge: [-96, -210], aU: -184, cTop: 40 },
+    fc: { cF: 72, cR: 88, cD: 56, aDiv: [236, 140], variant: 'merge', cM: 56, aMerge: [-96, -210], aU: -184, cTop: 24 },
   };
 }
 
@@ -389,7 +389,7 @@ function layoutM(spec: AirportSpec): AirportLayout {
       { kind: 'tower', r: { a0: -470, c0: 70, a1: -400, c1: 100 }, h: 10 },
       { kind: 'hotel', r: { a0: 380, c0: 66, a1: 440, c1: 96 }, h: 40 },
       { kind: 'office', r: { a0: 450, c0: 74, a1: 500, c1: 96 }, h: 28 },
-      { kind: 'carpark', r: { a0: -396, c0: 100, a1: -340, c1: 138 }, h: 17 },
+      { kind: 'carpark', r: { a0: -472, c0: 104, a1: -412, c1: 140 }, h: 17 },
       { kind: 'carpark', r: { a0: 415, c0: 104, a1: 485, c1: 128 }, h: 14, loop: true },
       { kind: 'station', r: { a0: -95, c0: 131, a1: 95, c1: 143 }, h: 7 },
       { kind: 'hangar', r: { a0: -640, c0: 4, a1: -500, c1: 84 }, h: 30 },
@@ -407,7 +407,7 @@ function layoutM(spec: AirportSpec): AirportLayout {
     masts: [[-250, 64], [-110, 64], [30, 64], [175, 64], [300, 64], [372, 40], [-495, 2]],
     glide: 3.2,
     hangarType: 'b787',
-    fc: { cF: 104, cR: 120, cD: 88, aDiv: [336, 200], variant: 'merge', cM: 88, aMerge: [-160, -272], aU: -248, cTop: 72 },
+    fc: { cF: 104, cR: 120, cD: 88, aDiv: [336, 200], variant: 'merge', cM: 88, aMerge: [-160, -272], aU: -248, cTop: 56 },
   };
 }
 
@@ -694,15 +694,18 @@ export function gateLink(g: Grid, gc: GateCell | null, main: boolean): GateLink 
   const i = gc.cell, N = g.n * g.n;
   // 門のマスから、空港の道路（フォアコート）でないマスへのつながりがあるか（門のマスに置いた目印の道路だけなら、つながっていない）
   const n = g.n, x = i % n, y = (i / n) | 0;
-  const out = (m: number) => {
+  // （空港の道路でないマスの道路が、都市高速か一般道のときだけ。ふつうの高速道路が門のマスを通っても、つながらない）
+  const out = (m: number, up = false) => {
     for (let d = 0; d < 8; d++) {
       if (!(m & (1 << d))) continue;
       const xx = x + DX[d], yy = y + DY[d];
-      if (xx >= 0 && yy >= 0 && xx < n && yy < n && !g.aport[yy * n + xx]) return true;
+      if (xx < 0 || yy < 0 || xx >= n || yy >= n || g.aport[yy * n + xx]) continue;
+      const j = yy * n + xx, L = g.arriveLevel(up ? 1 : 0, j, d), t = L ? g.up[j] : g.road[j];
+      if (isUrbanHw(t) || isLocalRoadType(t)) return true;
     }
     return false;
   };
-  if (main && isUrbanHw(g.up[i]) && out(g.conn1[i])) return { node: N + i, kind: 'hw' };
+  if (main && isUrbanHw(g.up[i]) && out(g.conn1[i], true)) return { node: N + i, kind: 'hw' };
   if (main && isUrbanHw(g.road[i]) && out(g.conn[i])) {
     // 一般道が正門のマスの都市高速（地上）に続いている：一般道でつながっている
     let local = false;

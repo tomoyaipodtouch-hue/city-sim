@@ -323,7 +323,7 @@ export function forecourtPlan(n: number, f: AirFrame, L: AirportLayout, cellsLot
   // ---- U ターン：F の終わりから、内側（cTop）へ寄せて大きな半円で R へ ----
   const aUend = G.centre(Fm.cells[Fm.cells.length - 1])[0];
   const r = (cR - S.cTop) / 2, cm = S.cTop + r;
-  const veer = S.cTop < cF - 0.5 ? Math.max(2 * G.step, (cF - S.cTop) * 1.5) : 0;
+  const veer = S.cTop < cF - 0.5 ? Math.max(2 * G.step, (cF - S.cTop) * 2.2) : 0;
   const ac = aUend - veer; // 半円の中心の a
   const uPts: P2[] = [...(veer ? sampleS(aUend, cF, ac, S.cTop) : []), ...sampleArc(ac, cm, r, -Math.PI / 2, -Math.PI * 1.5)];
   // R が始まるマス：半円の下の端（ac, cR）から +a へ
@@ -357,11 +357,28 @@ export function forecourtPlan(n: number, f: AirFrame, L: AirportLayout, cellsLot
     const sl = Math.max(G.step * 1.5, Math.abs(cD - cF) * 1.8);
     if (cD > cF) {
       // 分かれ道の列が F の外側（F と R の間）：正門から入るランプの途中で分かれる
-      let kf = 1, bd = Infinity;
-      for (let k = 1; k < IN.cells.length - 1; k++) { const d = Math.abs(G.centre(IN.cells[k])[1] - (cD + G.pitch)); if (d < bd) { bd = d; kf = k; } }
-      const [af, cf] = G.centre(IN.cells[kf]);
-      const pts: P2[] = [...sampleS(af, cf, af - sl, cD), ...sampleLine(af - sl, cD, a1 + sl, cD), ...sampleS(a1 + sl, cD, a1, cF)];
-      chain('DIV', IN.cells[kf], dirOfPath(IN, kf), Fo.cells[0], dirOfPath(Fo, 0), pts, Hm, Ho, cD);
+      // 分かれるマス：坂の列の少し外側の、入るランプのマスから順に、通せるところ
+      const ks = IN.cells.map((_, k) => k).filter((k) => k >= 1 && k < IN.cells.length - 1).sort((p, q) => Math.abs(G.centre(IN.cells[p])[1] - (cD + G.pitch)) - Math.abs(G.centre(IN.cells[q])[1] - (cD + G.pitch)));
+      let done = false;
+      for (const kf of ks) {
+        const [af, cf] = G.centre(IN.cells[kf]), [ap, cp] = G.centre(IN.cells[kf - 1]);
+        if (af - a1 < 5 * G.step) continue;
+        // 入るランプの向きのまま分かれ、なめらかに -a の向きへ（3 次ベジェ曲線）
+        const tl = Math.hypot(af - ap, cf - cp) || 1, L1 = Math.max(sl, 40);
+        const bz: P2[] = [];
+        for (let j = 0; j <= 24; j++) {
+          const u = j / 24, v = 1 - u;
+          const P1: P2 = [af + ((af - ap) / tl) * L1 * 0.5, cf + ((cf - cp) / tl) * L1 * 0.5], P2_: P2 = [af - L1 + L1 * 0.5, cD];
+          bz.push([v * v * v * af + 3 * v * v * u * P1[0] + 3 * v * u * u * P2_[0] + u * u * u * (af - L1), v * v * v * cf + 3 * v * v * u * P1[1] + 3 * v * u * u * P2_[1] + u * u * u * cD]);
+        }
+        const pts: P2[] = [...bz, ...sampleLine(af - L1, cD, a1 + sl, cD), ...sampleS(a1 + sl, cD, a1, cF)];
+        const d0 = dirBetween(n, IN.cells[kf - 1], IN.cells[kf]);
+        if (!routeChain(G, IN.cells[kf], d0, Fo.cells[0], dirOfPath(Fo, 0), pts, used, (i) => lot(i) || i === Y)) continue;
+        chain('DIV', IN.cells[kf], d0, Fo.cells[0], dirOfPath(Fo, 0), pts, Hm, Ho, cD);
+        done = true;
+        break;
+      }
+      if (!done) return fail('分かれ道が作れません');
     } else {
       const [a0] = G.centre(Fm.cells[kD0]);
       const pts: P2[] = [...sampleS(a0, cF, a0 - sl, cD), ...sampleLine(a0 - sl, cD, a1 + sl, cD), ...sampleS(a1 + sl, cD, a1, cF)];
@@ -396,6 +413,7 @@ export function forecourtPlan(n: number, f: AirFrame, L: AirportLayout, cellsLot
     chain('EXT', Ro.cells[Ro.cells.length - 1], dirOfPath(Ro, Ro.cells.length - 1), Rm.cells[k1], dirOfPath(Rm, k1), pts, Ho, Hm, cM);
   }
   void IN;
+  if (routeFail) return fail(`${routeFail} の道すじが作れません`);
   const plan: FcPlan = {
     ok: true, reason: '', level, H, gate: gate.cell, paths, cells: [],
     lines: { F: cF, R: cR, D: cD, M: cM },

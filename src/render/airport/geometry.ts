@@ -6,11 +6,11 @@ import * as THREE from 'three';
 import { MeshBuilder, PAT } from '../builder';
 import { MAT } from '../textures';
 import { CELL } from '../../sim/constants';
-import { AcKind, AirFrame, AirportLayout, LRect, landLoop, rotAngle, runwayNumber, standDir, standLaneBack, standPt, standTailBack } from '../../sim/airport';
+import { AcKind, AirFrame, AirportLayout, LRect, rotAngle, runwayNumber, standDir, standLaneBack, standPt, standTailBack } from '../../sim/airport';
 import type { TreeSpot } from '../buildingGen';
 import { buildAircraft, LIVERIES } from './aircraft';
 import { Rng } from '../../sim/rng';
-import { makePath, samplePath, type Path } from './ops';
+import type { FcPlan } from '../../sim/forecourt';
 
 const C = (h: number) => new THREE.Color(h);
 const COL = {
@@ -60,7 +60,10 @@ export interface AirCtx {
   gate: GateCtx | null; // 正門
   svc: GateCtx | null; // 通用門
   lines: string[]; // 空港駅につながっている線
+  fc: FcCtx | null; // ターミナル前の道路（フォアコート）
 }
+// フォアコート：計画（land の座標の列）と、正門の階・高架の高さ
+export interface FcCtx { plan: FcPlan; pts: Map<string, [number, number, number][]> }
 
 // 7 セグメントの数字（滑走路の番号、駐機スポットの番号）。[u0, v0, u1, v1]（幅 1、高さ 2 の中で）
 const SEG: Record<string, number[][]> = {};
@@ -83,7 +86,6 @@ export function buildAirportGeometry(L: AirportLayout, f: AirFrame, ctx: AirCtx)
   // 陸側（道路・駅・ターミナル）は、敷地の中で回した座標（land）で作る。T = いまの座標 → 敷地の座標
   const land = L.land, lco = Math.cos(land.rot), lsi = Math.sin(land.rot);
   const toLot = (a: number, c: number): [number, number] => [land.oa + a * lco - c * lsi, land.oc + a * lsi + c * lco];
-  const fromLot = (a: number, c: number): [number, number] => { const da = a - land.oa, dc = c - land.oc; return [da * lco + dc * lsi, -da * lsi + dc * lco]; };
   let T = (a: number, c: number): [number, number] => [a, c];
   const W = (a0: number, y: number, c0: number): [number, number, number] => {
     const [a, c] = T(a0, c0);
@@ -359,192 +361,11 @@ export function buildAirportGeometry(L: AirportLayout, f: AirFrame, ctx: AirCtx)
     pline([[ba - pa * 3.4, bc - pc * 3.4], [ba + pa * 3.4, bc + pc * 3.4]], 0.25, 1.1, COL.red);
   }
 
-  // ---- 陸側（land の座標）：正門から入る U 字のループ（2 層） ----
+  // ---- 陸側（land の座標）：ターミナル前の道路（フォアコート）の車寄せの歩道・屋根・橋脚・標識・植え込み ----
+  // 道路そのもの（路面・車線・欄干・高架の床版）は道路の層が、街の都市高速と同じ作りで描く
   useLand();
-  const LE = land.edge;
-  const gateLand = ctx.gate ? (() => { const [a, c] = fromLot(ctx.gate!.a, ctx.gate!.c); return { a, c, h: ctx.gate!.kind ? Math.max(0, ctx.gate!.h) : 0, kind: ctx.gate!.kind }; })() : null;
-  const elevGate = !!gateLand && gateLand.kind === 'hw' && gateLand.h > 2;
-  const P = landLoop(L, elevGate);
-  const V = L.viaduct, r0 = P.r0, r1 = P.r1, h = P.h, av = P.av;
-  // 高さのある道（床版・壁高欄・橋脚）。pts = [a, c, 高さ]、角は rad の円弧。高さは点のあいだをなめらかに
-  const o4 = new Float32Array(4);
-  const ribbon = (pts: [number, number, number][], W: number, rad: number, opt: { wall?: boolean; lines?: boolean; col?: THREE.Color } = {}) => {
-    const Pth = makePath(pts.map((p) => [p[0], p[1]] as [number, number]), rad);
-    const sv = pts.map((p) => nearestOn(Pth, p[0], p[1]));
-    const yOf = (s0: number) => {
-      let k = 0;
-      while (k + 2 < pts.length && s0 > sv[k + 1]) k++;
-      const u = Math.max(0, Math.min(1, (s0 - sv[k]) / Math.max(1e-3, sv[k + 1] - sv[k])));
-      return pts[k][2] + (pts[k + 1][2] - pts[k][2]) * u * u * (3 - 2 * u) + 0.12;
-    };
-    const n = Math.max(4, Math.ceil(Pth.len / 3));
-    const at = (k: number) => {
-      const s0 = (Pth.len * k) / n;
-      samplePath(Pth, s0, o4);
-      return { a: o4[0], c: o4[1], na: -o4[3], nc: o4[2], y: yOf(s0) };
-    };
-    const up = (v: [number, number, number][], col: THREE.Color) => {
-      const ex = v[1][0] - v[0][0], ez = v[1][2] - v[0][2], fx = v[3][0] - v[0][0], fz = v[3][2] - v[0][2];
-      if (ez * fx - ex * fz < 0) mb.quad(v[3], v[2], v[1], v[0], col); else mb.quad(v[0], v[1], v[2], v[3], col);
-    };
-    let q0 = at(0);
-    for (let k = 1; k <= n; k++) {
-      const q1 = at(k);
-      const L0: [number, number] = [q0.a + q0.na * W / 2, q0.c + q0.nc * W / 2], R0: [number, number] = [q0.a - q0.na * W / 2, q0.c - q0.nc * W / 2];
-      const L1: [number, number] = [q1.a + q1.na * W / 2, q1.c + q1.nc * W / 2], R1: [number, number] = [q1.a - q1.na * W / 2, q1.c - q1.nc * W / 2];
-      up([[R0[0], q0.y, R0[1]], [R1[0], q1.y, R1[1]], [L1[0], q1.y, L1[1]], [L0[0], q0.y, L0[1]]], opt.col ?? COL.road);
-      if (q0.y > 1.2) up([[R0[0], q0.y - 1.2, R0[1]], [L0[0], q0.y - 1.2, L0[1]], [L1[0], q1.y - 1.2, L1[1]], [R1[0], q1.y - 1.2, R1[1]]], COL.concreteDark);
-      if (opt.wall && (q0.y > 1 || q1.y > 1)) for (const [pa, pb] of [[L0, L1], [R0, R1]] as const) {
-        const b0 = Math.max(0, q0.y - 1.2), b1 = Math.max(0, q1.y - 1.2), t0 = q0.y + 1.0, t1 = q1.y + 1.0;
-        mb.quad([pa[0], t0, pa[1]], [pb[0], t1, pb[1]], [pb[0], b1, pb[1]], [pa[0], b0, pa[1]], COL.concrete);
-        mb.quad([pa[0], b0, pa[1]], [pb[0], b1, pb[1]], [pb[0], t1, pb[1]], [pa[0], t0, pa[1]], COL.concrete);
-      }
-      if (opt.lines) {
-        pline([[R0[0] + q0.na * 0.5, R0[1] + q0.nc * 0.5], [R1[0] + q1.na * 0.5, R1[1] + q1.nc * 0.5]], 0.2, q0.y + 0.03, COL.white);
-        pline([[L0[0] - q0.na * 0.5, L0[1] - q0.nc * 0.5], [L1[0] - q1.na * 0.5, L1[1] - q1.nc * 0.5]], 0.2, q0.y + 0.03, COL.white);
-      }
-      if (k % 4 === 0 && q1.y > 3.5) mb.cylinder(q1.a, q1.c, 0, q1.y - 1.2, 0.75, 10, COL.concreteDark);
-      q0 = q1;
-    }
-  };
-  // 矢印（a の向き dir に進む車線、高さ y）
-  const arrow = (a: number, c: number, dir: number, y: number) => {
-    G(a - dir * 3.2, c - 0.18, a + dir * 0.6, c + 0.18, y, COL.white);
-    triUp([[a + dir * 2.4, c], [a + dir * 0.4, c - 0.9], [a + dir * 0.4, c + 0.9]], y, COL.white);
-  };
-  const dashed = (a0: number, a1: number, c: number, y: number) => { for (let a = a0; a < a1 - 3; a += 9) G(a, c - 0.08, a + 4.5, c + 0.08, y, COL.white); };
-  const solid = (a0: number, a1: number, c: number, y: number) => G(a0, c - 0.1, a1, c + 0.1, y, COL.white);
-  const uGround = P.aUg, aEast = av + 8;
-  const bandW = P.aUg; void bandW;
-  // -- 地上（到着）：ターミナルの前の歩道、車寄せ（自家用車）・通過・島（タクシー乗り場・バス停）・タクシーとバスの車線
-  G(P.aUg, r0 - 2.5, V.a1 + 6, r0, 0.25, COL.walk);
-  mb.box(P.aUg, 0, r0 - 0.25, V.a1 + 6, 0.25, r0, COL.curb);
-  G(P.aUg, r0, aEast, r0 + 7, 0.1, COL.road);
-  G(P.aUg + 30, r0 + 9.5, P.upA[0], r0 + 13, 0.1, COL.road); // タクシー・バスの車線（東は出発の上りのランプの下）
-  G(P.upA[0], r0 + 7, aEast, r1, 0.1, COL.road); // 大通りとの交わり
-  // 島：縁石と歩道。タクシー乗り場（黄色の枠）・バス停（黄色の箱）、待合の屋根（木とガラス）
-  const islA0 = P.aUg + 40, islA1 = V.a1;
-  mb.box(islA0, 0, P.island[0], islA1, 0.22, P.island[1], COL.walk);
-  for (const [a0, a1, y] of [[P.aUg, aEast, 0.14], [P.aUe + 6, V.a1, h + 0.05]] as const) {
-    dashed(a0, a1, r0 + 3.5, y);
-    for (let a = a1 - 30; a > a0 + 20; a -= 45) { arrow(a, P.curb, -1, y); arrow(a - 12, P.thru, -1, y); }
-  }
-  solid(islA0, islA1, r0 + 13, 0.14);
-  const bays = (y: number, a0: number, a1: number) => {
-    // 西半分はバス停（3 か所）、東半分はタクシー乗り場（止まる枠のならび）
-    const mid = (a0 + a1) / 2;
-    for (let k = 0; k < 3; k++) {
-      const a = a0 + 12 + k * 20;
-      for (const [x0, x1, c0, c1] of [[a, a + 15, P.bay - 1.6, P.bay - 1.45], [a, a + 15, P.bay + 1.45, P.bay + 1.6], [a, a + 0.15, P.bay - 1.6, P.bay + 1.6], [a + 14.85, a + 15, P.bay - 1.6, P.bay + 1.6]] as const) G(x0, c0, x1, c1, y, COL.yellow);
-    }
-    for (let a = mid; a < a1 - 8; a += 6.5) G(a, P.bay - 1.6, a + 0.15, P.bay + 1.6, y, COL.yellow);
-    for (let a = a0 + 80; a < mid - 10; a += 30) arrow(a, P.bay, -1, y);
-  };
-  bays(0.14, islA0, islA1);
-  // 待合の屋根（島の上）：細い柱に木の天井とガラスの屋根
-  for (let a = islA0 + 4; a < Math.min(islA1, V.a0) - 4; a += 26) {
-    mb.box(a, 3.2, P.island[0] - 0.4, a + 18, 3.45, P.island[1] + 0.4, C(0x9cc3d4));
-    mb.matOverride = MAT.siding; mb.box(a, 3.0, P.island[0] - 0.3, a + 18, 3.2, P.island[1] + 0.3, COL.wood, PAT.lit); mb.matOverride = null;
-    for (const x of [a + 1, a + 17]) mb.box(x - 0.1, 0.2, (P.island[0] + P.island[1]) / 2 - 0.1, x + 0.1, 3.0, (P.island[0] + P.island[1]) / 2 + 0.1, COL.steelDark);
-  }
-  // -- 中央分離帯（植え込みと街路樹）と、戻りの 2 車線（+a へ）
-  G(P.aUg, r0 + 13, P.upA[0], r1 - 7, 0.16, COL.grass2);
-  for (const c of [r0 + 13.2, r1 - 7.2]) mb.box(P.aUg, 0, c - 0.2, P.upA[0], 0.22, c + 0.2, COL.curb);
-  for (let a = P.aUg + 8; a < P.upA[0] - 6; a += 14) tree(a, (r0 + 13 + r1 - 7) / 2, 0.55 + rng.next() * 0.2, rng.next() < 0.4 ? 1 : 0);
-  G(P.downA[1] - 4, r1 - 7, aEast, r1, 0.1, COL.road);
-  dashed(P.downA[1], av - 8, r1 - 3.5, 0.14);
-  solid(P.downA[1], av - 8, r1 - 0.4, 0.14);
-  for (let a = P.downA[1] + 20; a < av - 20; a += 45) { arrow(a, P.ret1, 1, 0.14); arrow(a + 12, P.ret2, 1, 0.14); }
-  G(P.downA[1] - 4, r1, aEast, r1 + 2, 0.25, COL.walk);
-  // -- 地上の U ターン（半円）と、その内側の植え込み
-  const half = (aU: number, R: number, y: number): [number, number, number][] => Array.from({ length: 13 }, (_, k) => {
-    const t = -Math.PI / 2 - (k / 12) * Math.PI;
-    return [aU + Math.cos(t) * R, P.cm + Math.sin(t) * R, y];
-  });
-  ribbon(half(uGround, P.R, 0), 7, 0, { lines: true });
-  G(uGround, P.thru + 3.5, uGround + 30, P.ret1 - 3.5, 0.16, COL.grass2);
-  tree(uGround - P.R * 0.25, P.cm, 0.7, 1);
-  arrow(uGround - P.R, P.cm, 0, 0.14);
-  // -- 高架（出発）：上りのランプ、車寄せの床版、高架の U ターン、戻りの下りのランプ
-  ribbon([[P.upA[0], P.bay, 0], [P.upA[1], P.bay, h], [P.upA[1] - 4, P.bay, h]], 7, 0, { wall: true, lines: true });
-  mb.matOverride = MAT.concrete;
-  mb.box(P.aUe, h - 0.8, V.c0, V.a1, h, V.c1, COL.concrete);
-  mb.box(P.aUe, h, V.c1 - 0.3, V.a1 - 7, h + 1.1, V.c1, COL.concrete);
-  for (let a = P.aUe + 8; a < V.a1; a += 22) for (const c of [r0 - 1, (P.island[0] + P.island[1]) / 2]) mb.box(a - 0.5, 0, c - 0.5, a + 0.5, h - 0.8, c + 0.5, COL.concreteDark);
-  mb.matOverride = null;
-  G(P.aUe, r0, V.a1, V.c1, h + 0.02, COL.road);
-  G(P.aUe, V.c0, V.a1, r0, h + 0.12, COL.walk);
-  mb.box(V.a0 - 30, h, P.island[0], V.a1 - 10, h + 0.2, P.island[1], COL.walk);
-  bays(h + 0.05, V.a0 - 30, V.a1 - 10);
-  // 出発の島の屋根（木の天井とガラス。ターミナルの大屋根と同じ作り）
-  for (let a = V.a0 - 26; a < V.a1 - 30; a += 30) {
-    mb.box(a, h + 3.4, P.island[0] - 0.6, a + 24, h + 3.65, P.island[1] + 0.6, C(0x9cc3d4));
-    mb.matOverride = MAT.siding; mb.box(a, h + 3.15, P.island[0] - 0.5, a + 24, h + 3.4, P.island[1] + 0.5, COL.wood, PAT.lit); mb.matOverride = null;
-    for (const x of [a + 1.5, a + 22.5]) mb.box(x - 0.1, h + 0.2, (P.island[0] + P.island[1]) / 2 - 0.1, x + 0.1, h + 3.15, (P.island[0] + P.island[1]) / 2 + 0.1, COL.steelDark);
-  }
-  solid(P.aUe, V.a1, V.c1 - 0.6, h + 0.05);
-  ribbon(half(P.aUe, P.R, h), 7, 0, { wall: true, lines: true });
-  ribbon([[P.aUe, P.ret1, h], [P.downA[1], P.ret1, 0], [P.downA[1] + 6, P.ret1, 0]], 7, 0, { wall: true, lines: true });
-  // 高架の照明（壁高欄の上）
-  for (let a = P.aUe + 10; a < V.a1; a += 30) { light(a, h + 7.5, V.c1 - 0.4, LIGHT.street, 6); mb.box(a - 0.1, h, V.c1 - 0.5, a + 0.1, h + 7.8, V.c1 - 0.3, COL.steelDark); }
-  // -- 大通り（正門から）と、正門の門（守衛所と門形の看板）
-  const gEnd = elevGate ? r1 + 4 : LE;
-  G(av - 8, r1, av + 8, gEnd, 0.1, COL.road);
-  for (let c = r1 + 1; c < gEnd - 2; c += 7) G(av - 0.1, c, av + 0.1, c + 3.5, 0.14, COL.yellow);
-  arrow(av + 4, (r1 + gEnd) / 2, 0, 0.14); arrow(av - 4, (r1 + gEnd) / 2, 0, 0.14);
-  if (gateLand && !elevGate) {
-    // 門のマスまで（斜めの敷地でも、門のマスの中心へまっすぐ）
-    // 門のマスの路面の高さまで（敷地の外の地面は、ならした敷地より高い・低いことがある）
-    if (gateLand.kind) ribbon([[av, LE - 8, 0], [av, LE - 2, 0], [gateLand.a, gateLand.c, Math.max(-3, Math.min(2, gateLand.h)) - 0.02]], gateLand.kind === 'hw' ? 10 : 14, 4);
-  }
-  if (P.gateRamp && gateLand) {
-    // 高架の都市高速が正門で終わる：門から陸側のふちに沿って下る 2 車線のランプ（都市高速のランプと同じ作り）
-    const gr = P.gateRamp, H = gateLand.h;
-    ribbon([[gateLand.a, gateLand.c, H], [P.ga, LE - 3, H], [P.ga - 12, gr.cs, H * 0.92], [av + 14, gr.cs, 0], [av, r1 + 2, 0]], 6.5, 9, { wall: true, lines: true });
-  }
-  // 門形の案内標識：出発（青・飛行機が上る）／到着（緑・飛行機が下る）／駐車場（青・P）。文字は読めなくてよい（記号）
-  const gantry = (a: number, c0: number, c1: number, panels: { c: number; col: number; glyph: 'dep' | 'arr' | 'park' | 'exit' }[], y0 = 0) => {
-    for (const c of [c0, c1]) mb.box(a - 0.2, y0, c - 0.2, a + 0.2, y0 + 6.6, c + 0.2, COL.steelDark);
-    mb.box(a - 0.15, y0 + 6.2, Math.min(c0, c1), a + 0.15, y0 + 6.5, Math.max(c0, c1), COL.steelDark);
-    for (const p of panels) {
-      mb.box(a - 0.12, y0 + 5.0, p.c - 1.7, a + 0.12, y0 + 7.2, p.c + 1.7, C(p.col), PAT.glow);
-      const g = (x0: number, yy0: number, x1: number, yy1: number) => mb.box(a - 0.16, y0 + yy0, p.c + x0, a + 0.16, y0 + yy1, p.c + x1, COL.white);
-      if (p.glyph === 'park') { g(-0.5, 5.4, -0.2, 6.8); g(-0.5, 6.5, 0.4, 6.8); g(0.1, 6.0, 0.4, 6.8); g(-0.5, 6.0, 0.4, 6.3); }
-      else if (p.glyph === 'exit') { g(-0.9, 6.0, 0.6, 6.25); g(0.3, 5.7, 0.55, 6.55); }
-      else { const up = p.glyph === 'dep' ? 1 : -1; g(-0.9, 6.0 - up * 0.25, 0.9, 6.0 + up * 0.25 + 0.2); g(-0.15, 5.4, 0.15, 6.8); g(-0.5, 5.6, 0.5, 5.8); }
-    }
-  };
-  const gc = Math.min(gEnd, r1 + 10) - 3;
-  // 大通り（入る向き）：出発・到着の分かれ道の手前
-  mb.setTransform(ang + land.rot + Math.PI / 2, ...(() => { const o = W(av, 0, gc); return [o[0], base, o[2]] as [number, number, number]; })());
-  T = (aa, cc) => toLot(av - cc, gc + aa);
-  gantry(0, -8.5, 0, [{ c: -6, col: 0x1f4f9a, glyph: 'dep' }, { c: -2.2, col: 0x1f6b45, glyph: 'arr' }]);
-  useLand();
-  // 戻りの道：駐車場（分かれ道の手前）と出口
-  gantry(av - 40, r1 - 7.5, r1 + 0.5, [{ c: r1 - 1.75, col: 0x1f4f9a, glyph: 'park' }, { c: r1 - 5.25, col: 0x1f6b45, glyph: 'exit' }]);
-  gantry(P.upA[0] - 40, r0 - 0.5, r0 + 13.5, [{ c: P.bay, col: 0x1f4f9a, glyph: 'dep' }, { c: P.thru, col: 0x1f6b45, glyph: 'arr' }]);
-  // 正門の守衛所（大通りの横）
-  mb.box(av + 9.5, 0, gEnd - 9, av + 13.5, 3.4, gEnd - 4, COL.office, PAT.office, COL.concrete);
-  mb.box(av + 9, 3.4, gEnd - 9.5, av + 14, 3.7, gEnd - 3.5, COL.steelDark);
-  // -- 駐車場ビルへの道（戻りの道から）
-  for (const gg of P.garages) pline(gg.spur.map((p) => [p[0], p[1]] as [number, number]), 6, 0.11, COL.road);
-  // 街灯（車寄せの外と戻りの道の外）
-  for (let a = P.aUg + 15; a < av - 10; a += 32) {
-    for (const c of [r1 + 1]) {
-      mb.box(a - 0.1, 0, c - 0.1, a + 0.1, 8, c + 0.1, COL.steelDark);
-      mb.box(a - 0.3, 7.8, c - 0.3, a + 0.3, 8.1, c + 0.3, COL.steelDark);
-      light(a, 7.8, c, LIGHT.street, 6);
-      pool(a, c, 0.3, 14);
-    }
-  }
-  // 陸側の植え込み（ふちに沿って）
-  for (let a = -land.A / 2 + 12; a < land.A / 2 - 12; a += 18) {
-    if (Math.abs(a) < L.station.a1 + 6 || Math.abs(a - av) < 20) continue;
-    if (P.gateRamp && a > av && a < P.ga + 10) continue;
-    if (P.garages.some((gg) => a > gg.r.a0 - 6 && a < gg.r.a1 + 6 && gg.r.c1 > LE - 20)) continue;
-    tree(a, Math.min(LE - 3, r1 + 5 + rng.next() * 3), 0.8 + rng.next() * 0.3, rng.next() < 0.3 ? 1 : 0);
-  }
-  void rng;
+  const fi = ctx.fc ? fcInfo(L, ctx.fc) : null;
+  if (ctx.fc && fi) forecourtFeatures(mb, L, ctx.fc, fi, { light, pool, tree, G, pline, rng });
 
   useLot();
 
@@ -555,12 +376,12 @@ export function buildAirportGeometry(L: AirportLayout, f: AirFrame, ctx: AirCtx)
     switch (bd.kind) {
       case 'pier': pier(mb, r, bd.h, rng, L); break;
       case 'concourse': concourse(mb, r, bd.h, L, light); break;
-      case 'terminal': terminal(mb, r, bd.h, L, light); break;
+      case 'terminal': terminal(mb, r, bd.h, L, light, fi); break;
       case 'tower': tower(mb, r, bd.h, L, beacon); break;
       case 'hotel': hotel(mb, r, bd.h, beacon); break;
       case 'office': office(mb, r, bd.h, beacon); break;
       case 'carpark': carpark(mb, r, bd.h, rng); break;
-      case 'station': station(mb, r, bd.h, L, ctx.lines); break;
+      case 'station': station(mb, r, bd.h, L, ctx.lines, fi); break;
       case 'plaza': plaza(mb, r, rng, tree, light); break;
       case 'hangar': hangar(mb, r, bd.h, bd.ac ?? L.hangarType, beacon, light, (a, c, rot) => mb.setTransform(ang + rot, a * f.cos - c * f.sin + f.cx, base + 0.12, a * f.sin + c * f.cos + f.cz), () => mb.setTransform(ang, f.cx, base, f.cz)); break;
       case 'fuel': fuel(mb, r); break;
@@ -725,22 +546,31 @@ function plaza(mb: MeshBuilder, r: LRect, rng: Rng, tree: (a: number, c: number,
 
 // ターミナル：ガラスの箱（2 層）の上に、木の天井の大きな波打つ屋根。陸側は出発ロビー前の道路の上まで張り出す。
 // 屋根は木のような柱（幹から枝が 4 本）で支える
-function terminal(mb: MeshBuilder, r: LRect, h: number, L: AirportLayout, light: (a: number, y: number, c: number, col: readonly number[], s: number) => void) {
+function terminal(mb: MeshBuilder, r: LRect, h: number, L: AirportLayout, light: (a: number, y: number, c: number, col: readonly number[], s: number) => void, fi: FcInfo | null) {
   mb.box(r.a0, 0, r.c0, r.a1, h, r.c1, COL.glass, PAT.terminal, COL.concrete);
+  const dy = fi ? fi.yDeck : 6.6; // 出発階の床（出発の車寄せの歩道と同じ高さ）
   // 2 階の床の帯（木）
   mb.matOverride = MAT.siding;
-  mb.box(r.a0 - 0.2, 6.0, r.c0 - 0.2, r.a1 + 0.2, 6.6, r.c1 + 0.2, COL.wood);
+  mb.box(r.a0 - 0.2, dy - 0.6, r.c0 - 0.2, r.a1 + 0.2, dy, r.c1 + 0.2, COL.wood);
   mb.matOverride = null;
-  // 入口（陸側：1 階は到着、2 階は出発）
+  // 入口（陸側：1 階は到着、2 階は出発）。出発の入口には、ガラスのひさし
   for (let a = r.a0 + 16; a < r.a1 - 10; a += 30) {
-    mb.box(a - 2.5, 0, r.c1, a + 2.5, 2.8, r.c1 + 0.1, C(0x2a2f36));
-    mb.box(a - 2.5, 6.6, r.c1, a + 2.5, 9.4, r.c1 + 0.1, C(0x2a2f36));
+    mb.box(a - 2.5, fi ? fi.yGround : 0, r.c1, a + 2.5, (fi ? fi.yGround : 0) + 2.8, r.c1 + 0.1, C(0x2a2f36));
+    mb.box(a - 2.5, dy, r.c1, a + 2.5, dy + 2.8, r.c1 + 0.1, C(0x2a2f36));
+    if (fi) {
+      mb.box(a - 4.2, dy + 3.6, r.c1, a + 4.2, dy + 3.75, r.c1 + 3.2, C(0x9cc3d4));
+      mb.box(a - 4.2, dy + 3.75, r.c1, a + 4.2, dy + 3.95, r.c1 + 0.3, COL.steel);
+      // 入口の上の光る案内（出発）
+      mb.box(a - 2.0, dy + 2.95, r.c1 + 0.05, a + 2.0, dy + 3.45, r.c1 + 0.15, C(0x1f4f9a), PAT.glow);
+    }
   }
   // 大屋根：a に沿って波打つ。陸側へ少し高くなる
   // 屋根は出発の車寄せ（高架の歩道と、自家用車の車線）まで張り出す。その外の車線と島は空から見える
-  const a0 = r.a0 - 12, a1 = r.a1 + 12, c0 = r.c0 - 1.5, c1 = L.viaduct.c0 + 6;
+  // 屋根は出発の車寄せの車線の上まで張り出す（車寄せは屋根の下）
+  const a0 = r.a0 - 12, a1 = r.a1 + 12, c0 = r.c0 - 1.5, c1 = fi ? fi.cF + 1.5 : L.viaduct.c0 + 6;
   const NA = 40, NC = 4;
-  const yAt = (a: number, c: number) => h + 2.2 + 2.2 * Math.sin((a / 46) * Math.PI) + ((c - c0) / (c1 - c0)) * 2.4;
+  const hRoof = Math.max(h, dy + 7.5);
+  const yAt = (a: number, c: number) => hRoof + 2.2 + 2.2 * Math.sin((a / 46) * Math.PI) + ((c - c0) / (c1 - c0)) * 2.4;
   const th = 1.1;
   for (let i = 0; i < NA; i++) for (let j = 0; j < NC; j++) {
     const aa = a0 + ((a1 - a0) * i) / NA, ab = a0 + ((a1 - a0) * (i + 1)) / NA;
@@ -768,18 +598,18 @@ function terminal(mb: MeshBuilder, r: LRect, h: number, L: AirportLayout, light:
     }
   }
   mb.matOverride = null;
-  // 木のような柱（陸側、道路の外側）
-  const cc = L.viaduct.c0 + 1;
+  // 木のような柱（陸側、出発の車寄せの歩道の上）
+  const cc = fi ? (r.c1 + fi.cK) / 2 + 0.8 : L.viaduct.c0 + 1, cy0 = fi ? dy : 0, cy1 = fi ? dy + 6 : 8.5;
   for (let a = r.a0 + 4; a <= r.a1 - 4; a += 28) {
-    mb.cylinder(a, cc, 0, 8.5, 0.45, 10, COL.steel, undefined, 0.4);
+    mb.cylinder(a, cc, cy0, cy1, 0.45, 10, COL.steel, undefined, 0.4);
     const top = yAt(a, cc) - th;
     for (const [da, dc] of [[-4, -2.2], [4, -2.2], [-4, 1.5], [4, 1.5]]) {
       const ta = a + da, tcc = cc + dc, ty = yAt(ta, tcc) - th;
       const p0: [number, number] = [a, cc];
       // 枝（細い角柱を斜めに）
       const w = 0.18;
-      mb.quad([p0[0] - w, 8.3, p0[1]], [p0[0] + w, 8.3, p0[1]], [ta + w, ty, tcc], [ta - w, ty, tcc], COL.steel);
-      mb.quad([p0[0] + w, 8.3, p0[1]], [p0[0] - w, 8.3, p0[1]], [ta - w, ty, tcc], [ta + w, ty, tcc], COL.steel);
+      mb.quad([p0[0] - w, cy1 - 0.2, p0[1]], [p0[0] + w, cy1 - 0.2, p0[1]], [ta + w, ty, tcc], [ta - w, ty, tcc], COL.steel);
+      mb.quad([p0[0] + w, cy1 - 0.2, p0[1]], [p0[0] - w, cy1 - 0.2, p0[1]], [ta - w, ty, tcc], [ta + w, ty, tcc], COL.steel);
     }
     void top;
     // 屋根の下の照明
@@ -863,37 +693,63 @@ const TRAIN_LEN: Record<string, number> = { rail: 5 * 18.8, erail: 4 * 14.1, mon
 
 // 空港駅。高架鉄道・モノレールがつながると、ターミナルの前の高架駅（木とガラスの屋根のホーム、ターミナルの出発階へのガラスの連絡橋）。
 // 地上の鉄道・地下鉄・つながっていないときは、地上のホームと駅舎
-function station(mb: MeshBuilder, r: LRect, h: number, L: AirportLayout, lines: string[]) {
+function station(mb: MeshBuilder, r: LRect, h: number, L: AirportLayout, lines: string[], fi: FcInfo | null) {
   const elevated = lines.includes('erail') || lines.includes('mono');
   const term = L.buildings.find((b) => b.kind === 'terminal')!;
   // ホームの長さ：つながっている列車のいちばん長いものより少し長く
   const tl = Math.max(60, ...lines.map((k) => TRAIN_LEN[k] ?? 0));
   const half = Math.min((r.a1 - r.a0) / 2, tl / 2 + 8);
   const a0 = -half, a1 = half;
+  // 戻りの列が駅の範囲を通る（小）：ホームは道路の外（敷地のふち）に寄せ、駅舎は道路の上の高い所に
+  const over = !!fi && fi.cR + 6.4 > r.c0;
+  const pc0 = over ? fi!.cR + 6.4 : r.c0 + 1;
+  // ターミナルへの連絡橋：出発の車寄せの車線の上（出発階 + 5.5m）を渡り、歩道の上のガラスの箱（エスカレーター）へ降りる
+  const bridge = (by: number, c1: number) => {
+    const c0 = fi ? fi.cK - 4 : term.r.c1;
+    mb.box(-4.5, by, c0, 4.5, by + 3.4, c1, COL.glass, PAT.terminal, COL.steel);
+    mb.matOverride = MAT.siding;
+    mb.box(-5.0, by + 3.4, c0 - 0.5, 5.0, by + 3.9, c1 + 0.5, COL.wood, PAT.lit);
+    mb.matOverride = null;
+    if (fi) {
+      // エスカレーターの箱（出発の歩道の上）
+      mb.box(-6, fi.yDeck, fi.facade + 0.5, 6, by + 3.4, fi.cK - 1.2, COL.glass, PAT.terminal, COL.steel);
+      // 支え：車線の外（1 列目と戻りの列の間、戻りの列の外）
+      const cs = [fi.cF + 5.8, ...(over ? [] : [fi.cR + 6.2])].filter((c) => c < c1 - 0.5);
+      for (const c of cs) mb.box(-0.6, 0, c - 0.6, 0.6, by, c + 0.6, COL.steel);
+    } else for (const c of [L.roadC[0] + 1, L.roadC[1] - 1]) mb.box(-0.5, 0, c - 0.5, 0.5, by, c + 0.5, COL.steel);
+  };
+  const byOf = (py: number) => (fi ? Math.max(py + 0.6, fi.yDeck + 5.5) : Math.max(py + 0.6, L.viaduct.h + 2.8));
   if (!elevated) {
     const py = 0;
-    mb.box(a0, py, r.c0 + 3, a1, py + 1.1, r.c1, COL.platform, PAT.none, C(0xd6d1c6));
+    mb.box(a0, py, pc0 + (over ? 0 : 2), a1, py + 1.1, r.c1, COL.platform, PAT.none, C(0xd6d1c6));
     mb.box(a0, py + 1.1, r.c1 - 0.6, a1, py + 1.12, r.c1 - 0.3, COL.yellow);
-    for (let a = a0 + 4; a < a1; a += 12) mb.box(a - 0.15, py + 1.1, r.c0 + 5, a + 0.15, py + h, r.c0 + 5.3, COL.steel);
-    mb.box(a0, py + h, r.c0 + 2, a1, py + h + 0.4, r.c1 + 1.5, COL.steel, PAT.none, C(0xe8eaec));
-    mb.box(a0 + 2, py + h + 0.4, r.c0 + 5, a1 - 2, py + h + 0.5, r.c0 + 7, C(0x8fb3c8));
-    mb.box(-16, 0, r.c0 - 1, 16, py + h + 3, r.c0 + 4, COL.glass, PAT.terminal, COL.concrete);
-    mb.box(-5, 11.5, term.r.c1, 5, 14.5, r.c0 - 1, COL.glass, PAT.terminal, COL.steel);
-    for (const c of [L.roadC[0] + 1, L.roadC[1] - 1]) mb.box(-0.4, 0, c - 0.4, 0.4, 11.5, c + 0.4, COL.steel);
-    mb.box(-12, py + h + 1.2, r.c0 - 1.05, 12, py + h + 2.4, r.c0 - 0.95, C(0x2a6fb5), PAT.glow);
+    for (let a = a0 + 4; a < a1; a += 12) mb.box(a - 0.15, py + 1.1, pc0 + (over ? 0.6 : 4), a + 0.15, py + h, pc0 + (over ? 0.9 : 4.3), COL.steel);
+    mb.box(a0, py + h, pc0 - (over ? 0 : 1), a1, py + h + 0.4, r.c1 + 1.5, COL.steel, PAT.none, C(0xe8eaec));
+    mb.box(a0 + 2, py + h + 0.4, pc0 + 1, a1 - 2, py + h + 0.5, pc0 + 3, C(0x8fb3c8));
+    const by = byOf(py + h);
+    if (over) {
+      // 駅舎：道路の上の高い所のガラスの箱。ホームへは階段の塔
+      mb.box(-16, by - 0.8, fi!.cR - 5, 16, by + 4.2, pc0 + 2, COL.glass, PAT.terminal, COL.concrete, true);
+      mb.box(10, 0, pc0 + 0.2, 16, by, pc0 + 3.4, COL.glass, PAT.terminal, COL.concrete);
+      bridge(by, fi!.cR - 5);
+      mb.box(-12, by + 2.6, fi!.cR - 5.06, 12, by + 3.6, fi!.cR - 4.96, C(0x2a6fb5), PAT.glow);
+    } else {
+      mb.box(-16, 0, r.c0 - 1, 16, py + h + 3, r.c0 + 4, COL.glass, PAT.terminal, COL.concrete);
+      bridge(by, r.c0 - 1);
+      mb.box(-12, py + h + 1.2, r.c0 - 1.05, 12, py + h + 2.4, r.c0 - 0.95, C(0x2a6fb5), PAT.glow);
+    }
     return;
   }
   // ---- 高架駅 ----
   const py = lines.includes('erail') ? 8 : 11; // 高架鉄道 8m、モノレール 11m（線路の高さ）
   const edge = L.land.edge + 5.2; // ホームのふち（線路のマスの、線路の中心から 2.8m 手前）
-  const pc0 = r.c0 + 1;
   // ホームの床（高架の床版）と、柱
   mb.matOverride = MAT.concrete;
   mb.box(a0, py - 1.2, pc0, a1, py + 1.1, edge, COL.concrete, PAT.none, COL.platform);
   mb.matOverride = null;
-  for (let a = a0 + 8; a < a1; a += 16) mb.box(a - 0.7, 0, pc0 + 2, a + 0.7, py - 1.2, pc0 + 4, COL.concreteDark);
+  for (let a = a0 + 8; a < a1; a += 16) mb.box(a - 0.7, 0, pc0 + (over ? 0.3 : 2), a + 0.7, py - 1.2, pc0 + (over ? 1.7 : 4), COL.concreteDark);
   mb.box(a0, py + 1.1, edge - 0.9, a1, py + 1.12, edge - 0.5, COL.yellow); // 点字ブロックの黄色
-  // ホームのガラスの壁（陸側）と、ホームの長さの案内（白い番号の柱）
+  // ホームのガラスの壁（陸側）
   mb.box(a0, py + 1.1, pc0, a1, py + 3.2, pc0 + 0.15, C(0x9cc3d4));
   // 屋根：ターミナルと同じ、木の天井の波打つ大屋根（ホームと線路の上まで）
   const rc0 = pc0 - 1, rc1 = edge + 5.5, NA = Math.max(6, Math.round((a1 - a0) / 6)), th = 0.7;
@@ -918,18 +774,19 @@ function station(mb: MeshBuilder, r: LRect, h: number, L: AirportLayout, lines: 
       mb.quad([a + w, py + 4.0, cm], [a - w, py + 4.0, cm], [ta - w, ty, tcc], [ta + w, ty, tcc], COL.steel);
     }
   }
-  // 駅舎（ガラスの箱、エスカレーターとエレベーター）：地面からホームの階まで
-  mb.box(-17, 0, r.c0 - 2, 17, py + 1.1, pc0 + 4, COL.glass, PAT.terminal, COL.platform);
-  mb.box(-6, py + 1.1, pc0 - 2, 6, py + 4.4, pc0 + 2, COL.glass, PAT.terminal, COL.steel);
-  // ターミナルの出発階へのガラスの連絡橋（出発ロビー前の道路の上を越える）
-  const by = Math.max(py + 0.6, L.viaduct.h + 2.8), bc0 = term.r.c1, bc1 = pc0 - 2;
-  mb.box(-4.5, by, bc0, 4.5, by + 3.4, bc1, COL.glass, PAT.terminal, COL.steel);
-  mb.matOverride = MAT.siding;
-  mb.box(-5.0, by + 3.4, bc0 - 0.5, 5.0, by + 3.9, bc1 + 0.5, COL.wood, PAT.lit);
-  mb.matOverride = null;
-  for (const c of [L.roadC[0] + 1, L.roadC[1] - 1]) mb.box(-0.5, 0, c - 0.5, 0.5, by, c + 0.5, COL.steel);
+  const by = byOf(py);
+  if (over) {
+    // 駅舎：ホームの階から道路の上へ張り出すガラスの箱
+    mb.box(-14, py - 1.2, fi!.cR - 5, 14, by + 3.6, pc0 + 2, COL.glass, PAT.terminal, COL.steel, true);
+    bridge(by, fi!.cR - 5);
+  } else {
+    // 駅舎（ガラスの箱、エスカレーターとエレベーター）：地面からホームの階まで
+    mb.box(-17, 0, r.c0 - 2, 17, py + 1.1, pc0 + 4, COL.glass, PAT.terminal, COL.platform);
+    mb.box(-6, py + 1.1, pc0 - 2, 6, py + 4.4, pc0 + 2, COL.glass, PAT.terminal, COL.steel);
+    bridge(by, pc0 - 2);
+  }
   // 駅名の看板（光る帯）
-  mb.box(-12, py + 5.0, r.c0 - 2.06, 12, py + 6.0, r.c0 - 1.96, C(0x2a6fb5), PAT.glow);
+  mb.box(-12, py + 5.0, pc0 - 2.06, 12, py + 6.0, pc0 - 1.96, C(0x2a6fb5), PAT.glow);
 }
 
 // 格納庫：かまぼこ形の屋根、エプロン側の大きな扉は開いていて、中に整備中の機体
@@ -1015,9 +872,190 @@ function cargo(mb: MeshBuilder, r: LRect, h: number, rng: Rng) {
   }
 }
 
-// 道すじの上で、点にいちばん近い位置（道のり）
-function nearestOn(p: Path, a: number, c: number): number {
-  let best = 0, bd = Infinity;
-  for (let i = 0; i < p.s.length; i++) { const d = (p.a[i] - a) ** 2 + (p.c[i] - c) ** 2; if (d < bd) { bd = d; best = p.s[i]; } }
-  return best;
+// ---- ターミナル前の道路（フォアコート）の、道路のまわりのもの ----
+export interface FcInfo {
+  cF: number; cR: number; cK: number; // 1 列目・戻りの列の中心、車寄せの縁石（1 列目の車道のターミナル側の縁）
+  H: number; // 高架の高さ（地面から）
+  yGround: number; yDeck: number; // 地上・高架の車寄せの歩道の高さ
+  dep: [number, number] | null; // 出発（高架）の 1 列目の a の範囲
+  arr: [number, number] | null; // 到着（地上）の 1 列目の a の範囲
+  stack: [number, number] | null; // 2 層が重なる範囲
+  term: LRect;
+  facade: number;
+}
+const ROAD_UP = 0.3; // 道路の層の路面の持ち上げ（roadLayer の ROAD_LIFT）
+function fcInfo(L: AirportLayout, fc: FcCtx): FcInfo | null {
+  const P = fc.plan, term = L.buildings.find((b) => b.kind === 'terminal')!.r;
+  const rng = (lv: number): [number, number] | null => {
+    const r = P.rows.filter((q) => (q.name === 'Fm' || q.name === 'Fo') && q.lv === lv)[0];
+    return r ? [Math.min(r.a0, r.a1), Math.max(r.a0, r.a1)] : null;
+  };
+  const dep = rng(1), arr = rng(0);
+  const stack: [number, number] | null = dep && arr && Math.min(dep[1], arr[1]) > Math.max(dep[0], arr[0]) ? [Math.max(dep[0], arr[0]), Math.min(dep[1], arr[1])] : null;
+  const cF = P.lines.F, cK = cF - 4.5;
+  return { cF, cR: P.lines.R, cK, H: P.H, yGround: ROAD_UP + 0.16, yDeck: P.H + ROAD_UP + 0.16, dep, arr, stack, term, facade: term.c1 };
+}
+
+function forecourtFeatures(mb: MeshBuilder, L: AirportLayout, fc: FcCtx, fi: FcInfo, T: FcTools) {
+  const { G, rng } = T;
+  const { cF, cK, H, term } = fi;
+  const fac = term.c1;
+  const PAVE = C(0xc9c4ba), PAVE2 = C(0xb6b0a5), KERB = C(0xd9d5cc);
+  const ta0 = term.a0 - 8, ta1 = term.a1 + 8;
+  const clip = (r: [number, number] | null): [number, number] | null => (r && Math.min(r[1], ta1) > Math.max(r[0], ta0) ? [Math.max(r[0], ta0), Math.min(r[1], ta1)] : null);
+  const dep = clip(fi.dep), arr = clip(fi.arr);
+  // 歩道：舗装（3m ごとの目地）、縁石、車止め（ボラード）
+  const sidewalk = (a0: number, a1: number, y: number, under: boolean) => {
+    // 床（高架は厚い床版。下から見える面も描く）
+    if (under) {
+      mb.matOverride = MAT.concrete;
+      mb.box(a0, y - 1.3, fac, a1, y - 0.16, cK, COL.concrete, PAT.none, COL.concrete, true);
+      mb.matOverride = null;
+    }
+    mb.box(a0, y - 0.16, fac, a1, y, cK, PAVE, PAT.none, PAVE);
+    for (let a = a0 + 3; a < a1 - 1; a += 3) G(a, fac + 0.1, a + 0.12, cK - 0.4, y + 0.01, PAVE2);
+    G(a0, cK - 1.4, a1, cK - 1.0, y + 0.012, C(0xd8c25a)); // 点字ブロック
+    mb.box(a0, y - 0.16, cK - 0.3, a1, y + 0.02, cK, KERB);
+    for (let a = a0 + 1.5; a < a1; a += 2.4) mb.box(a - 0.11, y, cK - 0.55, a + 0.11, y + 0.9, cK - 0.33, C(0x4a5056));
+  };
+  if (dep) sidewalk(dep[0], dep[1], fi.yDeck, true);
+  if (arr) sidewalk(arr[0], arr[1], fi.yGround, false);
+  // 2 層が重なるところの橋脚：門形（歩道の柱と、分離帯の柱を、高架の下の梁でつなぐ）。24m ごと
+  if (fi.stack) {
+    const [s0, s1] = fi.stack;
+    const cIn = cK - 1.4, cOut = cF + 5.8, top = H + ROAD_UP - 0.38 - 1.25;
+    mb.matOverride = MAT.concrete;
+    for (let a = s1 - 12; a > s0 + 4; a -= 24) {
+      for (const c of [cIn, cOut]) mb.box(a - 0.65, 0, c - 0.65, a + 0.65, top - 1.1, c + 0.65, C(0xb8b4ab));
+      mb.box(a - 0.8, top - 1.3, cIn - 0.9, a + 0.8, top, cOut + 0.9, C(0xb8b4ab), PAT.none, C(0xb8b4ab), true);
+    }
+    mb.matOverride = null;
+  }
+  // 出発の歩道：ベンチ、荷物のカート、人（静かな形。1 つのメッシュにまとめる）
+  const people = (a0: number, a1: number, y: number, k: number) => {
+    for (let a = a0 + 6; a < a1 - 4; a += 9 + rng.next() * 8) {
+      const c = fac + 1.2 + rng.next() * (cK - fac - 2.6);
+      const col = rng.pick([C(0x2b3a55), C(0x6a3b2e), C(0x3d4a3c), C(0x8a8f96), C(0x1f2227), C(0xb08a5a)]);
+      mb.box(a - 0.22, y, c - 0.15, a + 0.22, y + 1.05, c + 0.15, C(0x2a2d33));
+      mb.box(a - 0.25, y + 1.05, c - 0.17, a + 0.25, y + 1.55, c + 0.17, col);
+      mb.box(a - 0.11, y + 1.55, c - 0.11, a + 0.11, y + 1.8, c + 0.11, C(0xe0b89a));
+      if (rng.next() < 0.5) mb.box(a + 0.3, y, c - 0.2, a + 0.75, y + 0.65, c + 0.2, rng.pick([C(0x2a2d33), C(0x9a2b2b), C(0x2b4f8a)]));
+    }
+    for (let a = a0 + 14; a < a1 - 8; a += 30) {
+      // ベンチ
+      mb.box(a - 1.2, y + 0.42, fac + 1.0, a + 1.2, y + 0.5, fac + 1.6, C(0x8a6440));
+      for (const x of [a - 1.0, a + 1.0]) mb.box(x - 0.06, y, fac + 1.1, x + 0.06, y + 0.42, fac + 1.5, C(0x4a5056));
+      // 荷物のカート（並べて置いてある）
+      if (k) for (let q = 0; q < 3; q++) mb.box(a + 6 + q * 0.5, y, fac + 1.0, a + 6.4 + q * 0.5, y + 0.9, fac + 2.0, C(0x8e9398));
+    }
+  };
+  if (dep) people(dep[0], dep[1], fi.yDeck, 1);
+  if (arr) people(arr[0], arr[1], fi.yGround, 0);
+  // 到着の車寄せ：西にバスの乗り場（歩道を切り込んだバス停車帯と、止まっている空港バス）、東にタクシー乗り場（並んで待つタクシー）
+  if (arr) {
+    const bay = (a0: number, a1: number, kind: 'bus' | 'taxi') => {
+      // 歩道を切り込んだ停車帯：路面を歩道の内側へ 3.3m 広げる（縁石も切り込む）
+      const cb = cK - 3.3, y = fi.yGround;
+      mb.box(a0, y - 0.16, cb - 0.3, a1, y + 0.02, cb, KERB);
+      G(a0, cb, a1, cK, ROAD_UP + 0.02, C(0x3a3c40));
+      for (const [x0, x1] of [[a0, a0 + 0.15], [a1 - 0.15, a1]]) G(x0, cb, x1, cK, ROAD_UP + 0.03, COL.yellow);
+      G(a0, cb + 0.15, a1, cb + 0.3, ROAD_UP + 0.03, COL.yellow);
+      const mid = (cb + cK) / 2;
+      if (kind === 'bus') {
+        for (let a = a0 + 2; a + 12 < a1; a += 15) {
+          mb.box(a, ROAD_UP + 0.35, mid - 1.25, a + 12, ROAD_UP + 3.3, mid + 1.25, C(0xf0f0ee), PAT.ribbon, C(0xdedede));
+          mb.box(a, ROAD_UP + 1.0, mid - 1.27, a + 12, ROAD_UP + 1.35, mid + 1.27, C(0x2a5aa8));
+          for (const x of [a + 2, a + 9.5]) for (const c of [mid - 1.2, mid + 1.2]) mb.box(x - 0.5, ROAD_UP, c - 0.15, x + 0.5, ROAD_UP + 1.0, c + 0.15, C(0x1d1f22));
+        }
+      } else {
+        for (let a = a0 + 1.5; a + 4.5 < a1; a += 5.6) {
+          mb.box(a, ROAD_UP + 0.3, mid - 0.85, a + 4.5, ROAD_UP + 0.95, mid + 0.85, C(0xe8c22a));
+          mb.box(a + 1.1, ROAD_UP + 0.95, mid - 0.75, a + 3.3, ROAD_UP + 1.45, mid + 0.75, C(0x2a3440));
+          mb.box(a + 2.0, ROAD_UP + 1.45, mid - 0.2, a + 2.4, ROAD_UP + 1.65, mid + 0.2, C(0xf2f2f0));
+        }
+      }
+      // 乗り場の屋根（木の天井とガラス）
+      mb.box(a0 + 1, y + 3.2, cb - 2.6, a1 - 1, y + 3.35, cb + 0.6, C(0x9cc3d4));
+      mb.matOverride = MAT.siding; mb.box(a0 + 1, y + 3.0, cb - 2.5, a1 - 1, y + 3.2, cb + 0.5, COL.wood, PAT.lit); mb.matOverride = null;
+      for (let a = a0 + 2; a < a1 - 1; a += 8) mb.box(a - 0.1, y, cb - 2.2, a + 0.1, y + 3.0, cb - 2.0, COL.steelDark);
+      // 乗り場の案内（光る板）
+      mb.box(a0 + 1.5, y + 2.2, cb - 2.3, a0 + 1.7, y + 2.9, cb - 1.1, C(kind === 'bus' ? 0x2a6fb5 : 0xe8c22a), PAT.glow);
+    };
+    const span = arr[1] - arr[0];
+    if (span > 60) {
+      bay(arr[0] + 6, arr[0] + 6 + Math.min(47, span * 0.3), 'bus');
+      bay(arr[1] - 6 - Math.min(36, span * 0.25), arr[1] - 6, 'taxi');
+    }
+  }
+  // 横断歩道（到着の車寄せから、分離帯・駅のほうへ）：地上の 1 列目と戻りの列。停止線つき
+  if (arr) {
+    const a = Math.max(arr[0] + 20, Math.min(arr[1] - 20, (term.a0 + term.a1) / 2 + 30));
+    const zebra = (c0: number, c1: number) => {
+      for (let c = c0 + 0.5; c < c1 - 0.5; c += 1.0) G(a - 2, c, a + 2, c + 0.5, ROAD_UP + 0.035, COL.white);
+      G(a + 4, c0 + 0.3, a + 4.4, c1 - 0.3, ROAD_UP + 0.035, COL.white);
+    };
+    zebra(cK, cF + 4.5);
+    if (!fc.plan.rows.some((r) => r.name.startsWith('R') && r.lv === 1)) zebra(fi.cR - 4.5, fi.cR + 4.5);
+  }
+  // 駐停車禁止の縁石の黄色（車寄せの外の 1 列目）
+  for (const [r0, lvY] of [[fi.dep, fi.yDeck], [fi.arr, fi.yGround]] as const) {
+    if (!r0) continue;
+    const y = lvY - 0.16 + 0.005;
+    if (r0[1] > ta1 + 4) G(ta1, cK + 0.15, r0[1] - 8, cK + 0.3, y, COL.yellow);
+    if (r0[0] < ta0 - 4) G(r0[0] + 8, cK + 0.15, ta0, cK + 0.3, y, COL.yellow);
+  }
+  // 植え込みと並木（同じ間隔の列）：1 列目と戻りの列の間の分離帯、U ターンの内側、戻りの列の外側
+  const roadPts: [number, number][] = [];
+  for (const [name, list] of fc.pts) { void name; for (const p of list) roadPts.push([p[0], p[1]]); }
+  const clear = (a: number, c: number, r: number) => {
+    for (const [pa, pc] of roadPts) if (Math.abs(pa - a) < r + 12 && Math.abs(pc - c) < r + 12 && Math.hypot(pa - a, pc - c) < r) return false;
+    return true;
+  };
+  const rows = fc.plan.rows;
+  const Rrow = rows.find((r) => r.name === 'Rm');
+  const medC = (cF + fi.cR) / 2;
+  if (Rrow && fi.cR - cF > 12) {
+    const a0 = Math.min(Rrow.a0, Rrow.a1) + 10, a1 = Math.max(Rrow.a0, Rrow.a1) - 10;
+    const fRow = rows.filter((r) => r.name === 'Fm' || r.name === 'Fo');
+    const fa0 = Math.min(...fRow.map((r) => Math.min(r.a0, r.a1))), fa1 = Math.max(...fRow.map((r) => Math.max(r.a0, r.a1)));
+    const m0 = Math.max(a0, fa0 + 6), m1 = Math.min(a1, fa1 - 6);
+    const wMed = fi.cR - cF - 9 - 1.6;
+    if (m1 > m0 && wMed > 1.5) {
+      // 縁石つきの植え込み（低い刈り込み）
+      mb.box(m0, 0, medC - wMed / 2, m1, 0.5, medC + wMed / 2, C(0xb9b5ad), PAT.none, C(0x5d7f3a));
+      mb.box(m0 + 0.4, 0.5, medC - wMed / 2 + 0.4, m1 - 0.4, 1.1, medC + wMed / 2 - 0.4, C(0x4f7234));
+      for (let a = m1 - 6; a > m0 + 4; a -= 12) if ((!fi.stack || Math.abs(((fi.stack[1] - 12 - a) % 24 + 24) % 24) > 4)) T.tree(a, medC, 0.55, 0);
+    }
+  }
+  // U ターンの内側：芝生と、輪に並ぶ木
+  const U = fc.pts.get('U');
+  if (U && U.length > 3) {
+    let sa = 0, sc = 0;
+    for (const p of U) { sa += p[0]; sc += p[1]; }
+    sa /= U.length; sc /= U.length;
+    for (let k = 0; k < 10; k++) {
+      const t = (k / 10) * Math.PI * 2, a = sa + Math.cos(t) * 9, c = sc + Math.sin(t) * 9;
+      if (clear(a, c, 10)) T.tree(a, c, 0.75, 1);
+    }
+  }
+  // 戻りの列の外側（敷地のふちに沿って）
+  if (Rrow) {
+    const a0 = Math.min(Rrow.a0, Rrow.a1), a1 = Math.max(Rrow.a0, Rrow.a1), c = fi.cR + 9.5;
+    for (let a = a1 - 8; a > a0 + 8; a -= 14) {
+      if (L.station && a > L.station.a0 - 10 && a < L.station.a1 + 10 && L.station.c0 < c + 4) continue;
+      if (L.buildings.some((b) => !b.sub === (L.land.rot === 0) && a > b.r.a0 - 4 && a < b.r.a1 + 4 && c > b.r.c0 - 4 && c < b.r.c1 + 4)) continue;
+      if (c < L.land.edge - 1.5 && clear(a, c, 9)) T.tree(a, c, 0.7, 0);
+    }
+  }
+  // 街灯（地上の歩道の縁）
+  if (arr) for (let a = arr[0] + 10; a < arr[1]; a += 30) { T.light(a, fi.yGround + 3.6, fac + 0.5, LIGHT.street, 3); }
+}
+
+interface FcTools {
+  light: (a: number, y: number, c: number, col: readonly number[], s: number) => void;
+  pool: (a: number, c: number, y: number, size: number) => void;
+  tree: (a: number, c: number, s?: number, kind?: number) => void;
+  G: (a0: number, c0: number, a1: number, c1: number, y: number, col: THREE.Color) => void;
+  pline: (pts: [number, number][], w: number, y: number, col: THREE.Color) => void;
+  rng: Rng;
 }

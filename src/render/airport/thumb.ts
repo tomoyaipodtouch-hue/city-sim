@@ -15,7 +15,7 @@ export const airportThumbCells = (size: AirportSize) => ({ w: (WINS[size].a1 - W
 export function airportThumbModel(size: AirportSize): MeshBuilder {
   const L = airportLayout(size), WIN = WINS[size];
   const f = makeFrame(AIRPORT_SPECS[size], 2, -WIN.a0, -WIN.c0);
-  const geo = buildAirportGeometry(L, f, { cells: [], n: 1, base: 0, seed: 7, gate: null, svc: null, lines: [] });
+  const geo = buildAirportGeometry(L, f, { cells: [], n: 1, base: 0, seed: 7, gate: null, svc: null, lines: [], fc: null });
   const mb = geo.mb;
   // 駐機中の飛行機（機首がターミナルを向く）
   L.stands.filter((s) => !s.cargo).forEach((st, k) => {

@@ -15,7 +15,8 @@ import { buildAirportGeometry, LIGHT } from './geometry';
 import { AC, AC_TYPES, ALL_LIVERIES, AcType, aircraftGeometry, aircraftMaterial } from './aircraft';
 import { GSE_TYPES, GseType, gseGeometry } from './gse';
 import { AirOps } from './ops';
-import { LoopCars } from './loopCars';
+import { forecourtPlan } from '../../sim/forecourt';
+import { lotToLand } from '../../sim/airport';
 
 const CHUNK_M = 400; // 区画の大きさ（m）：画面の外は描かない。小さすぎると描画の回数が増える
 type LiveryAttrs = { tail: THREE.InstancedBufferAttribute; stripe: THREE.InstancedBufferAttribute; win: THREE.InstancedBufferAttribute };
@@ -44,7 +45,6 @@ interface Entry {
   pools: number[];
   trees: TreeSpot[];
   lightOff: number; // 全体の光の点の中の、この空港の始まり
-  loop: LoopCars | null; // 陸側のループを走る車（正門に道路・都市高速がつながっているとき）
 }
 
 // 三角形を、重心の位置で区画ごとに分ける
@@ -258,11 +258,21 @@ export class AirportLayer {
         return { a, c, da, dc, kind: lk?.kind ?? null, h: lk ? g.nodeH(lk.node) - base : 0, diag: (gc.d & 1) === 1 };
       };
       const gate = gateOf(P.gate, true), svc = gateOf(P.svc, false);
-      const key = `${b.x}.${b.y}.${b.w}.${b.h}.${b.face}.${base}.${lines.join(',')}.${gate?.kind}${Math.round(gate?.h ?? 0)}.${svc?.kind}`;
+      const key = `${b.x}.${b.y}.${b.w}.${b.h}.${b.face}.${base}.${lines.join(',')}.${gate?.kind}${Math.round(gate?.h ?? 0)}.${svc?.kind}.${b.airFc ? 1 : 0}${b.airLevel ?? 0}${b.airH ?? 9}`;
       const old = this.entries.get(b.id);
       if (old && old.key === key) { old.b = b; this.feed(old); continue; }
       if (old) this.drop(old);
-      const geo = buildAirportGeometry(L, f, { cells, n: g.n, base, seed: b.seed, gate, svc, lines });
+      // ターミナル前の道路（フォアコート）の計画（シミュレーションと同じ。道路のマスはシミュレーションが置いたもの）
+      let fc = null;
+      if (b.airFc && P.gate) {
+        const plan = forecourtPlan(g.n, f, L, cells, (i) => lot.has(i), P.gate, b.airLevel ?? 0, b.airH ?? 9);
+        if (plan.ok) {
+          const pts = new Map<string, [number, number, number][]>();
+          for (const p of plan.paths) pts.set(p.name, p.cells.map((i, k) => { const [la, lc] = toLocal(f, ((i % g.n) + 0.5) * CELL, (((i / g.n) | 0) + 0.5) * CELL), [a, c] = lotToLand(L, la, lc); return [a, c, p.h[k]]; }));
+          fc = { plan, pts };
+        }
+      }
+      const geo = buildAirportGeometry(L, f, { cells, n: g.n, base, seed: b.seed, gate, svc, lines, fc });
       const meshes = splitChunks(geo.mb).map((gg) => {
         const m = new THREE.Mesh(gg, this.material);
         m.castShadow = true;
@@ -279,8 +289,7 @@ export class AirportLayer {
         return Math.max(t, L.A / 2) + 700;
       };
       const ops = old?.ops && old.f.rot === f.rot && old.L === L ? old.ops : new AirOps(L, { pos: exit(f.cos, f.sin), neg: exit(-f.cos, -f.sin) }, b.seed);
-      const loop = gate && gate.kind ? new LoopCars(L, LoopCars.gateLand(L, gate.a, gate.c, Math.max(0, gate.h)), b.seed) : null;
-      const e: Entry = { key, b, L, f, base, meshes, ops, lights: geo.lights, centre: geo.centre, beacons: geo.beacons, pools: geo.pools, trees: geo.trees, lightOff: 0, loop };
+      const e: Entry = { key, b, L, f, base, meshes, ops, lights: geo.lights, centre: geo.centre, beacons: geo.beacons, pools: geo.pools, trees: geo.trees, lightOff: 0 };
       ops.onDirChange = () => this.recolourCentre(e);
       this.feed(e);
       if (!old) ops.seed();
@@ -440,12 +449,6 @@ export class AirportLayer {
       }
       this.curEntry = e;
       e.ops.eachGse(this.time, this.emitGse);
-      if (e.loop) {
-        const air = e.b.air, sp = e.L.spec;
-        // 1 分あたりの台数：利用者が多いほど多く（運航していなければ、送迎の車がときどき）
-        e.loop.update(dt, air?.open ? 5 + 14 * Math.min(1, air.pax / sp.paxCap) : 1.5);
-        e.loop.each(this.emitGse);
-      }
       this.placeBridges(e);
     }
     for (const [m, t] of this.bridgeMeshes) {

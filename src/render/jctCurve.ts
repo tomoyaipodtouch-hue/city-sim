@@ -28,6 +28,10 @@ export interface JChain {
   tZ: number;
   dead0: boolean; // 始めの端で本線が終わる（Y字の分かれ目）。そこではランプの幅を本線の片側の幅から少しずつ広げる
   dead1: boolean;
+  // 本線の端に、このランプ 1 本だけがつながる（Y 字ではない。空港の前の道路のように、本線がそのままランプに続く）。
+  // そこでは本線の真ん中から、本線の幅で始まる（終わる）
+  solo0?: boolean;
+  solo1?: boolean;
   lim?: number[]; // Y字の分かれ目の端から 1m ごとの、描く幅の上限
   draw0: number; // 描く範囲（s）
   draw1: number;
@@ -36,14 +40,14 @@ export interface JMain { node: number; x: number; z: number; ux: number; uz: num
 // 曲線の s での、描く車道の半分の幅（Y字の分かれ目では、本線の片側の幅 → JR_HALF へ 24m で広げる）
 export const JR_GROW = 24;
 export function jHalf(C: JChain, s: number) {
-  const hf = (m: JMain | null) => (m ? m.half / 2 : JR_HALF);
+  const hf = (m: JMain | null, solo?: boolean) => (m ? (solo ? m.half : m.half / 2) : JR_HALF);
   let w = JR_HALF;
   // 広げる長さは、反対の端（描く範囲の終わり）までに広げ終わるように（短い鎖でも、となりの鎖と幅がそろう）
   const span = Math.max(4, C.draw1 - C.draw0);
   const G = Math.min(JR_GROW, span);
   const ease = (t: number) => t * t * (3 - 2 * t);
-  if (C.dead0) { const t = Math.max(0, Math.min(1, (s - C.bound[0]) / G)); w = Math.min(w, hf(C.main0) + (JR_HALF - hf(C.main0)) * ease(t)); }
-  if (C.dead1) { const t = Math.max(0, Math.min(1, (C.bound[C.bound.length - 1] - s) / G)); w = Math.min(w, hf(C.main1) + (JR_HALF - hf(C.main1)) * ease(t)); }
+  if (C.dead0) { const t = Math.max(0, Math.min(1, (s - C.bound[0]) / G)), h = hf(C.main0, C.solo0), v = h + (JR_HALF - h) * ease(t); w = C.solo0 ? v : Math.min(w, v); }
+  if (C.dead1) { const t = Math.max(0, Math.min(1, (C.bound[C.bound.length - 1] - s) / G)), h = hf(C.main1, C.solo1), v = h + (JR_HALF - h) * ease(t); w = C.solo1 ? (C.dead0 && C.solo0 ? Math.max(w, v) : v) : Math.min(w, v); }
   // Y字の分かれ目のとなりの曲線と重ならない幅まで
   if (C.lim) {
     const k = Math.round(C.dead0 ? s - C.bound[0] : C.bound[C.bound.length - 1] - s);
@@ -371,15 +375,19 @@ function build(g: Grid, nodes: number[], lift: number, preds: Map<number, number
     return !(m & (1 << d)) || t2 === RoadType.Ramp || !ROADS[t2]?.highway;
   };
   const dead0 = mainA && endsHere(A, tA), dead1 = mainZ && endsHere(Z, (tZ + 4) & 7);
-  const shift = (v: number, ux: number, uz: number, isMain: boolean, dead: boolean): [number, number] => {
+  // 本線の端につながるランプが、このランプだけか（Y 字の分かれ目・合わさり目ではない）
+  const ramps = (v: number) => (succs.get(v) ?? []).filter((w) => isJ(g, w)).length + (preds.get(v) ?? []).filter((w) => isJ(g, w)).length;
+  // （空港の道路だけ。ジャンクションの一方通行の本線の端は、これまでどおり右の車線から分かれる）
+  const solo0 = dead0 && ramps(A) === 1 && g.aport[A % N] !== 0, solo1 = dead1 && ramps(Z) === 1 && g.aport[Z % N] !== 0;
+  const shift = (v: number, ux: number, uz: number, isMain: boolean, dead: boolean, solo = false): [number, number] => {
     const [x, z] = cen(v);
     if (!isMain) return [x, z];
     const t = g.nodeType(v), half = (ROADS[t]?.width ?? 9) / 2;
     // 分かれ目では、本線の片側の車線の真ん中（2本のランプの内側の縁が、本線の中心で接する）
-    const sh = dead ? half / 2 : ROADS[t]?.oneWay ? LANE_SHIFT * 0.6 : LANE_SHIFT;
+    const sh = dead ? (solo ? 0 : half / 2) : ROADS[t]?.oneWay ? LANE_SHIFT * 0.6 : LANE_SHIFT;
     return [x - uz * sh, z + ux * sh];
   };
-  const pA = shift(A, ax, az, mainA, dead0), pZ = shift(Z, zx, zz, mainZ, dead1);
+  const pA = shift(A, ax, az, mainA, dead0, solo0), pZ = shift(Z, zx, zz, mainZ, dead1, solo1);
   // 折れ線：前の延長（2マス）、端、途中のマスの中心、端、後ろの延長
   const P: [number, number, number][] = [];
   const hA = H(A), hZ = H(Z);
@@ -410,7 +418,7 @@ function build(g: Grid, nodes: number[], lift: number, preds: Map<number, number
   const pinZ = forkZ ? Math.round((at[P.length - 5] + at[P.length - 4]) / 2) : at[P.length - 3];
   // 帯を広げる長さ：Y字の分かれ目は長く、ランプどうしの分かれ目・合わさり目は短く（幹の向きへ、接するように寄っていけるように）
   const forkA = !mainA && (preds.get(A)?.length ?? 0) === 1, joinZ = !mainZ && (succs.get(Z)?.length ?? 0) === 1;
-  const { X, Z2, Hh } = fair(xs, zs, hs, pinA, pinZ, dead0 ? DEAD_R : forkA ? 36 : 0, dead1 ? DEAD_R : joinZ ? 36 : 0);
+  const { X, Z2, Hh } = fair(xs, zs, hs, pinA, pinZ, dead0 && !solo0 ? DEAD_R : forkA ? 36 : 0, dead1 && !solo1 ? DEAD_R : joinZ ? 36 : 0);
   // 曲線の長さ
   const m = X.length, S = new Float32Array(m);
   for (let k = 1; k < m; k++) S[k] = S[k - 1] + Math.hypot(X[k] - X[k - 1], Z2[k] - Z2[k - 1]);
@@ -433,7 +441,7 @@ function build(g: Grid, nodes: number[], lift: number, preds: Map<number, number
     main1: mainZ ? mainOf(Z, zx, zz, 1) : null,
     fork0: mainA ? -1 : A,
     join1: mainZ ? -1 : Z,
-    draw0: bound[0], draw1: bound[bound.length - 1], dead0, dead1,
+    draw0: bound[0], draw1: bound[bound.length - 1], dead0, dead1, solo0, solo1,
   };
   // 始めの端が合わさり目（幹の続き）なら、そのマスは枝の側で描くので、出口から描く。終わりの端が分かれ目なら、入口まで
   if (!mainA && (preds.get(A)?.length ?? 0) > 1) C.draw0 = bound[1];

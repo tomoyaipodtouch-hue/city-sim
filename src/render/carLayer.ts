@@ -112,6 +112,9 @@ interface Car extends Cell {
   // 負 = 隣の都市から来て、端のマスへ入る手前（0 になったらふつうに走る）
   off?: number;
   ol?: number; // 重ねランプに乗ったときの、曲線からの横のずれ
+  cs?: number; // 空港の車寄せ：これから止まる秒数（0 = 止まらない）
+  cd?: boolean; // 空港の車寄せ：止まるかどうか決めた（空港の道路を出たら消す）
+  cq?: boolean; // 空港の車寄せ：いまのマスで止まる
 }
 
 // 走る場所：道路（車・トラック・バス）、歩道、線路（鉄道・高架鉄道・モノレール・地下鉄）
@@ -250,6 +253,7 @@ export class CarLayer {
   private orPt: ORPt = { x: 0, z: 0, h: 0, tx: 1, tz: 0, o: 0 };
   enabled = true;
   drops = 0; // 止まったまま動けずに消した道路の車の数（確かめる用）
+  dropAt: number[] = []; // 消した車のいたノード（確かめる用。新しい 32 件）
   showSubway = false;
   viewDist = 500;
 
@@ -829,6 +833,12 @@ export class CarLayer {
     this.freight = freight;
     this.cong = cong;
     this.scanEdges(g, traffic);
+    this.curb.clear();
+    for (let i = 0; i < g.aport.length; i++) {
+      const v = g.aport[i];
+      if (v & 2) this.curb.add(i);
+      if (v & 4) this.curb.add(g.n * g.n + i);
+    }
     // 道路が変わったかもしれないので、先に決めた行き先は決め直す
     // （歩く人の決めておいた道すじは、進むときに道路がつながっているかを確かめる）
     for (const f of this.fleets) for (const c of f.cars) c.nx = c.rp = c.ex = undefined;
@@ -1158,6 +1168,8 @@ export class CarLayer {
       this.forkTurn.set(key, k + 1);
       return opts.slice().sort((a, b) => a[1] - b[1])[k % opts.length];
     }
+    // 空港の道路の分かれ道（出発・到着の階）：同じくらいの割合で
+    if (opts.length > 1 && (f.track === 'road' || f.track === 'bus') && g.aport[node % (g.n * g.n)]) return opts[(Math.random() * opts.length) | 0];
     let r = Math.random() * total;
     for (let k = 0; k < opts.length; k++) {
       r -= ws[k];
@@ -1245,6 +1257,9 @@ export class CarLayer {
   private stations = new Map<string, Set<number>>();
   private forkTurn = new Map<number, number>();
   private busStopBuildings = 0;
+  // 空港の車寄せのノード（ターミナルの前の 1 列目。車はここで少し止まって人を降ろす・乗せる）
+  private curb = new Set<number>();
+  curbStops = 0; // 車寄せに止まった回数（確認用）
   // 線路の行き止まり（折り返し）。線路が変わったときに呼ぶ
   private turnbacks = new Map<string, Map<number, Turnback>>();
   private islands: Island[] = [];
@@ -1589,6 +1604,10 @@ export class CarLayer {
     const laneAt = (c: Car, from: number) => (from === c.from && this.orSegs.size && this.orSegs.has(orKey(c.from, c.to)) ? OR_LANE_KEY : laneAt0(c, from));
     const laneAt0 = (c: Car, from: number) => ((ROADS[from < this.avJct.length && this.avJct[from] && c.rt !== undefined ? c.rt : g.nodeType(from)] || ROADS[1]).oneWay ? c.lane : 0);
     const laneOf = (c: Car) => laneAt(c, c.from);
+    const curbOn = this.curb.size > 0, NC = g.n * g.n;
+    // 車寄せで止まる車・止まっている車の数（多すぎるときは、新しく入ってきた車は止まらない）
+    let curbLoad = 0;
+    if (curbOn) for (const f of this.cars) for (const c of f.cars) if ((c.cs ?? 0) > 0 || (c.stop ?? 0) > 0) curbLoad++;
     const addLane = (key: number, e: { c: Car; t: number; r: number; L: number }) => {
       const a = lanes.get(key);
       if (a) a.push(e);
@@ -1835,6 +1854,40 @@ export class CarLayer {
             }
           }
         }
+        // 空港の車寄せ：空港の道路に入ったとき、乗用車の半分ほど（車寄せが空いていれば）を「止まる車」にして右（縁石）の車線へ、
+        // ほかの車は左の車線へ。止まる車は、車寄せのマスのどこかで 6〜20 秒止まって人を降ろす・乗せる（STUCK より短い。1 回だけ）
+        if (curbOn && !line && !walk) {
+          if (!g.aport[c.from % NC]) c.cd = undefined;
+          else if (!c.cd) {
+            c.cd = true;
+            const stopper = this.cars.includes(f) && curbLoad < this.curb.size * 0.6 && Math.random() < 0.5;
+            c.cs = stopper ? 6 + Math.random() * 14 : 0;
+            c.lane = stopper ? 1 : 0;
+            if (stopper) curbLoad++;
+          }
+        }
+        const curbHere = curbOn && !line && !walk && ((c.cs ?? 0) > 0 || (c.stop ?? 0) > 0) && this.curb.has(c.from) && c.din === c.d;
+        if (curbHere) {
+          if ((c.stop ?? 0) > 0) {
+            c.stop! -= dt;
+            adv = 0;
+            // 止まり終わったら、左の車線へ出ていく（後ろで止まっている車をふさがない）
+            if (c.stop! <= 0 && !c.cs) { c.lane = 0; c.lim = null; }
+          } else {
+            // このマスで止まるか（マスごとに決める。車寄せの最後のマスでは必ず）
+            if (c.lastStop !== c.from) { c.lastStop = c.from; c.cq = Math.random() < 0.3 || !this.curb.has(c.to); }
+            if (c.cq) {
+              adv *= 0.6;
+              if (c.t <= 0.5 && c.t + adv >= 0.5) {
+                adv = 0.5 - c.t;
+                c.stop = c.cs;
+                c.cs = 0;
+                c.lim = null;
+                this.curbStops++;
+              }
+            }
+          }
+        }
         if (!line && !walk && adv > 0) {
           // 前の車（同じマスの先、または次のマス）との間をあける。いちばん近い前の車 lim も覚えておく
           const lb = laneOf(c), me = f.halfLen;
@@ -1957,9 +2010,18 @@ export class CarLayer {
             // 止まったまま（0.5 m/s 未満）の時間を、待つ理由ごとに数える（前の車の列・交差点の手前）。2 m/s 以上で動けたら数え直す。
             // 長く動けなければ、その車を消す（交差点で車がおたがいに待ち合って、列がどこも動かなくならないように）。
             // 前の車の中を通り抜けて進むと重なって見えるので、消して、空いている場所に出し直す
-            if (room < 0.5 * dt) {
+            if (room < 0.5 * dt && curbHere && (c.cs ?? 0) > 0) {
+              // 車寄せで前の車が止まっていて進めない止まる車は、そこで止まって人を降ろす（待ちくたびれない）
+              c.stop = c.cs;
+              c.cs = 0;
+              this.curbStops++;
+              c.wait = 0;
+              c.lim = null;
+            } else if (room < 0.5 * dt) {
               if (hold) c.rw = (c.rw ?? 0) + dt;
               else c.wait = (c.wait ?? 0) + dt;
+              // 車寄せの手前で長く待つ止まる車・止まり終わった車は、止まるのをやめて左の車線へ
+              if (curbOn && (c.wait ?? 0) > 8 && c.lane === 1 && c.cd && g.aport[c.from % NC]) { c.cs = 0; c.lane = 0; c.lim = null; }
             } else if (room >= 2 * dt) c.wait = c.rw = 0;
             const w = (c.wait ?? 0) + (c.rw ?? 0);
             let cyc = false;
@@ -1969,11 +2031,13 @@ export class CarLayer {
               // 交差点の中で止まっている車が輪をつくっている：その車を消す（交差点が空いて、横切る向きの車が動けるようになる）
               drop(lim);
               this.drops++;
+              if (this.dropAt.push(lim.from) > 32) this.dropAt.shift();
               c.wait = c.rw = 0;
             } else if ((c.wait ?? 0) > STUCK || (c.rw ?? 0) > STUCK_HOLD || cyc) {
               adv = 0;
               drop(c);
               this.drops++;
+              if (this.dropAt.push(c.from) > 32) this.dropAt.shift();
             }
           } else {
             c.wait = c.rw = 0;
@@ -2104,6 +2168,7 @@ export class CarLayer {
         } else if (c.ol !== undefined) c.ol = undefined;
         // バス停で止まるバスは、車道の端の停車スペース（縁石から 0.4〜2.8m）に寄せる
         if (stopHere()) lane = drawWidth(g.road[c.from]) / 2 - 1.6;
+        else if (curbHere && ((c.stop ?? 0) > 0 || c.cs)) lane = rd.width * 0.3;
         if (!walk && !line && !orG) {
           // 道路の種類が変わるところ（2車線と1車線など）では、横に跳ばずに少しずつ移る（1 m 進むあいだに 0.3 m まで）
           if (c.lo === undefined) c.lo = lane;

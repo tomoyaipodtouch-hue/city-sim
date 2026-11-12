@@ -1145,6 +1145,18 @@ export class World {
         if (d >= 0) lk(a, p.lv[k], c, p.lv[k + 1], d, two);
       }
     }
+    // 車寄せ：ターミナルの前の 1 列目（両方の階）。ターミナルの側の欄干・壁を付けない（道路の層）
+    {
+      const def = CIVIC[b.type as CivicId], L = airportLayout(def.airfield!), f = frameOf(b, AIRPORT_SPECS[def.airfield!]);
+      const tr = L.buildings.find((q) => q.kind === 'terminal')!.r;
+      for (const p of P.paths) {
+        if (p.name !== 'Fm' && p.name !== 'Fo') continue;
+        p.cells.forEach((i, k) => {
+          const [la, lc] = cellLocal(f, n, i), [a] = lotToLand(L, la, lc);
+          if (a >= tr.a0 - 6 && a <= tr.a1 + 6) g.aport[i] |= p.lv[k] ? 4 : 2;
+        });
+      }
+    }
     b.airFc = true; b.airLevel = gl.level; b.airH = gl.H;
     void N;
     return true;
@@ -1167,8 +1179,32 @@ export class World {
       const lot = this.lotSet(b)!;
       // 正門のマスの、敷地の中へのつながり（その階）
       const inBits = (gl.level ? g.conn1[G] : g.conn[G]) & this.lotBits(G, lot);
-      const need = !b.airFc ? false : b.airLevel !== gl.level || Math.abs((b.airH ?? 9) - gl.H) > 0.2 || !inBits || (gl.level === 0 && !g.road[G]);
+      // 門のマスを、つながらない道路（ふつうの高速道路など）が通っている
+      const n = g.n, x = G % n, y = (G / n) | 0;
+      let outside = 0, foreign = false;
+      for (let d = 0; d < 8; d++) {
+        const xx = x + DX[d], yy = y + DY[d];
+        if (!(g.conn[G] & (1 << d)) || !g.inb(xx, yy) || g.aport[yy * n + xx]) continue;
+        outside |= 1 << d;
+        const t = g.road[yy * n + xx];
+        if (t && !isUrbanHw(t) && this.isLocalRoad(t) === false) foreign = true;
+      }
+      foreign = foreign && gl.level === 0;
+      const need = !b.airFc ? false : b.airLevel !== gl.level || Math.abs((b.airH ?? 9) - gl.H) > 0.2 || (!inBits && !foreign) || (gl.level === 0 && !g.road[G]);
       if (need) this.layForecourt(b);
+      // つながらない道路が通っている：空港の道路とのつながりを切る（その道路の車が空港へ入らない）
+      if (b.airFc && foreign) {
+        {
+          for (let d = 0; d < 8; d++) {
+            if (!(g.conn[G] & (1 << d)) || outside & (1 << d)) continue;
+            const j = (y + DY[d]) * n + x + DX[d], bit = ~(1 << ((d + 4) & 7));
+            g.conn[j] &= bit; g.flow[j] &= bit; g.conn1[j] &= bit; g.flow1[j] &= bit;
+            g.conn[G] &= ~(1 << d); g.flow[G] &= ~(1 << d);
+          }
+          // 門のマスの道路の種類は、通っている道路に合わせる
+          for (let d = 0; d < 8; d++) if (outside & (1 << d)) { const t = g.road[(y + DY[d]) * n + x + DX[d]]; if (t && !isUrbanHw(t)) { g.road[G] = t; break; } }
+        }
+      }
     }
   }
 
