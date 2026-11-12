@@ -32,7 +32,7 @@ export interface AirportSpec {
 export const AIRPORT_SPECS: Record<AirportSize, AirportSpec> = {
   1: { size: 1, L: 60, W: 12, cost: 80000, upkeep: 650, pollution: 5, boost: 0.15, paxCap: 1600, paxPerFlight: 55, maxAircraft: 3, freightShare: 0.25, noiseLen: 1300, noiseWidth: 230, draw: 1 },
   2: { size: 2, L: 85, W: 18, cost: 300000, upkeep: 1500, pollution: 9, boost: 0.25, paxCap: 6000, paxPerFlight: 120, maxAircraft: 6, freightShare: 0.35, noiseLen: 2000, noiseWidth: 320, draw: 2.5 },
-  3: { size: 3, L: 100, W: 40, cost: 1000000, upkeep: 7000, pollution: 14, boost: 0.35, paxCap: 20000, paxPerFlight: 180, maxAircraft: 12, freightShare: 0.65, noiseLen: 2600, noiseWidth: 420, draw: 5 },
+  3: { size: 3, L: 100, W: 40, cost: 1000000, upkeep: 5000, pollution: 14, boost: 0.35, paxCap: 20000, paxPerFlight: 180, maxAircraft: 12, freightShare: 0.45, noiseLen: 2600, noiseWidth: 420, draw: 5 },
 };
 
 // 利用者・貨物・収入の計算に使う値（world.ts）
@@ -162,27 +162,45 @@ export interface RunwayDef {
   width: number;
   links: number[]; // 両端の取付誘導路の位置（a。[西, 東]）
   holdC: number; // 滑走路の手前の停止位置の標示（滑走路の側のふち、c）。出発機はこの手前の平行誘導路の上で待つ
+  taxiC: number; // この滑走路の平行誘導路（c）
+  side: 1 | -1; // 平行誘導路のある側（+1 = c の大きい側）
   junction: [number, number]; // 取付誘導路と平行誘導路の交わるノード（両端）
   exits: ExitDef[];
   td: number; // 滑走路の端から接地点まで（m）
 }
 export interface StandDef {
-  a: number; // 駐機スポットの中心線（a）
+  a: number; // 駐機スポットの中心線（a）。dir があるときは機首が止まる位置の a
   noseC: number; // 機首が止まる位置（c）
+  dir?: [number, number]; // 機首の向き（なければ +c）
   cargo: boolean;
   wide: boolean; // ワイドボディが入れる
   bridge: boolean; // 搭乗橋がある
   node: number; // 誘導路の網の、スポットの入口のノード
   rot?: [number, number]; // 搭乗橋の回転する付け根（a, c）
 }
+// 駐機スポットの点：機首が止まる位置から、機首の向きと反対に back、左（機体の左の翼の側）へ side
+export const standDir = (st: StandDef): [number, number] => st.dir ?? [0, 1];
+export function standPt(st: StandDef, back: number, side = 0): [number, number] {
+  const [ua, uc] = standDir(st);
+  return [st.a - ua * back + uc * side, st.noseC - uc * back - ua * side];
+}
+// 機首から、スポットの前の誘導路（の中心線）までの距離
+export function standLaneBack(L: AirportLayout, st: StandDef): number {
+  if (!st.dir) return st.noseC - L.laneC;
+  const [na, nc] = L.net.nodes[st.node], [ua, uc] = st.dir;
+  return (st.a - na) * ua + (st.noseC - nc) * uc;
+}
+// 機首から、尾翼の後ろの構内道路（大）までの距離
+export const standTailBack = (L: AirportLayout, st: StandDef) => standLaneBack(L, st) - L.taxiW / 2 - 12;
 export interface TaxiNet {
   nodes: [number, number][];
   edges: [number, number][];
   width: number[]; // 辺ごとの幅（m）
 }
-export type AirBldKind = 'terminal' | 'pier' | 'tower' | 'hotel' | 'office' | 'carpark' | 'station' | 'hangar' | 'fuel' | 'fire' | 'cargo';
-export interface AirBld { kind: AirBldKind; r: LRect; h: number }
-export type AcKind = 'atr' | 'a220' | 'e190' | 'a320' | 'b737' | 'b787';
+export type AirBldKind = 'terminal' | 'pier' | 'concourse' | 'tower' | 'hotel' | 'office' | 'carpark' | 'station' | 'hangar' | 'fuel' | 'fire' | 'cargo' | 'plaza';
+// sub = 陸側の座標（land）で置く。flip = 区画の中心で 180° 回す。ac = 格納庫の中の機体
+export interface AirBld { kind: AirBldKind; r: LRect; h: number; sub?: boolean; flip?: boolean; ac?: AcKind }
+export type AcKind = 'atr' | 'a220' | 'e190' | 'a320' | 'b737' | 'b787' | 'b777' | 'a350';
 export interface AirportLayout {
   spec: AirportSpec;
   A: number;
@@ -198,14 +216,17 @@ export interface AirportLayout {
   wideTypes: AcKind[]; // ワイドボディのスポットだけに入る機材
   cargoTypes: AcKind[];
   walk: boolean; // 乗客が歩いて乗る（搭乗橋なし）
-  serviceC: number; // エプロンの構内道路（c）
+  serviceC: number; // エプロンの構内道路（c）。NaN = 大（尾翼の後ろの道路と、エプロンのふちの道路 gseRoad を通る）
+  gseRoad?: number; // 大：エプロンのふちの構内道路（c）
   depot: [number, number]; // 地上の車両の車庫（a, c）
   buildings: AirBld[];
   roadC: [number, number]; // 陸側の道路（c の範囲）
   viaduct: { a0: number; a1: number; c0: number; c1: number; h: number; ramp: number }; // 高架の出発ロビー前の道路
   station: LRect; // 空港駅のホーム
   stationPort: LRect; // 線路が接していればよい範囲（敷地のマスの中心が入る範囲）
-  highwayC: number; // 都市高速の出入口：この c より陸側の敷地のマスに接する都市高速
+  highwayPort: LRect; // 都市高速の出入口：敷地のマスの中心がこの範囲に入るマスに接する都市高速
+  land: { oa: number; oc: number; rot: number; A: number; edge: number }; // 陸側（道路・駅・ターミナル）の座標の置き方（敷地の座標で原点と回転）。A = 道路の長さ、edge = 陸側のふち
+  parallel: boolean; // 着陸と出発を別の滑走路で同時に（大）。false なら地上は着陸と出発を交互に
   tower: [number, number, number]; // 管制塔（a, c, 高さ）
   masts: [number, number][]; // エプロンの照明塔
   glide: number; // 進入角（度）
@@ -215,7 +236,7 @@ export interface AirportLayout {
 const layouts = new Map<AirportSize, AirportLayout>();
 export function airportLayout(size: AirportSize): AirportLayout {
   let L = layouts.get(size);
-  if (!L) layouts.set(size, (L = size === 1 ? layoutS(AIRPORT_SPECS[1]) : layoutM(AIRPORT_SPECS[size])));
+  if (!L) layouts.set(size, (L = size === 1 ? layoutS(AIRPORT_SPECS[1]) : size === 2 ? layoutM(AIRPORT_SPECS[2]) : layoutL(AIRPORT_SPECS[3])));
   return L;
 }
 
@@ -235,7 +256,13 @@ function netBuilder() {
     for (let k = 0; k + 1 < ks.length; k++) edge(ks[k], ks[k + 1], w);
     return ks;
   };
-  return { net, node, edge, line };
+  // 同じ a の上の点を、c の順につなぐ（a に直角な誘導路）
+  const vline = (a: number, cs: number[], w: number) => {
+    const ks = [...new Set(cs)].sort((x, y) => x - y).map((c) => node(a, c));
+    for (let k = 0; k + 1 < ks.length; k++) edge(ks[k], ks[k + 1], w);
+    return ks;
+  };
+  return { net, node, edge, line, vline };
 }
 
 // 小：ロンドン・シティ空港のような街なかの空港。滑走路 800m（建物が少しデフォルメなので短め）、搭乗橋なしで歩いて乗る
@@ -254,7 +281,7 @@ function layoutS(spec: AirportSpec): AirportLayout {
     const far = dir > 0 ? linkA : -linkA, k = dir > 0 ? 1 : 0;
     return { dir: dir as 1 | -1, a: far - dir * 30, pts: [[far - dir * 30, rc], [far, rc], [far, taxiC]], node: J[k], speed: 11, rapid: false };
   });
-  const runway: RunwayDef = { c: rc, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC, junction: J, exits, td: 120 };
+  const runway: RunwayDef = { c: rc, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC, taxiC, side: 1, junction: J, exits, td: 120 };
   const stands: StandDef[] = standAs.map((a, k) => ({ a, noseC: k === 3 ? 20 : 31, cargo: k === 3, wide: false, bridge: false, node: node(a, taxiC) }));
   return {
     spec, A, C,
@@ -287,7 +314,8 @@ function layoutS(spec: AirportSpec): AirportLayout {
     viaduct: { a0: -92, a1: 92, c0: 67, c1: 77, h: 6.5, ramp: 62 },
     station: { a0: -66, c0: 85, a1: 66, c1: 95 },
     stationPort: { a0: -80, c0: 72, a1: 80, c1: C / 2 + 1 },
-    highwayC: 30,
+    highwayPort: { a0: -A / 2 - 20, c0: 30, a1: A / 2 + 20, c1: C / 2 + 20 },
+    land: { oa: 0, oc: 0, rot: 0, A, edge: C / 2 }, parallel: false,
     tower: [118, 49, 46],
     masts: [[-110, 36.5], [-27.5, 36.5], [27.5, 36.5], [110, 36.5], [239, 22], [-286, 8]],
     glide: 5.5,
@@ -327,7 +355,7 @@ function layoutM(spec: AirportSpec): AirportLayout {
     exits.push({ dir, a: ra - dir * 20, pts: [[ra - dir * 20, rc], [ra, rc], [rj, taxiC], [rj + dir * 25, taxiC]], node: node(rj + dir * 25, taxiC), speed: 22, rapid: true });
     exits.push({ dir, a: far - dir * 40, pts: [[far - dir * 40, rc], [far, rc], [far, taxiC]], node: J[k], speed: 11, rapid: false });
   }
-  const runway: RunwayDef = { c: rc, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC, junction: J, exits, td: 160 };
+  const runway: RunwayDef = { c: rc, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC, taxiC, side: 1, junction: J, exits, td: 160 };
   const stands: StandDef[] = stDefs.map((s) => ({
     a: s.a, noseC: s.cargo ? 38 : s.wide ? 62 : 58, cargo: !!s.cargo, wide: !!s.wide, bridge: !!s.bridge, node: node(s.a, s.cargo ? taxiC : laneC),
     rot: s.bridge ? [s.a + (s.wide ? 26 : 19), 63] : undefined,
@@ -364,11 +392,100 @@ function layoutM(spec: AirportSpec): AirportLayout {
     viaduct: { a0: -160, a1: 160, c0: 110, c1: 121, h: 7, ramp: 75 },
     station: { a0: -95, c0: 131, a1: 95, c1: 143 },
     stationPort: { a0: -110, c0: 80, a1: 110, c1: C / 2 + 1 }, // 地下鉄はターミナルの下まで入れる
-    highwayC: 40,
+    highwayPort: { a0: -A / 2 - 20, c0: 40, a1: A / 2 + 20, c1: C / 2 + 20 },
+    land: { oa: 0, oc: 0, rot: 0, A, edge: C / 2 }, parallel: false,
     tower: [-435, 89, 64],
     masts: [[-250, 64], [-110, 64], [30, 64], [175, 64], [300, 64], [372, 40], [-495, 2]],
     glide: 3.2,
     hangarType: 'b787',
+  };
+}
+
+// 大：ミュンヘンのようなハブ空港。平行な滑走路 2 本（1,400m、北 = 着陸、南 = 出発）、滑走路のあいだに本館とサテライト、
+// 搭乗橋 21 か所（ワイドボディ 6）、バスで乗るスポット 6、貨物のスポット 3。陸側（道路・駅・駐車場・エアポートセンター）は西の端
+function layoutL(spec: AirportSpec): AirportLayout {
+  const A = spec.L * CELL, C = spec.W * CELL;
+  const rwLen = 1400, rwW = 45, rcN = -282, rcS = 282, txN = -215, txS = 215, taxiW = 23;
+  const linkA = rwLen / 2 - 15;
+  const L1 = -500, L2 = -170; // エプロンの誘導路（滑走路と直角）
+  const cs = [-147, -92, -46, 0, 46, 92, 147]; // 本館・サテライトのスポット（c）。両端はワイドボディ
+  const remote = [-120, -74, -28, 18, 64, 110]; // バスで乗るスポット
+  const cargoA = [200, 280, 350];
+  const retA = 160, retJ = retA + (txN - rcN) / Math.tan(Math.PI / 6);
+  const { net, node, line, vline } = netBuilder();
+  line(txN, [-linkA, L1, L2, -retJ - 25, retJ + 25, linkA], taxiW);
+  // 南の誘導路は 100m ほどの区間に分ける（出発機が前の機体の後ろで順番を待てる）
+  line(txS, [-linkA, -590, L1, -335, L2, 0, ...cargoA, 470, 590, linkA], taxiW);
+  vline(L1, [txN, ...cs, txS], taxiW);
+  vline(L2, [txN, ...cs, ...remote, txS], taxiW);
+  const JN = [node(-linkA, txN), node(linkA, txN)] as [number, number];
+  const JS = [node(-linkA, txS), node(linkA, txS)] as [number, number];
+  const exitsN: ExitDef[] = [];
+  for (const dir of [1, -1] as const) {
+    const far = dir > 0 ? linkA : -linkA, k = dir > 0 ? 1 : 0;
+    const ra = dir * retA, rj = dir * retJ;
+    exitsN.push({ dir, a: ra - dir * 20, pts: [[ra - dir * 20, rcN], [ra, rcN], [rj, txN], [rj + dir * 25, txN]], node: node(rj + dir * 25, txN), speed: 22, rapid: true });
+    exitsN.push({ dir, a: far - dir * 40, pts: [[far - dir * 40, rcN], [far, rcN], [far, txN]], node: JN[k], speed: 11, rapid: false });
+  }
+  const exitsS: ExitDef[] = [1, -1].map((dir) => {
+    const far = dir > 0 ? linkA : -linkA, k = dir > 0 ? 1 : 0;
+    return { dir: dir as 1 | -1, a: far - dir * 40, pts: [[far - dir * 40, rcS], [far, rcS], [far, txS]], node: JS[k], speed: 11, rapid: false };
+  });
+  const rwN: RunwayDef = { c: rcN, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC: rcN + rwW / 2 + 4.5, taxiC: txN, side: 1, junction: JN, exits: exitsN, td: 180 };
+  const rwS: RunwayDef = { c: rcS, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC: rcS - rwW / 2 - 4.5, taxiC: txS, side: -1, junction: JS, exits: exitsS, td: 180 };
+  const stands: StandDef[] = [];
+  const st = (a: number, c: number, dir: [number, number], laneA: number | null, o: { wide?: boolean; bridge?: boolean; cargo?: boolean }) => {
+    const s0: StandDef = { a, noseC: c, dir, cargo: !!o.cargo, wide: !!o.wide, bridge: !!o.bridge, node: laneA === null ? node(a, txS) : node(laneA, c) };
+    if (o.bridge) s0.rot = standPt(s0, -3, o.wide ? 28 : 19);
+    stands.push(s0);
+  };
+  for (const c of cs) st(-662, c, [-1, 0], L1, { wide: Math.abs(c) > 140, bridge: true }); // 本館
+  for (const c of cs) st(-338, c, [1, 0], L1, { wide: Math.abs(c) > 140, bridge: true }); // サテライトの西
+  for (const c of cs) st(-282, c, [-1, 0], L2, { wide: Math.abs(c) > 140, bridge: true }); // サテライトの東
+  for (const c of remote) st(-90, c, [1, 0], L2, {}); // バスで乗るスポット
+  cargoA.forEach((a, k) => st(a, 100, [0, -1], null, { cargo: true, wide: k < 2 }));
+  const ap = txS - taxiW / 2;
+  return {
+    spec, A, C,
+    runways: [rwN, rwS], net,
+    taxiC: txN, taxiW, laneC: txN,
+    aprons: [
+      { a0: -670, c0: -ap, a1: -60, c1: ap }, // 本館・サテライト・バスのスポット
+      { a0: 160, c0: 92, a1: 400, c1: ap }, // 貨物
+      { a0: 400, c0: -ap, a1: 690, c1: -185 }, // 整備地区
+    ],
+    stands,
+    types: ['a320', 'b737', 'a320', 'b737', 'a220', 'e190'], wideTypes: ['b787', 'b777', 'a350'], cargoTypes: ['b737', 'b777'], walk: false,
+    serviceC: NaN, gseRoad: 192,
+    depot: [-105, 175],
+    buildings: [
+      { kind: 'concourse', r: { a0: -684, c0: -180, a1: -670, c1: 180 }, h: 10 },
+      { kind: 'concourse', r: { a0: -330, c0: -180, a1: -290, c1: 180 }, h: 15 },
+      { kind: 'terminal', r: { a0: -180, c0: 14, a1: 180, c1: 44 }, h: 18, sub: true },
+      { kind: 'station', r: { a0: -110, c0: 118, a1: 110, c1: 129 }, h: 8, sub: true },
+      { kind: 'carpark', r: { a0: -235, c0: 72, a1: -175, c1: 112 }, h: 20, sub: true },
+      { kind: 'carpark', r: { a0: 175, c0: 72, a1: 235, c1: 112 }, h: 20, sub: true },
+      { kind: 'hotel', r: { a0: -165, c0: 70, a1: -115, c1: 110 }, h: 48, sub: true },
+      { kind: 'office', r: { a0: 115, c0: 72, a1: 165, c1: 110 }, h: 36, sub: true },
+      { kind: 'plaza', r: { a0: -105, c0: 70, a1: 105, c1: 114 }, h: 0, sub: true },
+      { kind: 'tower', r: { a0: 30, c0: -22, a1: 90, c1: 22 }, h: 12 },
+      { kind: 'hangar', r: { a0: 405, c0: -185, a1: 540, c1: -95 }, h: 34, ac: 'b777' },
+      { kind: 'hangar', r: { a0: 555, c0: -185, a1: 690, c1: -95 }, h: 34, ac: 'a350' },
+      { kind: 'cargo', r: { a0: 160, c0: 40, a1: 390, c1: 92 }, h: 16, flip: true },
+      { kind: 'fuel', r: { a0: 440, c0: -40, a1: 540, c1: 30 }, h: 14 },
+      { kind: 'fire', r: { a0: -40, c0: -190, a1: 30, c1: -150 }, h: 10 },
+      { kind: 'fire', r: { a0: 600, c0: 120, a1: 670, c1: 170 }, h: 10, flip: true },
+    ],
+    roadC: [46, 64],
+    viaduct: { a0: -170, a1: 170, c0: 44, c1: 55, h: 7.5, ramp: 60 },
+    station: { a0: -110, c0: 118, a1: 110, c1: 129 },
+    stationPort: { a0: -A / 2 - 20, c0: -115, a1: -680, c1: 115 }, // 地下鉄はターミナルの下まで入れる
+    highwayPort: { a0: -A / 2 - 20, c0: -250, a1: -760, c1: 250 },
+    land: { oa: -670, oc: 0, rot: Math.PI / 2, A: 480, edge: 130 }, parallel: true,
+    tower: [60, 0, 95],
+    masts: [[-590, -190], [-590, 0], [-590, 190], [-410, -190], [-410, 190], [-230, -190], [-230, 190], [-60, -190], [-60, 190], [165, 195], [395, 195]],
+    glide: 3.0,
+    hangarType: 'b777',
   };
 }
 
@@ -390,7 +507,7 @@ export function airportPorts(n: number, f: AirFrame, L: AirportLayout, cells: nu
     const [a, c] = cellLocal(f, n, i);
     const sp = inRect(L.stationPort, a, c);
     if (sp) stationCells.push(i);
-    const land = c >= L.highwayC;
+    const land = inRect(L.highwayPort, a, c);
     if (!sp && !land) continue;
     const x = i % n, y = (i / n) | 0;
     for (let d = 0; d < 8; d++) {

@@ -1,6 +1,6 @@
 // メニューの空港の絵：ターミナル・管制塔・駐機中の飛行機のあたりだけを切り取った形（敷地の全体は細長すぎるので）
 import { MeshBuilder } from '../builder';
-import { AIRPORT_SPECS, airportLayout, makeFrame, type AirportSize } from '../../sim/airport';
+import { AIRPORT_SPECS, airportLayout, makeFrame, standDir, standPt, type AirportSize } from '../../sim/airport';
 import { buildAirportGeometry } from './geometry';
 import { AC, buildAircraft, LIVERIES } from './aircraft';
 
@@ -8,7 +8,7 @@ import { AC, buildAircraft, LIVERIES } from './aircraft';
 const WINS: Record<AirportSize, { a0: number; a1: number; c0: number; c1: number }> = {
   1: { a0: -78, a1: 140, c0: -12, c1: 70 },
   2: { a0: -215, a1: 120, c0: -10, c1: 112 },
-  3: { a0: -215, a1: 120, c0: -10, c1: 112 },
+  3: { a0: -745, a1: -420, c0: -10, c1: 150 },
 };
 export const airportThumbCells = (size: AirportSize) => ({ w: (WINS[size].a1 - WINS[size].a0) / 16, h: (WINS[size].c1 - WINS[size].c0) / 16 });
 
@@ -20,7 +20,9 @@ export function airportThumbModel(size: AirportSize): MeshBuilder {
   // 駐機中の飛行機（機首がターミナルを向く）
   L.stands.filter((s) => !s.cargo).forEach((st, k) => {
     const t = st.wide && L.wideTypes.length ? L.wideTypes[0] : L.types[(k * 2 + 1) % L.types.length];
-    mb.setTransform(0, st.a - WIN.a0, 0.12, st.noseC - AC[t].len / 2 - WIN.c0);
+    const [ua, uc] = standDir(st), [a, c] = standPt(st, AC[t].len / 2, 0);
+    if (a < WIN.a0 - 80 || a > WIN.a1 + 80 || c < WIN.c0 - 80 || c > WIN.c1 + 80) return;
+    mb.setTransform(Math.atan2(-ua, uc), a - WIN.a0, 0.12, c - WIN.c0);
     buildAircraft(mb, t, LIVERIES[(k * 2) % LIVERIES.length]);
   });
   // 範囲の中の三角形だけを残す

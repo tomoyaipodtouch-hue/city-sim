@@ -7,7 +7,7 @@ import { Grid } from '../../sim/grid';
 import { CELL } from '../../sim/constants';
 import { CIVIC, CivicId } from '../../sim/defs';
 import type { Building } from '../../sim/world';
-import { AIRPORT_SPECS, airportCells, airportLayout, airportPorts, frameOf, highwayNodes, stationLines, toLocal, AirFrame, AirportLayout } from '../../sim/airport';
+import { standDir, AIRPORT_SPECS, airportCells, airportLayout, airportPorts, frameOf, highwayNodes, stationLines, toLocal, AirFrame, AirportLayout } from '../../sim/airport';
 import { MeshBuilder } from '../builder';
 import { createBuildingMaterial } from '../materials';
 import type { TreeSpot } from '../buildingGen';
@@ -38,7 +38,7 @@ interface Entry {
   meshes: THREE.Mesh[];
   ops: AirOps;
   lights: number[];
-  centre: { idx: number; a: number }[];
+  centre: { idx: number; a: number; rw: number }[];
   beacons: number[];
   pools: number[];
   trees: TreeSpot[];
@@ -362,8 +362,9 @@ export class AirportLayer {
   private recolourCentre(e: Entry, upload = true) {
     const col = this.pts.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
     if (!col) return;
-    const r = e.L.runways[0], dir = e.ops.dir;
+    const dir = e.ops.dir;
     e.centre.forEach((cl, j) => {
+      const r = e.L.runways[cl.rw];
       const d = dir > 0 ? r.a1 - cl.a : cl.a - r.a0;
       const red = d < 300 || (d < 600 && j % 2 === 0);
       const c = red ? LIGHT.clRed : LIGHT.clWhite;
@@ -492,7 +493,10 @@ export class AirportLayer {
       e.ops.bridgeDoor(k, this.door);
       const [ra, rc] = st.rot;
       // 縮んだとき：付け根からエプロンの側へ短く。のびたとき：運転室の前が扉の横
-      const ca = (ra - 2) + (this.door[0] + 1.9 - (ra - 2)) * x, cc = (rc - 8) + (this.door[1] - (rc - 8)) * x;
+      // 縮んだとき：付け根から機体の側へ 8m・横へ 2m。のびたとき：扉の横（左へ 1.9m）
+      const [ua, uc] = standDir(st), la0 = uc, lc0 = -ua;
+      const ra0 = ra - ua * 8 - la0 * 2, rc0 = rc - uc * 8 - lc0 * 2;
+      const ca = ra0 + (this.door[0] + la0 * 1.9 - ra0) * x, cc = rc0 + (this.door[1] + lc0 * 1.9 - rc0) * x;
       const cy = 4.4 + (this.door[2] - 4.4) * x;
       // 付け根の部屋のふちから運転室まで（敷地の座標）
       let da = ca - ra, dc = cc - rc;

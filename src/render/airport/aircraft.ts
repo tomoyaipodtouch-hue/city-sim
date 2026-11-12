@@ -6,7 +6,7 @@ import { MeshBuilder } from '../builder';
 import type { AcKind } from '../../sim/airport';
 
 export type AcType = AcKind;
-export const AC_TYPES: AcType[] = ['atr', 'a220', 'e190', 'a320', 'b737', 'b787'];
+export const AC_TYPES: AcType[] = ['atr', 'a220', 'e190', 'a320', 'b737', 'b787', 'b777', 'a350'];
 
 // 低翼のジェット機の翼とエンジン：rootLE/rootTE = 付け根の前縁・後縁（z）、tipC = 翼端の翼弦、sweep = 後退（翼の長さ 1m あたり）、
 // ex/er = エンジンの位置（x）と半径、fin = 垂直尾翼の高さ、hs = 水平尾翼の半分の幅、winglet = 翼端の小翼の高さ、gear = 主脚の位置（x）
@@ -19,20 +19,22 @@ export const AC: Record<AcType, AcDims> = {
   e190: { len: 36.2, span: 28.7, R: 1.5, fy: 2.3, high: false, tTail: false, props: false, wide: false, door: [4.6, 2.6], jet: { rootLE: 3.0, rootTE: -3.6, tipC: 1.6, sweep: 0.45, ex: 5.4, er: 0.86, fin: 5.2, hs: 5.0, winglet: 1.6, gear: 2.6 } }, // E190
   a320: { len: 37.6, span: 35.8, R: 1.98, fy: 2.75, high: false, tTail: false, props: false, wide: false, door: [5.5, 3.4], jet: { rootLE: 3.6, rootTE: -4.3, tipC: 1.6, sweep: 0.5, ex: 5.75, er: 1.05, fin: 5.9, hs: 6.2, winglet: 2.4, gear: 3.8 } }, // A320neo
   b737: { len: 39.5, span: 35.9, R: 1.88, fy: 2.45, high: false, tTail: false, props: false, wide: false, door: [5.8, 2.7], jet: { rootLE: 3.8, rootTE: -4.2, tipC: 1.3, sweep: 0.52, ex: 4.9, er: 1.0, fin: 6.4, hs: 6.5, winglet: 2.8, gear: 2.9, flatEngine: true } }, // 737-800
+  b777: { len: 73.9, span: 64.8, R: 3.1, fy: 4.3, high: false, tTail: false, props: false, wide: true, door: [9.5, 5.3], jet: { rootLE: 7.6, rootTE: -8.6, tipC: 2.5, sweep: 0.6, ex: 9.7, er: 1.75, fin: 12.5, hs: 11.5, winglet: 0, gear: 5.5 } }, // 777-300ER
+  a350: { len: 66.8, span: 64.75, R: 3.0, fy: 4.1, high: false, tTail: false, props: false, wide: true, door: [8.7, 5.0], jet: { rootLE: 7.2, rootTE: -8.0, tipC: 2.3, sweep: 0.58, ex: 10.0, er: 1.6, fin: 11.5, hs: 10.5, winglet: 3.0, gear: 5.4 } }, // A350-900
   b787: { len: 62.8, span: 60.1, R: 2.9, fy: 3.9, high: false, tTail: false, props: false, wide: true, door: [8.3, 5.0], jet: { rootLE: 6.8, rootTE: -7.0, tipC: 2.4, sweep: 0.55, ex: 9.8, er: 1.5, fin: 10.5, hs: 10.0, winglet: 0, gear: 4.8 } }, // 787-9（A330 級）
 };
 
 // 架空の航空会社（実在の会社は使わない）。白地に、尾翼と胴体の線の色を変える
 export interface Livery { name: string; tail: number; stripe: number; win: number; fleet: AcType[]; cargo?: boolean }
 export const LIVERIES: Livery[] = [
-  { name: 'エアロルーメン', tail: 0x16697a, stripe: 0xf2a541, win: 0x1c2530, fleet: ['a220', 'a320', 'b787'] },
-  { name: 'ケストレルライン', tail: 0xc22f3a, stripe: 0x2b2d42, win: 0x1c2530, fleet: ['e190', 'a220', 'b737', 'b787'] },
+  { name: 'エアロルーメン', tail: 0x16697a, stripe: 0xf2a541, win: 0x1c2530, fleet: ['a220', 'a320', 'b787', 'a350'] },
+  { name: 'ケストレルライン', tail: 0xc22f3a, stripe: 0x2b2d42, win: 0x1c2530, fleet: ['e190', 'a220', 'b737', 'b787', 'b777'] },
   { name: 'マリーヴォ航空', tail: 0x2754a6, stripe: 0x6fb7f2, win: 0x1c2530, fleet: ['atr', 'a320'] },
   { name: 'テッセラ・リージョナル', tail: 0x5e3f8f, stripe: 0xe8559f, win: 0x1c2530, fleet: ['atr', 'e190', 'b737'] },
-  { name: 'ヴェローラ', tail: 0x23855a, stripe: 0xa9d86e, win: 0x1c2530, fleet: ['a220', 'e190', 'a320', 'b787'] },
+  { name: 'ヴェローラ', tail: 0x23855a, stripe: 0xa9d86e, win: 0x1c2530, fleet: ['a220', 'e190', 'a320', 'b787', 'b777', 'a350'] },
 ];
 // 貨物機（窓がないので、窓の帯は白）
-export const CARGO_LIVERY: Livery = { name: 'クイルカーゴ', tail: 0xe0661c, stripe: 0x3b3b3b, win: 0xf1f2f3, fleet: ['atr', 'b737', 'b787'], cargo: true };
+export const CARGO_LIVERY: Livery = { name: 'クイルカーゴ', tail: 0xe0661c, stripe: 0x3b3b3b, win: 0xf1f2f3, fleet: ['atr', 'b737', 'b787', 'b777'], cargo: true };
 export const ALL_LIVERIES = [...LIVERIES, CARGO_LIVERY];
 
 const C = (h: number) => new THREE.Color(h);

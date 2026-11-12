@@ -184,7 +184,7 @@ describe('menu and legacy airports', () => {
   it('menu has 空港（小） under 空港 with size on line 2; old airports are gone', () => {
     const tr = TOOL_GROUPS.find((g) => g.id === 'transit')!;
     const sec = tr.sections!.find((s) => s.title === '空港')!;
-    expect(sec.items.map((i) => i.tool)).toEqual(['plop:airport_1', 'plop:airport_2']);
+    expect(sec.items.map((i) => i.tool)).toEqual(['plop:airport_1', 'plop:airport_2', 'plop:airport_3']);
     expect(sec.items[1].name).toBe('空港（中）');
     expect(sec.items[1].size).toBe('18×85');
     expect(sec.items[1].cost).toBe(300000);
