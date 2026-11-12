@@ -527,7 +527,7 @@ export class AirOps {
 
   private turnTime(ac: Ac) {
     // 大（ハブ）：乗り継ぎの客を待つので、駐機の時間が長い（エプロンには、いつも多くの飛行機が並ぶ）
-    if (this.L.parallel) return (ac.cargo ? 320 : 260) + (AC[ac.type].wide ? 120 : 0) + this.rnd() * 160;
+    if (this.L.parallel) return (ac.cargo ? 1000 : 800) + (AC[ac.type].wide ? 300 : 0) + this.rnd() * 400;
     return (ac.cargo ? 95 : 70) + (AC[ac.type].wide ? 30 : 0) + this.rnd() * 30;
   }
 

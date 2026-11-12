@@ -121,7 +121,7 @@ describe('large airport operations', () => {
     const L = airportLayout(3), [N, S] = L.runways;
     const ops = new AirOps(L, { pos: 3000, neg: 3000 }, 31);
     ops.open = true;
-    ops.flights = 140;
+    ops.flights = 111;
     ops.cargoFlights = 16;
     ops.seed();
     const since = new Map<object, { phase: string; t: number; a: number; c: number }>();

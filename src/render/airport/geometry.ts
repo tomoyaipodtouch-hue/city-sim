@@ -425,7 +425,7 @@ export function buildAirportGeometry(L: AirportLayout, f: AirFrame, ctx: AirCtx)
   // 島：縁石と歩道。タクシー乗り場（黄色の枠）・バス停（黄色の箱）、待合の屋根（木とガラス）
   const islA0 = P.aUg + 40, islA1 = V.a1;
   mb.box(islA0, 0, P.island[0], islA1, 0.22, P.island[1], COL.walk);
-  for (const [a0, a1, y] of [[P.aUg, aEast, 0.14], [V.a0 - 10, V.a1, h + 0.05]] as const) {
+  for (const [a0, a1, y] of [[P.aUg, aEast, 0.14], [P.aUe + 6, V.a1, h + 0.05]] as const) {
     dashed(a0, a1, r0 + 3.5, y);
     for (let a = a1 - 30; a > a0 + 20; a -= 45) { arrow(a, P.curb, -1, y); arrow(a - 12, P.thru, -1, y); }
   }
@@ -476,6 +476,12 @@ export function buildAirportGeometry(L: AirportLayout, f: AirFrame, ctx: AirCtx)
   G(P.aUe, V.c0, V.a1, r0, h + 0.12, COL.walk);
   mb.box(V.a0 - 30, h, P.island[0], V.a1 - 10, h + 0.2, P.island[1], COL.walk);
   bays(h + 0.05, V.a0 - 30, V.a1 - 10);
+  // 出発の島の屋根（木の天井とガラス。ターミナルの大屋根と同じ作り）
+  for (let a = V.a0 - 26; a < V.a1 - 30; a += 30) {
+    mb.box(a, h + 3.4, P.island[0] - 0.6, a + 24, h + 3.65, P.island[1] + 0.6, C(0x9cc3d4));
+    mb.matOverride = MAT.siding; mb.box(a, h + 3.15, P.island[0] - 0.5, a + 24, h + 3.4, P.island[1] + 0.5, COL.wood, PAT.lit); mb.matOverride = null;
+    for (const x of [a + 1.5, a + 22.5]) mb.box(x - 0.1, h + 0.2, (P.island[0] + P.island[1]) / 2 - 0.1, x + 0.1, h + 3.15, (P.island[0] + P.island[1]) / 2 + 0.1, COL.steelDark);
+  }
   solid(P.aUe, V.a1, V.c1 - 0.6, h + 0.05);
   ribbon(half(P.aUe, P.R, h), 7, 0, { wall: true, lines: true });
   ribbon([[P.aUe, P.ret1, h], [P.downA[1], P.ret1, 0], [P.downA[1] + 6, P.ret1, 0]], 7, 0, { wall: true, lines: true });
@@ -488,7 +494,8 @@ export function buildAirportGeometry(L: AirportLayout, f: AirFrame, ctx: AirCtx)
   arrow(av + 4, (r1 + gEnd) / 2, 0, 0.14); arrow(av - 4, (r1 + gEnd) / 2, 0, 0.14);
   if (gateLand && !elevGate) {
     // 門のマスまで（斜めの敷地でも、門のマスの中心へまっすぐ）
-    pline([[av, LE - 1], [gateLand.a, gateLand.c]], 16, 0.1, COL.road);
+    // 門のマスの路面の高さまで（敷地の外の地面は、ならした敷地より高い・低いことがある）
+    if (gateLand.kind) ribbon([[av, LE - 8, 0], [av, LE - 2, 0], [gateLand.a, gateLand.c, Math.max(-3, Math.min(2, gateLand.h)) - 0.02]], gateLand.kind === 'hw' ? 10 : 14, 4);
   }
   if (P.gateRamp && gateLand) {
     // 高架の都市高速が正門で終わる：門から陸側のふちに沿って下る 2 車線のランプ（都市高速のランプと同じ作り）
@@ -730,7 +737,8 @@ function terminal(mb: MeshBuilder, r: LRect, h: number, L: AirportLayout, light:
     mb.box(a - 2.5, 6.6, r.c1, a + 2.5, 9.4, r.c1 + 0.1, C(0x2a2f36));
   }
   // 大屋根：a に沿って波打つ。陸側へ少し高くなる
-  const a0 = r.a0 - 12, a1 = r.a1 + 12, c0 = r.c0 - 1.5, c1 = L.viaduct.c1 + 4;
+  // 屋根は出発の車寄せ（高架の歩道と、自家用車の車線）まで張り出す。その外の車線と島は空から見える
+  const a0 = r.a0 - 12, a1 = r.a1 + 12, c0 = r.c0 - 1.5, c1 = L.viaduct.c0 + 6;
   const NA = 40, NC = 4;
   const yAt = (a: number, c: number) => h + 2.2 + 2.2 * Math.sin((a / 46) * Math.PI) + ((c - c0) / (c1 - c0)) * 2.4;
   const th = 1.1;
@@ -761,7 +769,7 @@ function terminal(mb: MeshBuilder, r: LRect, h: number, L: AirportLayout, light:
   }
   mb.matOverride = null;
   // 木のような柱（陸側、道路の外側）
-  const cc = c1 - 2.5;
+  const cc = L.viaduct.c0 + 1;
   for (let a = r.a0 + 4; a <= r.a1 - 4; a += 28) {
     mb.cylinder(a, cc, 0, 8.5, 0.45, 10, COL.steel, undefined, 0.4);
     const top = yAt(a, cc) - th;
