@@ -453,7 +453,7 @@ function terminal(mb: MeshBuilder, r: LRect, h: number, L: AirportLayout, light:
     const ca = c0 + ((c1 - c0) * j) / NC, cb = c0 + ((c1 - c0) * (j + 1)) / NC;
     // 上の面（明るい金属。ところどころ天窓）
     const sky = i % 8 === 3 && j > 0 && j < NC - 1;
-    mb.quad([aa, yAt(aa, cb), cb], [ab, yAt(ab, cb), cb], [ab, yAt(ab, ca), ca], [aa, yAt(aa, ca), ca], sky ? C(0xb9c3c6) : COL.roofTop, sky ? PAT.lit : 0);
+    mb.quad([aa, yAt(aa, cb), cb], [ab, yAt(ab, cb), cb], [ab, yAt(ab, ca), ca], [aa, yAt(aa, ca), ca], sky ? C(0x9c9585) : COL.roofTop, sky ? PAT.lit : 0);
     // 下の面（木の天井。夜は照らされて温かく光る）
     mb.quad([aa, yAt(aa, ca) - th, ca], [ab, yAt(ab, ca) - th, ca], [ab, yAt(ab, cb) - th, cb], [aa, yAt(aa, cb) - th, cb], COL.woodDark, PAT.lit);
   }
@@ -461,8 +461,9 @@ function terminal(mb: MeshBuilder, r: LRect, h: number, L: AirportLayout, light:
   mb.matOverride = MAT.siding;
   for (let i = 0; i < NA; i++) {
     const aa = a0 + ((a1 - a0) * i) / NA, ab = a0 + ((a1 - a0) * (i + 1)) / NA;
-    mb.quad([aa, yAt(aa, c1) - th, c1], [ab, yAt(ab, c1) - th, c1], [ab, yAt(ab, c1), c1], [aa, yAt(aa, c1), c1], COL.wood);
-    mb.quad([ab, yAt(ab, c0) - th, c0], [aa, yAt(aa, c0) - th, c0], [aa, yAt(aa, c0), c0], [ab, yAt(ab, c0), c0], COL.wood);
+    // 鼻隠しは夜にライトアップ（木の色のまま明るく）
+    mb.quad([aa, yAt(aa, c1) - th, c1], [ab, yAt(ab, c1) - th, c1], [ab, yAt(ab, c1), c1], [aa, yAt(aa, c1), c1], COL.wood, PAT.lit);
+    mb.quad([ab, yAt(ab, c0) - th, c0], [aa, yAt(aa, c0) - th, c0], [aa, yAt(aa, c0), c0], [ab, yAt(ab, c0), c0], COL.wood, PAT.lit);
   }
   for (const a of [a0, a1]) {
     const sd = a === a0 ? -1 : 1;

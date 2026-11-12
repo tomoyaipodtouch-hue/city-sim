@@ -5,7 +5,7 @@ import { buildAirportGeometry } from './geometry';
 import { AC, buildAircraft, LIVERIES } from './aircraft';
 
 // 切り取る範囲（敷地の座標、m）。絵の座標では (0, 0)〜(W, D)
-const WIN = { a0: -150, a1: 170, c0: -48, c1: 96 };
+const WIN = { a0: -78, a1: 140, c0: -12, c1: 70 };
 export const AIRPORT_THUMB_CELLS = { w: (WIN.a1 - WIN.a0) / 16, h: (WIN.c1 - WIN.c0) / 16 };
 
 export function airportThumbModel(size: AirportSize): MeshBuilder {
@@ -28,13 +28,15 @@ export function airportThumbModel(size: AirportSize): MeshBuilder {
   for (let t = 0; t < mb.idx.length; t += 3) {
     const a = mb.idx[t], b = mb.idx[t + 1], c = mb.idx[t + 2];
     const x = (P[a * 3] + P[b * 3] + P[c * 3]) / 3, z = (P[a * 3 + 2] + P[b * 3 + 2] + P[c * 3 + 2]) / 3;
-    if (x < 0 || x > W || z < 0 || z > D) continue;
+    const inside = (v: number) => P[v * 3] >= 0 && P[v * 3] <= W && P[v * 3 + 2] >= 0 && P[v * 3 + 2] <= D;
+    if ((x < 0 || x > W || z < 0 || z > D) && !inside(a) && !inside(b) && !inside(c)) continue;
     for (const v of [a, b, c]) {
       let j = remap.get(v);
       if (j === undefined) {
         j = out.pos.length / 3;
         remap.set(v, j);
-        out.pos.push(P[v * 3], P[v * 3 + 1], P[v * 3 + 2]);
+        // 範囲の外へのびる板（芝生・滑走路・道路）は、範囲のふちで切る
+        out.pos.push(Math.max(0, Math.min(W, P[v * 3])), P[v * 3 + 1], Math.max(0, Math.min(D, P[v * 3 + 2])));
         out.nor.push(mb.nor[v * 3], mb.nor[v * 3 + 1], mb.nor[v * 3 + 2]);
         out.col.push(mb.col[v * 3], mb.col[v * 3 + 1], mb.col[v * 3 + 2]);
         out.uvm.push(mb.uvm[v * 2], mb.uvm[v * 2 + 1]);

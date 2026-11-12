@@ -100,7 +100,7 @@ export function moveV(m: Move, t: number): number {
 }
 
 // ---- 地上の車両の行き来（車庫 ⇔ 駐機スポットのそば） ----
-export interface Trip { type: GseType; path: Path; t: number; drive: number; stay: number; carts: number; live: boolean; attach: number; oneWay: boolean }
+export interface Trip { type: GseType; path: Path; t: number; drive: number; stay: number; carts: number; live: boolean; attach: number; oneWay: boolean; ac: Ac | null }
 
 // ---- 飛行機 ----
 export type Phase = 'approach' | 'rollout' | 'exit' | 'holdIn' | 'taxiIn' | 'park' | 'ready' | 'push' | 'pushed' | 'taxiOut' | 'holdOut' | 'lineup' | 'takeoff' | 'gone';
@@ -210,6 +210,10 @@ export class AirOps {
     this.gsePaths = { fuel, bags, bus, tug };
   }
 
+  private anyPhase(p1: Phase, p2: Phase) {
+    for (let i = 0; i < this.aircraft.length; i++) { const ph = this.aircraft[i].phase; if (ph === p1 || ph === p2) return true; }
+    return false;
+  }
   private di(dir: number) {
     return dir > 0 ? 0 : 1;
   }
@@ -309,7 +313,8 @@ export class AirOps {
     this.windT -= dt;
     this.flipPending = this.windT <= 0;
     if (this.flipPending) {
-      const quiet = this.aircraft.every((a) => a.phase === 'park' || a.phase === 'ready' || (a.phase === 'takeoff' && a.y > 300));
+      let quiet = true;
+      for (let i = 0; i < this.aircraft.length; i++) { const a = this.aircraft[i]; if (!(a.phase === 'park' || a.phase === 'ready' || (a.phase === 'takeoff' && a.y > 300))) quiet = false; }
       if (quiet) {
         this.dir = -this.dir;
         this.windT = 360 + this.rnd() * 420;
@@ -324,7 +329,7 @@ export class AirOps {
       if (this.spawnT <= 0) {
         const cargo = this.cargoFlights > 0 && this.rnd() < this.cargoFlights / rate;
         const st = this.freeStand(cargo);
-        const waiting = this.aircraft.some((a) => a.phase === 'holdOut');
+        const waiting = this.anyPhase('holdOut', 'holdOut');
         if (st >= 0 && this.aircraft.length < sp.maxAircraft && !this.runwayBusy(true) && !waiting) {
           const ac = this.newAc(cargo, st);
           ac.dir = this.dir;
@@ -343,7 +348,8 @@ export class AirOps {
     for (let i = 0; i < this.aircraft.length; i++) if (this.aircraft[i].phase !== 'gone') this.aircraft[w++] = this.aircraft[i];
     this.aircraft.length = w;
     // 地上の車両
-    for (const tr of this.trips) {
+    for (let i = 0; i < this.trips.length; i++) {
+      const tr = this.trips[i];
       if (!tr.live) continue;
       tr.t += dt;
       if (tr.attach < 0 && tr.t > (tr.oneWay ? tr.drive : tr.drive * 2 + tr.stay)) tr.live = false;
@@ -380,7 +386,7 @@ export class AirOps {
         break;
       case 'ready':
         // 誘導路が空いていて、着陸機がこのあと誘導路に入ってこないとき
-        if (!this.flipPending && !this.groundBusy && !this.aircraft.some((a) => a.phase === 'exit' || a.phase === 'holdIn')) {
+        if (!this.flipPending && !this.groundBusy && !this.anyPhase('exit', 'holdIn')) {
           // 駐機中に風向きが変わったら、新しい向きで出発する
           ac.dir = this.dir;
           this.groundBusy = ac;
@@ -448,8 +454,8 @@ export class AirOps {
   // ---- 地上の車両 ----
   private trip(type: GseType, path: Path, stay: number, carts = 0, speed = 6): Trip {
     let tr = this.trips.find((q) => !q.live);
-    if (!tr) { tr = { type, path, t: 0, drive: 0, stay: 0, carts: 0, live: false, attach: -1, oneWay: false }; this.trips.push(tr); }
-    tr.type = type; tr.path = path; tr.t = 0; tr.drive = path.len / speed; tr.stay = stay; tr.carts = carts; tr.live = true; tr.attach = -1; tr.oneWay = false;
+    if (!tr) { tr = { type, path, t: 0, drive: 0, stay: 0, carts: 0, live: false, attach: -1, oneWay: false, ac: null }; this.trips.push(tr); }
+    tr.type = type; tr.path = path; tr.t = 0; tr.drive = path.len / speed; tr.stay = stay; tr.carts = carts; tr.live = true; tr.attach = -1; tr.oneWay = false; tr.ac = null;
     return tr;
   }
   private serviceStart(ac: Ac) {
@@ -460,14 +466,13 @@ export class AirOps {
   }
   private tugIn(ac: Ac) {
     const tr = this.trip('tug', this.gsePaths!.tug[this.di(this.dir)][ac.stand], 1e9, 0, 4);
-    tr.attach = this.aircraft.indexOf(ac);
-    this.tugOf.set(ac, tr);
+    tr.attach = 1;
+    tr.ac = ac;
   }
-  private tugOf = new Map<Ac, Trip>();
   private tugAway(ac: Ac) {
-    const tr = this.tugOf.get(ac);
-    this.tugOf.delete(ac);
+    const tr = this.trips.find((q) => q.live && q.ac === ac);
     if (!tr) return;
+    tr.ac = null;
     // 押し終えたら、今いる所（機首の前）から車庫へ戻る（出発ごとに 1 回だけ道すじを作る）
     const L = AC[ac.type].len / 2 + 4.2, ta = ac.a + ac.ha * L, tcc = ac.c + ac.hc * L;
     const [da, dc] = this.L.depot, sv = this.L.serviceC;
@@ -478,11 +483,12 @@ export class AirOps {
   // 地上の車両と歩く人の姿勢を書き出す。emit(type, a, c, ha, hc)
   eachGse(time: number, emit: (t: GseType, a: number, c: number, ha: number, hc: number) => void) {
     const o = this.tmp;
-    for (const tr of this.trips) {
+    for (let i = 0; i < this.trips.length; i++) {
+      const tr = this.trips[i];
       if (!tr.live) continue;
       // 押しているトーイングカー：飛行機の機首の前
       if (tr.attach >= 0) {
-        const ac = this.tugAc(tr);
+        const ac = tr.ac && tr.ac.phase !== 'gone' ? tr.ac : null;
         if (ac && (ac.phase === 'push' || ac.phase === 'ready' || (ac.phase === 'park' && tr.t >= tr.drive))) {
           const L = AC[ac.type].len / 2 + 4.2;
           emit('tug', ac.a + ac.ha * L, ac.c + ac.hc * L, -ac.ha, -ac.hc);
@@ -505,7 +511,8 @@ export class AirOps {
       }
     }
     // 歩いて乗り降りする人：降りる（駐機の始め）、乗る（駐機の終わり）
-    for (const ac of this.aircraft) {
+    for (let i = 0; i < this.aircraft.length; i++) {
+      const ac = this.aircraft[i];
       if (ac.phase !== 'park' || ac.cargo) continue;
       const p = this.walk[ac.stand];
       const t = ac.t, T = ac.T;
@@ -522,10 +529,6 @@ export class AirOps {
       }
     }
     void time;
-  }
-  private tugAc(tr: Trip): Ac | null {
-    for (const [ac, t] of this.tugOf) if (t === tr) return ac;
-    return null;
   }
 }
 

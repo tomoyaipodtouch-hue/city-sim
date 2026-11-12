@@ -19,7 +19,10 @@ import { AirOps } from './ops';
 const CHUNK_M = 256;
 type LiveryAttrs = { tail: THREE.InstancedBufferAttribute; stripe: THREE.InstancedBufferAttribute; win: THREE.InstancedBufferAttribute };
 const AC_CAP = 16, GSE_CAP = 40, PAX_CAP = 80;
-const DYN_PER_AC = 5; // 飛行機の灯火（左の赤、右の緑、尾の白、赤い衝突防止灯、着陸灯）
+const DYN_PER_AC = 5;
+const ALL_KEYS: string[] = [...AC_TYPES, ...GSE_TYPES];
+// 飛行機の灯火の色（毎フレーム配列を作らない）
+const NAV_RED = [1, 0.15, 0.1], NAV_GREEN = [0.2, 1, 0.4], WHITE = [1, 1, 1], BEACON = [1, 0.12, 0.08], OFF = [0, 0, 0], LANDING = [1, 0.97, 0.9]; // 飛行機の灯火（左の赤、右の緑、尾の白、赤い衝突防止灯、着陸灯）
 
 export const isAirfield = (b: Building) => b.civic && !!CIVIC[b.type as CivicId]?.airfield;
 
@@ -274,7 +277,7 @@ export class AirportLayer {
       changed = true;
     }
     for (const [id, e] of this.entries) if (!seen.has(id)) { this.drop(e); this.entries.delete(id); changed = true; }
-    if (changed) this.rebuildLights();
+    if (changed) { this.list = [...this.entries.values()]; this.rebuildLights(); }
     if (changed) this.listVersion++;
     return changed;
   }
@@ -383,17 +386,19 @@ export class AirportLayer {
   // 毎フレーム：運航をすすめ、飛行機と車両を置く（dt = ゲームの速さをかけた秒、tod = 1 日の時刻 0..1）
   tick(dt: number, tod: number) {
     this.time += dt;
-    for (const k of [...AC_TYPES, ...GSE_TYPES]) { this.cnt[k] = 0; const b = (this.box[k] ??= [0, 0, 0, 0, 0, 0]); b[0] = b[1] = b[2] = Infinity; b[3] = b[4] = b[5] = -Infinity; }
-    if (!this.entries.size) { for (const t of AC_TYPES) this.acMesh[t].count = 0; for (const t of GSE_TYPES) this.gseMesh[t].count = 0; return; }
+    for (let i = 0; i < ALL_KEYS.length; i++) { const k = ALL_KEYS[i]; this.cnt[k] = 0; const b = (this.box[k] ??= [0, 0, 0, 0, 0, 0]); b[0] = b[1] = b[2] = Infinity; b[3] = b[4] = b[5] = -Infinity; }
+    if (!this.list.length) { for (const t of AC_TYPES) this.acMesh[t].count = 0; for (const t of GSE_TYPES) this.gseMesh[t].count = 0; return; }
     const pos = this.pts.geometry.getAttribute('position') as THREE.BufferAttribute;
     const col = this.pts.geometry.getAttribute('color') as THREE.BufferAttribute;
     const size = this.pts.geometry.getAttribute('size') as THREE.BufferAttribute;
     let dyn = this.dynStart;
     const blink = (this.time % 1.2) < 0.12;
-    for (const e of this.entries.values()) {
+    for (let ei = 0; ei < this.list.length; ei++) {
+      const e = this.list[ei];
       e.ops.update(dt, tod);
       const f = e.f, base = e.base;
-      for (const ac of e.ops.aircraft) {
+      for (let ai = 0; ai < e.ops.aircraft.length; ai++) {
+        const ac = e.ops.aircraft[ai];
         const t = ac.type, k = this.cnt[t];
         if (k >= AC_CAP) continue;
         const X = ac.a * f.cos - ac.c * f.sin + f.cx, Z = ac.a * f.sin + ac.c * f.cos + f.cz, Y = base + ac.y + 0.12;
@@ -411,20 +416,14 @@ export class AirportLayer {
         this.grow(t, X, Y, Z);
         // 飛行機の灯火（夜）
         if (this.night > 0.02 && pos && dyn + DYN_PER_AC <= pos.count) {
-          const d = AC[t], sx = Math.cos(yaw), sz = -Math.sin(yaw); // 機体の +x（左の翼）の世界の向き
-          const fx = Math.sin(yaw), fz = Math.cos(yaw);
-          const put = (lx: number, ly: number, lz: number, c: readonly number[], s: number) => {
-            pos.setXYZ(dyn, X + sx * lx + fx * lz, Y + ly + lz * Math.sin(ac.pitch), Z + sz * lx + fz * lz);
-            col.setXYZ(dyn, c[0], c[1], c[2]);
-            size.setX(dyn, s);
-            dyn++;
-          };
+          const d = AC[t];
+          this.lx = X; this.ly = Y; this.lz = Z; this.lyaw = yaw; this.lpitch = ac.pitch;
           const wy = d.high ? d.fy + d.R : d.fy - d.R * 0.2;
-          put(d.span / 2, wy, -1, [1, 0.15, 0.1], 3.5);
-          put(-d.span / 2, wy, -1, [0.2, 1, 0.4], 3.5);
-          put(0, d.fy + d.R * 0.5, -d.len / 2, [1, 1, 1], 3);
-          put(0, d.fy + d.R + 0.2, 0, blink ? [1, 0.12, 0.08] : [0, 0, 0], 5);
-          put(0, d.fy - d.R, d.len / 2 - 2, ac.lights ? [1, 0.97, 0.9] : [0, 0, 0], ac.lights ? 16 : 0);
+          this.putLight(dyn++, d.span / 2, wy, -1, NAV_RED, 3.5);
+          this.putLight(dyn++, -d.span / 2, wy, -1, NAV_GREEN, 3.5);
+          this.putLight(dyn++, 0, d.fy + d.R * 0.5, -d.len / 2, WHITE, 3);
+          this.putLight(dyn++, 0, d.fy + d.R + 0.2, 0, blink ? BEACON : OFF, 5);
+          this.putLight(dyn++, 0, d.fy - d.R, d.len / 2 - 2, ac.lights ? LANDING : OFF, ac.lights ? 16 : 0);
         }
       }
       this.curEntry = e;
@@ -452,6 +451,17 @@ export class AirportLayer {
     }
   }
   private curEntry: Entry | null = null;
+  private list: Entry[] = [];
+  private lx = 0; private ly = 0; private lz = 0; private lyaw = 0; private lpitch = 0;
+  // 飛行機の灯火 1 つ（機体の座標 lx = 左右（+ が左の翼）、ly = 高さ、lz = 前後）
+  private putLight(i: number, lx: number, ly: number, lz: number, c: number[], s: number) {
+    const g = this.pts.geometry;
+    const pos = g.getAttribute('position') as THREE.BufferAttribute, col = g.getAttribute('color') as THREE.BufferAttribute, size = g.getAttribute('size') as THREE.BufferAttribute;
+    const sx = Math.cos(this.lyaw), sz = -Math.sin(this.lyaw), fx = Math.sin(this.lyaw), fz = Math.cos(this.lyaw);
+    pos.setXYZ(i, this.lx + sx * lx + fx * lz, this.ly + ly + lz * Math.sin(this.lpitch), this.lz + sz * lx + fz * lz);
+    col.setXYZ(i, c[0], c[1], c[2]);
+    size.setX(i, s);
+  }
   private emitGse = (type: GseType, a: number, c: number, ha: number, hc: number) => {
     // 今まわしている空港の変換（eachGse の中で呼ばれる）
     const e = this.curEntryFor();
