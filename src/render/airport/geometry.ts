@@ -171,7 +171,8 @@ export function buildAirportGeometry(L: AirportLayout, f: AirFrame, ctx: AirCtx)
     if (isLink(i, j)) return;
     const [a0, c0] = net.nodes[i], [a1, c1] = net.nodes[j], w = net.width[q];
     const l = Math.hypot(a1 - a0, c1 - c0) || 1, ua = (a1 - a0) / l, uc = (c1 - c0) / l, e = w / 2;
-    if (!(onApron(a0, c0) && onApron(a1, c1))) pline([[a0 - ua * e, c0 - uc * e], [a1 + ua * e, c1 + uc * e]], w, 0.1, COL.taxi);
+    // エプロンにかかるところは、エプロンの舗装（少し上）が上に重なる
+    if (!(onApron(a0, c0) && onApron(a1, c1))) pline([[a0 - ua * e, c0 - uc * e], [a1 + ua * e, c1 + uc * e]], w, 0.092, COL.taxi);
     pline([[a0, c0], [a1, c1]], 0.3, 0.14, COL.yellow);
   });
   for (const la of rw.links) {
