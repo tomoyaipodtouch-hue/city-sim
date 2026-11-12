@@ -132,7 +132,7 @@ export function buildAirportGeometry(L: AirportLayout, f: AirFrame, ctx: AirCtx)
 
   const rw = L.runways[0], rc = rw.c, rwW = rw.width, hw = rwW / 2;
   // ---- 滑走路：路肩、舗装、両端の過走帯（黄色の山形） ----
-  G(rw.a0 - 32, rc - hw - 4, rw.a1 + 32, rc + hw + 4, 0.08, COL.shoulder);
+  G(rw.a0 - 32, Math.max(-Cw / 2, rc - hw - 4), rw.a1 + 32, rc + hw + 4, 0.08, COL.shoulder);
   G(rw.a0, rc - hw, rw.a1, rc + hw, 0.1, COL.asphRw);
   for (const [end, dir] of [[rw.a0, 1], [rw.a1, -1]] as const) {
     G(end - dir * 30, rc - hw, end, rc + hw, 0.1, COL.asph);

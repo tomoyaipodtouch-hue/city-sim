@@ -161,8 +161,7 @@ export interface RunwayDef {
   a1: number;
   width: number;
   links: number[]; // 両端の取付誘導路の位置（a。[西, 東]）
-  holdC: number; // 停止位置（c）
-  hold: [number, number]; // 停止位置のノード（両端：a0 側、a1 側）
+  holdC: number; // 滑走路の手前の停止位置の標示（滑走路の側のふち、c）。出発機はこの手前の平行誘導路の上で待つ
   junction: [number, number]; // 取付誘導路と平行誘導路の交わるノード（両端）
   exits: ExitDef[];
   td: number; // 滑走路の端から接地点まで（m）
@@ -243,22 +242,20 @@ function netBuilder() {
 function layoutS(spec: AirportSpec): AirportLayout {
   const A = spec.L * CELL, C = spec.W * CELL;
   const rwLen = 800, rwW = 30, rc = -C / 2 + 30;
-  const taxiC = -22, taxiW = 15;
+  // 平行誘導路は、駐機している飛行機の尾と、誘導路を通る飛行機の翼が重ならない位置（翼端のすき間 2m 以上）
+  const taxiC = -28, taxiW = 15;
   const linkA = rwLen / 2 - 15;
-  const holdC = rc + rwW / 2 + 9, clearC = taxiC - 13;
+  const holdC = rc + rwW / 2 + 5;
   const standAs = [-55, 0, 55, 285];
-  const { net, node, edge, line } = netBuilder();
+  const { net, node, line } = netBuilder();
   line(taxiC, [-linkA, ...standAs, linkA], taxiW);
   const J = [node(-linkA, taxiC), node(linkA, taxiC)] as [number, number];
-  const H = [node(-linkA, holdC), node(linkA, holdC)] as [number, number];
-  const Cl = [node(-linkA, clearC), node(linkA, clearC)];
-  for (let k = 0; k < 2; k++) { edge(H[k], Cl[k], taxiW); edge(Cl[k], J[k], taxiW); }
   const exits: ExitDef[] = [1, -1].map((dir) => {
     const far = dir > 0 ? linkA : -linkA, k = dir > 0 ? 1 : 0;
-    return { dir: dir as 1 | -1, a: far - dir * 30, pts: [[far - dir * 30, rc], [far, rc], [far, clearC]], node: Cl[k], speed: 11, rapid: false };
+    return { dir: dir as 1 | -1, a: far - dir * 30, pts: [[far - dir * 30, rc], [far, rc], [far, taxiC]], node: J[k], speed: 11, rapid: false };
   });
-  const runway: RunwayDef = { c: rc, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC, hold: H, junction: J, exits, td: 120 };
-  const stands: StandDef[] = standAs.map((a, k) => ({ a, noseC: k === 3 ? 16 : 27, cargo: k === 3, wide: false, bridge: false, node: node(a, taxiC) }));
+  const runway: RunwayDef = { c: rc, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC, junction: J, exits, td: 120 };
+  const stands: StandDef[] = standAs.map((a, k) => ({ a, noseC: k === 3 ? 20 : 31, cargo: k === 3, wide: false, bridge: false, node: node(a, taxiC) }));
   return {
     spec, A, C,
     runways: [runway], net,
@@ -271,7 +268,7 @@ function layoutS(spec: AirportSpec): AirportLayout {
     ],
     stands,
     types: ['atr', 'a220', 'e190'], wideTypes: [], cargoTypes: ['atr'], walk: true,
-    serviceC: 32,
+    serviceC: 34.5,
     depot: [118, 14],
     buildings: [
       { kind: 'pier', r: { a0: -88, c0: 38, a1: 88, c1: 46 }, h: 6 },
@@ -302,26 +299,26 @@ function layoutS(spec: AirportSpec): AirportLayout {
 // 桟橋（ピア）に搭乗橋 8 か所（ワイドボディ 2）、バスで乗るスポット 2、貨物のスポット 2
 function layoutM(spec: AirportSpec): AirportLayout {
   const A = spec.L * CELL, C = spec.W * CELL;
-  const rwLen = 1200, rwW = 45, rc = -116;
-  const taxiC = -56, taxiW = 20, laneC = -24;
+  // 滑走路・平行誘導路・エプロンの誘導路の間隔：通る飛行機の翼が、滑走路の飛行機・駐機している飛行機の尾と重ならない
+  const rwLen = 1200, rwW = 45, rc = -121;
+  const taxiC = -60, taxiW = 20, laneC = -34;
   const linkA = rwLen / 2 - 15;
-  const holdC = rc + rwW / 2 + 13.5;
+  const holdC = rc + rwW / 2 + 4.5;
   const retA = 120, retJ = retA + (taxiC - rc) / Math.tan(Math.PI / 6);
   const pier = { a0: -225, a1: 190, c0: 66, c1: 80 };
   const stDefs: { a: number; wide?: boolean; bridge?: boolean; cargo?: boolean }[] = [
     { a: -190, wide: true, bridge: true }, { a: -132, bridge: true }, { a: -86, bridge: true }, { a: -40, bridge: true },
     { a: 6, bridge: true }, { a: 52, bridge: true }, { a: 98, bridge: true }, { a: 156, wide: true, bridge: true },
     { a: 232 }, { a: 278 }, // バスで乗るスポット
-    { a: 425, wide: true, cargo: true }, { a: 505, cargo: true },
+    { a: 425, wide: true, cargo: true }, { a: 505, cargo: true }, // 貨物：平行誘導路から直接入る
   ];
-  const conns = [-300, -63, 330, 465];
+  const conns = [-300, -63, 330];
   const { net, node, edge, line } = netBuilder();
-  line(taxiC, [-linkA, -retJ, -retJ - 25, ...conns, retJ, retJ + 25, linkA], taxiW);
-  line(laneC, [conns[0], ...stDefs.map((s) => s.a), conns[1], conns[2], conns[3], 540], 18);
+  const cargoAs = stDefs.filter((s) => s.cargo).map((s) => s.a);
+  line(taxiC, [-linkA, -retJ, -retJ - 25, ...conns, retJ, retJ + 25, ...cargoAs, linkA], taxiW);
+  line(laneC, [conns[0], ...stDefs.filter((s) => !s.cargo).map((s) => s.a), conns[1], conns[2]], 18);
   for (const a of conns) edge(node(a, taxiC), node(a, laneC), 18);
   const J = [node(-linkA, taxiC), node(linkA, taxiC)] as [number, number];
-  const H = [node(-linkA, holdC), node(linkA, holdC)] as [number, number];
-  for (let k = 0; k < 2; k++) edge(H[k], J[k], taxiW);
   const exits: ExitDef[] = [];
   for (const dir of [1, -1] as const) {
     const far = dir > 0 ? linkA : -linkA, k = dir > 0 ? 1 : 0;
@@ -330,9 +327,9 @@ function layoutM(spec: AirportSpec): AirportLayout {
     exits.push({ dir, a: ra - dir * 20, pts: [[ra - dir * 20, rc], [ra, rc], [rj, taxiC], [rj + dir * 25, taxiC]], node: node(rj + dir * 25, taxiC), speed: 22, rapid: true });
     exits.push({ dir, a: far - dir * 40, pts: [[far - dir * 40, rc], [far, rc], [far, taxiC]], node: J[k], speed: 11, rapid: false });
   }
-  const runway: RunwayDef = { c: rc, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC, hold: H, junction: J, exits, td: 160 };
+  const runway: RunwayDef = { c: rc, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC, junction: J, exits, td: 160 };
   const stands: StandDef[] = stDefs.map((s) => ({
-    a: s.a, noseC: s.cargo ? 30 : 58, cargo: !!s.cargo, wide: !!s.wide, bridge: !!s.bridge, node: node(s.a, laneC),
+    a: s.a, noseC: s.cargo ? 38 : s.wide ? 62 : 58, cargo: !!s.cargo, wide: !!s.wide, bridge: !!s.bridge, node: node(s.a, s.cargo ? taxiC : laneC),
     rot: s.bridge ? [s.a + (s.wide ? 26 : 19), 63] : undefined,
   }));
   return {
