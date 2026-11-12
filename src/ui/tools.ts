@@ -325,7 +325,7 @@ export class ToolController {
       const plan = planAirport(g, CIVIC[id].airfield!, x, y, this.airRot);
       const fill = new Set(plan.fill), st = new Set(plan.ports.stationNear), lot = new Set(plan.cells);
       const hw = plan.ports.highwayNear.filter((i) => !st.has(i));
-      pv.setTiles(g, [...plan.cells, ...st, ...hw], (i) => (plan.bad.has(i) ? 0xe5534b : st.has(i) ? 0xb07cff : !lot.has(i) ? 0x6fc3ff : fill.has(i) ? 0xc9a26b : plan.ok ? 0x5cc46a : 0x9fb7a0));
+      pv.setTiles(g, [...plan.cells, ...st, ...hw], (i) => (plan.bad.has(i) ? 0xe5534b : st.has(i) ? 0xc45cff : !lot.has(i) ? 0x6fc3ff : fill.has(i) ? 0xc9a26b : plan.ok ? 0x5cc46a : 0x9fb7a0));
       pv.setPath(g, []);
       const extra = plan.fill.length ? `（埋め立て ${plan.fill.length} マス・岸壁 ${plan.quay.length} マス）` : '';
       return plan.ok ? { text: `${CIVIC[id].name}　${yen(plan.cost)}${extra}　紫＝駅の線路、水色＝都市高速をつなぐ場所`, bad: false } : { text: plan.reason, bad: true };

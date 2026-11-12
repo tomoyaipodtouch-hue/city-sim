@@ -222,7 +222,7 @@ describe('menu and legacy airports', () => {
 // 128×128 の平らな土地：西に住宅・商業・オフィス（またはハイテク工業）、東に空港（陸側が西、滑走路は南北）。
 // 空港の敷地は x 86..97, y 35..94。陸側のすぐ外の列 x = 85：北は道路（y 36..56）、駅の前（y 60..69）は線路、南は高速道路
 // opts.rail = 住宅地の駅から空港駅まで高架鉄道。opts.link = false なら線路を駅の 1 列手前で止める。opts.hw = 南から都市高速
-interface CityOpts { rail?: boolean; link?: boolean; hw?: boolean | RoadType; airport?: boolean; ih?: boolean; days?: number }
+interface CityOpts { rail?: boolean; link?: boolean; hw?: boolean | RoadType; airport?: boolean; ih?: boolean; days?: number; size?: 1 | 2; fromSouth?: boolean }
 const AX = 91, AY = 64, AROT = 4;
 function airCity(o: CityOpts) {
   const w = flat();
@@ -230,7 +230,15 @@ function airCity(o: CityOpts) {
   for (let y = 20; y <= 104; y += 6) run({ t: 'road', x0: 4, y0: y, x1: 58, y1: y, road: RoadType.Road });
   for (let x = 4; x <= 58; x += 6) run({ t: 'road', x0: x, y0: 20, x1: x, y1: 104, road: RoadType.Street });
   run({ t: 'road', x0: 0, y0: 62, x1: 4, y1: 62, road: RoadType.Road }); // 隣の都市へ
-  if (o.rail) {
+  if (o.rail && o.fromSouth) {
+    // 南から、空港の陸側のふちに沿って北へ（駅の前の紫のマスへ、反対側から入る）：住宅地の駅 → 南の外回り → x = 85 を北へ
+    run({ t: 'transit', x0: 10, y0: 59, x1: 70, y1: 59, kind: 'erail' });
+    run({ t: 'transit', x0: 70, y0: 59, x1: 70, y1: 112, kind: 'erail' });
+    run({ t: 'transit', x0: 70, y0: 112, x1: 85, y1: 112, kind: 'erail' });
+    run({ t: 'transit', x0: 85, y0: 112, x1: 85, y1: 60, kind: 'erail' });
+    ok(w, { t: 'plop', id: 'el_station', x: 24, y: 57 });
+    ok(w, { t: 'plop', id: 'el_station', x: 36, y: 57 });
+  } else if (o.rail) {
     const col = o.link === false ? 84 : 85;
     run({ t: 'transit', x0: 10, y0: 59, x1: 84, y1: 59, kind: 'erail' });
     if (col === 85) run({ t: 'transit', x0: 84, y0: 59, x1: 85, y1: 60, kind: 'erail' });
@@ -253,7 +261,8 @@ function airCity(o: CityOpts) {
   // 2 マス幅の高速道路（ふつうの高速道路）は 1 列西から引く（陸側のふちに接する）
   const wide = o.hw === RoadType.Highway || o.hw === RoadType.GroundHighway;
   if (o.hw) run({ t: 'road', x0: wide ? 84 : 85, y0: 72, x1: wide ? 84 : 85, y1: 127, road: o.hw === true ? RoadType.UrbanHighway : o.hw });
-  if (o.airport !== false) ok(w, { t: 'plop', id: 'airport_1', x: AX, y: AY, rot: AROT });
+  // 空港（中）は 18 マス幅：敷地の西のふちを同じ x = 86 にする
+  if (o.airport !== false) ok(w, { t: 'plop', id: o.size === 2 ? 'airport_2' : 'airport_1', x: o.size === 2 ? 94 : AX, y: AY, rot: AROT });
   const kinds: GrowKind[] = o.ih ? ['R1', 'R2', 'CS1', 'CS2', 'CO2', 'IH'] : ['R1', 'R2', 'CS1', 'CS2', 'CO2', 'CO3'];
   const days = o.days ?? 540;
   for (let d = 0; d < days; d++) {
@@ -262,7 +271,7 @@ function airCity(o: CityOpts) {
   }
   return w;
 }
-const airportOf = (w: World) => [...w.buildings.values()].find((b) => b.type === 'airport_1')!;
+const airportOf = (w: World) => [...w.buildings.values()].find((b) => b.type === 'airport_1' || b.type === 'airport_2')!;
 
 describe('airport in a city', () => {
   let base: World | null = null;
@@ -284,6 +293,21 @@ describe('airport in a city', () => {
     const a2 = airportOf(w2).air!;
     expect(a2.lines).toEqual([]);
     expect(a2.paxRail).toBe(0);
+  });
+
+  it('an elevated rail line drawn into the station from either side carries passengers (小 and 中)', { timeout: 900000 }, () => {
+    for (const size of [1, 2] as const) {
+      const w = airCity({ rail: true, fromSouth: true, size, days: 360 });
+      const a = airportOf(w).air!;
+      expect(a.lines, `size ${size}`).toContain('erail');
+      expect(a.paxRail, `size ${size}`).toBeGreaterThan(5);
+    }
+    // 中は西からも
+    const w = airCity({ rail: true, size: 2, days: 360 });
+    expect(airportOf(w).air!.lines).toContain('erail');
+    expect(airportOf(w).air!.paxRail).toBeGreaterThan(5);
+    // 中は同じ街でも利用者が多い（行き先が多い）
+    expect(airportOf(w).air!.pax).toBeGreaterThan(airportOf(airCity({ rail: true, days: 360 })).air!.pax);
   });
 
   it('flights, revenue and upkeep follow the users', { timeout: 600000 }, () => {

@@ -636,24 +636,78 @@ function carpark(mb: MeshBuilder, r: LRect, h: number, rng: Rng) {
 }
 
 // 空港駅：敷地の陸側のふちに沿うホームと長い屋根。真ん中にガラスの駅舎と、ターミナルへの渡り廊下
+// 列車の長さ（m。render/vehicles.ts の TRAIN_SPEC：両数 ×（車両の長さ + すき間））
+const TRAIN_LEN: Record<string, number> = { rail: 5 * 18.8, erail: 4 * 14.1, mono: 4 * 13.6, sub: 5 * 17.8 };
+
+// 空港駅。高架鉄道・モノレールがつながると、ターミナルの前の高架駅（木とガラスの屋根のホーム、ターミナルの出発階へのガラスの連絡橋）。
+// 地上の鉄道・地下鉄・つながっていないときは、地上のホームと駅舎
 function station(mb: MeshBuilder, r: LRect, h: number, L: AirportLayout, lines: string[]) {
   const elevated = lines.includes('erail') || lines.includes('mono');
-  const py = elevated ? 8 : 0;
-  // ホーム
-  mb.box(r.a0, py, r.c0 + 3, r.a1, py + 1.1, r.c1, COL.platform, PAT.none, C(0xd6d1c6));
-  if (elevated) for (let a = r.a0 + 6; a < r.a1; a += 20) mb.box(a - 0.6, 0, r.c0 + 5.5, a + 0.6, py, r.c0 + 7, COL.concrete);
-  mb.box(r.a0, py + 1.1, r.c1 - 0.6, r.a1, py + 1.12, r.c1 - 0.3, COL.yellow);
-  // 屋根（白い鉄骨と、ガラスの帯）
-  for (let a = r.a0 + 4; a < r.a1; a += 12) mb.box(a - 0.15, py + 1.1, r.c0 + 5, a + 0.15, py + h, r.c0 + 5.3, COL.steel);
-  mb.box(r.a0, py + h, r.c0 + 2, r.a1, py + h + 0.4, r.c1 + 1.5, COL.steel, PAT.none, C(0xe8eaec));
-  mb.box(r.a0 + 2, py + h + 0.4, r.c0 + 5, r.a1 - 2, py + h + 0.5, r.c0 + 7, C(0x8fb3c8));
-  // 駅舎（真ん中）と、ターミナルへの渡り廊下
-  mb.box(-16, 0, r.c0 - 1, 16, py + h + 3, r.c0 + 4, COL.glass, PAT.terminal, COL.concrete);
   const term = L.buildings.find((b) => b.kind === 'terminal')!;
-  mb.box(-5, 11.5, term.r.c1, 5, 14.5, r.c0 - 1, COL.glass, PAT.terminal, COL.steel);
-  for (const c of [L.roadC[0] + 1, L.roadC[1] - 1]) mb.box(-0.4, 0, c - 0.4, 0.4, 11.5, c + 0.4, COL.steel);
+  // ホームの長さ：つながっている列車のいちばん長いものより少し長く
+  const tl = Math.max(60, ...lines.map((k) => TRAIN_LEN[k] ?? 0));
+  const half = Math.min((r.a1 - r.a0) / 2, tl / 2 + 8);
+  const a0 = -half, a1 = half;
+  if (!elevated) {
+    const py = 0;
+    mb.box(a0, py, r.c0 + 3, a1, py + 1.1, r.c1, COL.platform, PAT.none, C(0xd6d1c6));
+    mb.box(a0, py + 1.1, r.c1 - 0.6, a1, py + 1.12, r.c1 - 0.3, COL.yellow);
+    for (let a = a0 + 4; a < a1; a += 12) mb.box(a - 0.15, py + 1.1, r.c0 + 5, a + 0.15, py + h, r.c0 + 5.3, COL.steel);
+    mb.box(a0, py + h, r.c0 + 2, a1, py + h + 0.4, r.c1 + 1.5, COL.steel, PAT.none, C(0xe8eaec));
+    mb.box(a0 + 2, py + h + 0.4, r.c0 + 5, a1 - 2, py + h + 0.5, r.c0 + 7, C(0x8fb3c8));
+    mb.box(-16, 0, r.c0 - 1, 16, py + h + 3, r.c0 + 4, COL.glass, PAT.terminal, COL.concrete);
+    mb.box(-5, 11.5, term.r.c1, 5, 14.5, r.c0 - 1, COL.glass, PAT.terminal, COL.steel);
+    for (const c of [L.roadC[0] + 1, L.roadC[1] - 1]) mb.box(-0.4, 0, c - 0.4, 0.4, 11.5, c + 0.4, COL.steel);
+    mb.box(-12, py + h + 1.2, r.c0 - 1.05, 12, py + h + 2.4, r.c0 - 0.95, C(0x2a6fb5), PAT.glow);
+    return;
+  }
+  // ---- 高架駅 ----
+  const py = lines.includes('erail') ? 8 : 11; // 高架鉄道 8m、モノレール 11m（線路の高さ）
+  const edge = L.C / 2 + 5.2; // ホームのふち（線路のマスの、線路の中心から 2.8m 手前）
+  const pc0 = r.c0 + 1;
+  // ホームの床（高架の床版）と、柱
+  mb.matOverride = MAT.concrete;
+  mb.box(a0, py - 1.2, pc0, a1, py + 1.1, edge, COL.concrete, PAT.none, COL.platform);
+  mb.matOverride = null;
+  for (let a = a0 + 8; a < a1; a += 16) mb.box(a - 0.7, 0, pc0 + 2, a + 0.7, py - 1.2, pc0 + 4, COL.concreteDark);
+  mb.box(a0, py + 1.1, edge - 0.9, a1, py + 1.12, edge - 0.5, COL.yellow); // 点字ブロックの黄色
+  // ホームのガラスの壁（陸側）と、ホームの長さの案内（白い番号の柱）
+  mb.box(a0, py + 1.1, pc0, a1, py + 3.2, pc0 + 0.15, C(0x9cc3d4));
+  // 屋根：ターミナルと同じ、木の天井の波打つ大屋根（ホームと線路の上まで）
+  const rc0 = pc0 - 1, rc1 = edge + 5.5, NA = Math.max(6, Math.round((a1 - a0) / 6)), th = 0.7;
+  const yAt = (a: number, c: number) => py + 6.2 + 0.9 * Math.sin((a / 23) * Math.PI) + ((c - rc0) / (rc1 - rc0)) * 0.8;
+  for (let i = 0; i < NA; i++) {
+    const aa = a0 - 3 + ((a1 - a0 + 6) * i) / NA, ab = a0 - 3 + ((a1 - a0 + 6) * (i + 1)) / NA;
+    const sky = i % 4 === 1;
+    mb.quad([aa, yAt(aa, rc1), rc1], [ab, yAt(ab, rc1), rc1], [ab, yAt(ab, rc0), rc0], [aa, yAt(aa, rc0), rc0], sky ? C(0x9c9585) : COL.roofTop, sky ? PAT.lit : 0);
+    mb.quad([aa, yAt(aa, rc0) - th, rc0], [ab, yAt(ab, rc0) - th, rc0], [ab, yAt(ab, rc1) - th, rc1], [aa, yAt(aa, rc1) - th, rc1], COL.woodDark, PAT.lit);
+    mb.matOverride = MAT.siding;
+    mb.quad([aa, yAt(aa, rc1) - th, rc1], [ab, yAt(ab, rc1) - th, rc1], [ab, yAt(ab, rc1), rc1], [aa, yAt(aa, rc1), rc1], COL.wood, PAT.lit);
+    mb.quad([ab, yAt(ab, rc0) - th, rc0], [aa, yAt(aa, rc0) - th, rc0], [aa, yAt(aa, rc0), rc0], [ab, yAt(ab, rc0), rc0], COL.wood, PAT.lit);
+    mb.matOverride = null;
+  }
+  // 屋根を支える木のような柱（ホームの真ん中）
+  const cm = (pc0 + edge) / 2;
+  for (let a = a0 + 10; a <= a1 - 9; a += 20) {
+    mb.cylinder(a, cm, py + 1.1, py + 4.2, 0.3, 8, COL.steel, undefined, 0.28);
+    for (const [da, dc] of [[-3, -2.5], [3, -2.5], [-3, 2.5], [3, 2.5]]) {
+      const ta = a + da, tcc = cm + dc, ty = yAt(ta, tcc) - th, w = 0.13;
+      mb.quad([a - w, py + 4.0, cm], [a + w, py + 4.0, cm], [ta + w, ty, tcc], [ta - w, ty, tcc], COL.steel);
+      mb.quad([a + w, py + 4.0, cm], [a - w, py + 4.0, cm], [ta - w, ty, tcc], [ta + w, ty, tcc], COL.steel);
+    }
+  }
+  // 駅舎（ガラスの箱、エスカレーターとエレベーター）：地面からホームの階まで
+  mb.box(-17, 0, r.c0 - 2, 17, py + 1.1, pc0 + 4, COL.glass, PAT.terminal, COL.platform);
+  mb.box(-6, py + 1.1, pc0 - 2, 6, py + 4.4, pc0 + 2, COL.glass, PAT.terminal, COL.steel);
+  // ターミナルの出発階へのガラスの連絡橋（出発ロビー前の道路の上を越える）
+  const by = Math.max(py + 0.6, L.viaduct.h + 2.8), bc0 = term.r.c1, bc1 = pc0 - 2;
+  mb.box(-4.5, by, bc0, 4.5, by + 3.4, bc1, COL.glass, PAT.terminal, COL.steel);
+  mb.matOverride = MAT.siding;
+  mb.box(-5.0, by + 3.4, bc0 - 0.5, 5.0, by + 3.9, bc1 + 0.5, COL.wood, PAT.lit);
+  mb.matOverride = null;
+  for (const c of [L.roadC[0] + 1, L.roadC[1] - 1]) mb.box(-0.5, 0, c - 0.5, 0.5, by, c + 0.5, COL.steel);
   // 駅名の看板（光る帯）
-  mb.box(-12, py + h + 1.2, r.c0 - 1.05, 12, py + h + 2.4, r.c0 - 0.95, C(0x2a6fb5), PAT.glow);
+  mb.box(-12, py + 5.0, r.c0 - 2.06, 12, py + 6.0, r.c0 - 1.96, C(0x2a6fb5), PAT.glow);
 }
 
 // 格納庫：かまぼこ形の屋根、エプロン側の大きな扉は開いていて、中に整備中の機体

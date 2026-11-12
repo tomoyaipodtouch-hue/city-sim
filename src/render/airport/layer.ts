@@ -16,7 +16,7 @@ import { AC, AC_TYPES, ALL_LIVERIES, AcType, aircraftGeometry, aircraftMaterial 
 import { GSE_TYPES, GseType, gseGeometry } from './gse';
 import { AirOps } from './ops';
 
-const CHUNK_M = 256;
+const CHUNK_M = 400; // 区画の大きさ（m）：画面の外は描かない。小さすぎると描画の回数が増える
 type LiveryAttrs = { tail: THREE.InstancedBufferAttribute; stripe: THREE.InstancedBufferAttribute; win: THREE.InstancedBufferAttribute };
 const AC_CAP = 16, GSE_CAP = 40, PAX_CAP = 80;
 const DYN_PER_AC = 5;
@@ -202,7 +202,7 @@ export class AirportLayer {
       const m = new THREE.InstancedMesh(gseGeometry(t), gm, t === 'pax' ? PAX_CAP : GSE_CAP);
       m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       m.count = 0;
-      m.castShadow = t !== 'pax';
+      m.castShadow = t === 'bus' || t === 'fuel'; // 小さな車両と人は影を落とさない（影の描画の回数を減らす）
       m.receiveShadow = true;
       m.boundingSphere = new THREE.Sphere();
       if (t === 'pax') { for (let k = 0; k < PAX_CAP; k++) m.setColorAt(k, this.paxCols[k % this.paxCols.length]); }
@@ -221,6 +221,7 @@ export class AirportLayer {
     this.tunnel = mk(new THREE.BoxGeometry(2.8, 2.9, 1).translate(0, 0, 0.5));
     this.cab = mk(new THREE.BoxGeometry(3.6, 3.2, 3.4).translate(0, 0, 1.7), new THREE.MeshStandardMaterial({ color: 0x9aa3ab, roughness: 0.5, metalness: 0.3 }));
     this.leg = mk(new THREE.BoxGeometry(2.2, 1, 0.9).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ color: 0x5c6167, roughness: 0.6, metalness: 0.4 }));
+    this.cab.castShadow = this.leg.castShadow = false;
     this.group.add(this.pools, this.pts);
   }
 
