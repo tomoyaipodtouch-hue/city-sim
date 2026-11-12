@@ -9,6 +9,7 @@ import { CELL, DX, DY, QUAY_LAND, WATER_LEVEL } from './constants';
 import type { Grid } from './grid';
 import { isHighway, isUrbanElevated, isUrbanGround, RoadType } from './defs';
 import type { LineKind } from './defs';
+import type { FcSpec } from './forecourt';
 
 export type AirportSize = 1 | 2 | 3;
 
@@ -237,6 +238,7 @@ export interface AirportLayout {
   masts: [number, number][]; // エプロンの照明塔
   glide: number; // 進入角（度）
   hangarType: AcKind; // 格納庫の中の機体
+  fc: FcSpec; // ターミナル前の道路（フォアコート。forecourt.ts）
 }
 
 const layouts = new Map<AirportSize, AirportLayout>();
@@ -305,15 +307,14 @@ function layoutS(spec: AirportSpec): AirportLayout {
     depot: [118, 14],
     buildings: [
       { kind: 'pier', r: { a0: -88, c0: 38, a1: 88, c1: 46 }, h: 6 },
-      { kind: 'terminal', r: { a0: -88, c0: 46, a1: 88, c1: 62 }, h: 13 },
-      { kind: 'tower', r: { a0: 100, c0: 36, a1: 136, c1: 62 }, h: 8 },
-      { kind: 'hotel', r: { a0: 150, c0: 30, a1: 196, c1: 62 }, h: 31 },
-      { kind: 'office', r: { a0: 206, c0: 36, a1: 236, c1: 62 }, h: 22 },
-      { kind: 'carpark', r: { a0: -192, c0: 32, a1: -122, c1: 62 }, h: 14 },
-      { kind: 'carpark', r: { a0: 304, c0: 70, a1: 370, c1: 84 }, h: 11, loop: true },
+      { kind: 'terminal', r: { a0: -88, c0: 46, a1: 88, c1: 60 }, h: 13 },
+      { kind: 'tower', r: { a0: 100, c0: 30, a1: 136, c1: 46 }, h: 8 },
+      { kind: 'hotel', r: { a0: 150, c0: 28, a1: 196, c1: 46 }, h: 31 },
+      { kind: 'office', r: { a0: 206, c0: 30, a1: 236, c1: 46 }, h: 22 },
+      { kind: 'carpark', r: { a0: 312, c0: 62, a1: 378, c1: 84 }, h: 11, loop: true },
       { kind: 'station', r: { a0: -66, c0: 86, a1: 66, c1: 95 }, h: 7 },
       { kind: 'hangar', r: { a0: -365, c0: 10, a1: -290, c1: 58 }, h: 19 },
-      { kind: 'fuel', r: { a0: -272, c0: 38, a1: -214, c1: 62 }, h: 12 },
+      { kind: 'fuel', r: { a0: 344, c0: 26, a1: 404, c1: 56 }, h: 12 },
       { kind: 'fire', r: { a0: -256, c0: 4, a1: -204, c1: 30 }, h: 8 },
       { kind: 'cargo', r: { a0: 240, c0: 26, a1: 334, c1: 62 }, h: 12 },
     ],
@@ -323,10 +324,11 @@ function layoutS(spec: AirportSpec): AirportLayout {
     stationPort: { a0: -80, c0: 72, a1: 80, c1: C / 2 + 1 },
     gate: 290, svcGate: { a: 420, c: C / 2, na: 0, nc: 1 }, svcRoads: [[[420, C / 2], [420, 66], [300, 66]]],
     land: { oa: 0, oc: 0, rot: 0, A, edge: C / 2 }, parallel: false,
-    tower: [118, 49, 46],
+    tower: [118, 38, 46],
     masts: [[-110, 36.5], [-27.5, 36.5], [27.5, 36.5], [110, 36.5], [239, 22], [-286, 8]],
     glide: 5.5,
     hangarType: 'a220',
+    fc: { cF: 72, cR: 88, cD: 56, aDiv: [236, 140], variant: 'merge', cM: 56, aMerge: [-96, -210], aU: -184, cTop: 40 },
   };
 }
 
@@ -383,11 +385,11 @@ function layoutM(spec: AirportSpec): AirportLayout {
     depot: [-268, 30],
     buildings: [
       { kind: 'pier', r: pier, h: 9 },
-      { kind: 'terminal', r: { a0: -150, c0: 80, a1: 150, c1: 100 }, h: 16 },
+      { kind: 'terminal', r: { a0: -150, c0: 80, a1: 150, c1: 92 }, h: 16 },
       { kind: 'tower', r: { a0: -470, c0: 70, a1: -400, c1: 100 }, h: 10 },
-      { kind: 'hotel', r: { a0: 380, c0: 66, a1: 440, c1: 100 }, h: 40 },
-      { kind: 'office', r: { a0: 450, c0: 74, a1: 500, c1: 100 }, h: 28 },
-      { kind: 'carpark', r: { a0: -340, c0: 84, a1: -200, c1: 100 }, h: 17 },
+      { kind: 'hotel', r: { a0: 380, c0: 66, a1: 440, c1: 96 }, h: 40 },
+      { kind: 'office', r: { a0: 450, c0: 74, a1: 500, c1: 96 }, h: 28 },
+      { kind: 'carpark', r: { a0: -396, c0: 100, a1: -340, c1: 138 }, h: 17 },
       { kind: 'carpark', r: { a0: 415, c0: 104, a1: 485, c1: 128 }, h: 14, loop: true },
       { kind: 'station', r: { a0: -95, c0: 131, a1: 95, c1: 143 }, h: 7 },
       { kind: 'hangar', r: { a0: -640, c0: 4, a1: -500, c1: 84 }, h: 30 },
@@ -405,6 +407,7 @@ function layoutM(spec: AirportSpec): AirportLayout {
     masts: [[-250, 64], [-110, 64], [30, 64], [175, 64], [300, 64], [372, 40], [-495, 2]],
     glide: 3.2,
     hangarType: 'b787',
+    fc: { cF: 104, cR: 120, cD: 88, aDiv: [336, 200], variant: 'merge', cM: 88, aMerge: [-160, -272], aU: -248, cTop: 72 },
   };
 }
 
@@ -468,13 +471,13 @@ function layoutL(spec: AirportSpec): AirportLayout {
     buildings: [
       { kind: 'concourse', r: { a0: -684, c0: -180, a1: -670, c1: 180 }, h: 10 },
       { kind: 'concourse', r: { a0: -330, c0: -180, a1: -290, c1: 180 }, h: 15 },
-      { kind: 'terminal', r: { a0: -180, c0: 14, a1: 180, c1: 44 }, h: 18, sub: true },
+      { kind: 'terminal', r: { a0: -180, c0: 14, a1: 180, c1: 46 }, h: 18, sub: true },
       { kind: 'station', r: { a0: -110, c0: 118, a1: 110, c1: 129 }, h: 8, sub: true },
-      { kind: 'carpark', r: { a0: -205, c0: 78, a1: -150, c1: 112 }, h: 20, sub: true, loop: true },
-      { kind: 'carpark', r: { a0: 150, c0: 78, a1: 200, c1: 112 }, h: 20, sub: true, loop: true },
-      { kind: 'hotel', r: { a0: -142, c0: 78, a1: -96, c1: 110 }, h: 48, sub: true },
-      { kind: 'office', r: { a0: 96, c0: 78, a1: 142, c1: 110 }, h: 36, sub: true },
-      { kind: 'plaza', r: { a0: -88, c0: 78, a1: 88, c1: 114 }, h: 0, sub: true },
+      { kind: 'carpark', r: { a0: -205, c0: 100, a1: -150, c1: 128 }, h: 20, sub: true, loop: true },
+      { kind: 'carpark', r: { a0: 150, c0: 100, a1: 200, c1: 128 }, h: 20, sub: true, loop: true },
+      { kind: 'hotel', r: { a0: -146, c0: 100, a1: -114, c1: 128 }, h: 48, sub: true },
+      { kind: 'office', r: { a0: 114, c0: 100, a1: 146, c1: 128 }, h: 36, sub: true },
+      { kind: 'plaza', r: { a0: -106, c0: 100, a1: 106, c1: 116 }, h: 0, sub: true },
       { kind: 'tower', r: { a0: 30, c0: -22, a1: 90, c1: 22 }, h: 12 },
       { kind: 'hangar', r: { a0: 405, c0: -185, a1: 540, c1: -95 }, h: 34, ac: 'b777' },
       { kind: 'hangar', r: { a0: 555, c0: -185, a1: 690, c1: -95 }, h: 34, ac: 'a350' },
@@ -490,6 +493,7 @@ function layoutL(spec: AirportSpec): AirportLayout {
     gate: 225, svcGate: { a: A / 2, c: 0, na: 1, nc: 0 }, svcRoads: [[[A / 2, 0], [560, 0], [560, 34], [160, 34]], [[560, 0], [560, -90], [405, -90]]],
     land: { oa: -670, oc: 0, rot: Math.PI / 2, A: 480, edge: 130 }, parallel: true,
     tower: [60, 0, 95],
+    fc: { cF: 58, cR: 90, cD: 74, aDiv: [200, 80], variant: 'stack', cM: 74, aMerge: [-80, 40], aU: -200, cTop: 42 },
     masts: [[-590, -190], [-590, 0], [-590, 190], [-410, -190], [-410, 190], [-230, -190], [-230, 190], [-60, -190], [-60, 190], [165, 195], [395, 195]],
     glide: 3.0,
     hangarType: 'b777',
@@ -688,9 +692,27 @@ export interface GateLink { node: number; kind: 'hw' | 'road' }
 export function gateLink(g: Grid, gc: GateCell | null, main: boolean): GateLink | null {
   if (!gc) return null;
   const i = gc.cell, N = g.n * g.n;
-  if (main && isUrbanHw(g.up[i])) return { node: N + i, kind: 'hw' };
-  if (main && isUrbanHw(g.road[i])) return { node: i, kind: 'hw' };
-  if (isLocalRoadType(g.road[i])) return { node: i, kind: 'road' };
+  // 門のマスから、空港の道路（フォアコート）でないマスへのつながりがあるか（門のマスに置いた目印の道路だけなら、つながっていない）
+  const n = g.n, x = i % n, y = (i / n) | 0;
+  const out = (m: number) => {
+    for (let d = 0; d < 8; d++) {
+      if (!(m & (1 << d))) continue;
+      const xx = x + DX[d], yy = y + DY[d];
+      if (xx >= 0 && yy >= 0 && xx < n && yy < n && !g.aport[yy * n + xx]) return true;
+    }
+    return false;
+  };
+  if (main && isUrbanHw(g.up[i]) && out(g.conn1[i])) return { node: N + i, kind: 'hw' };
+  if (main && isUrbanHw(g.road[i]) && out(g.conn[i])) {
+    // 一般道が正門のマスの都市高速（地上）に続いている：一般道でつながっている
+    let local = false;
+    for (let d = 0; d < 8; d++) {
+      const xx = x + DX[d], yy = y + DY[d];
+      if (g.conn[i] & (1 << d) && xx >= 0 && yy >= 0 && xx < n && yy < n && !g.aport[yy * n + xx] && isLocalRoadType(g.road[yy * n + xx])) local = true;
+    }
+    return { node: i, kind: local ? 'road' : 'hw' };
+  }
+  if (isLocalRoadType(g.road[i]) && out(g.conn[i])) return { node: i, kind: 'road' };
   return null;
 }
 

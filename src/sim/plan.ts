@@ -323,10 +323,13 @@ function planLane(
   const joinsLocal = (k: number) =>
     def.highway && (k === 0 || k === last) && localRoad(g.road[cells[k]]) && !g.up[cells[k]] && g.deck[cells[k]] <= 0 && !runsAlong(k);
   // 階層を決める
+  // 空港の正門のマス（敷地のすぐ外）：引いてきた道路をそのまま正門のマスで終わらせる（正門の地上の目印の道路には降りない・乗らない）
+  const gateEnd = (k: number) => (k === 0 || k === last) && g.gateCells.has(cells[k]);
   const levels = cells.map((i, k) => {
     const end = k === 0 || k === last;
     if (joinsLocal(k)) return 0;
     if (def.elevated) {
+      if (gateEnd(k)) return 1;
       // 高架の端が地上の高速道路に重なる場合は、地上に降りてつながる
       if (end && isGroundHighway(g.road[i]) && !g.up[i]) return 0;
       return 1;
@@ -336,6 +339,7 @@ function planLane(
       return 0;
     }
     // 一般の道路
+    if (gateEnd(k)) return 0;
     if (isGroundHighway(g.road[i])) {
       // 高速道路の行き止まりの端なら、そこにつなぐ。それ以外は立体交差でまたぐ
       if (end && degreeOf(g.conn[i]) <= 1) return 0;
@@ -351,6 +355,7 @@ function planLane(
     const i = cells[k];
     const L = levels[k];
     if (g.bldg[i]) { bad.add(i); why('建物があります。先に取り壊してください'); }
+    if (g.aport[i]) { bad.add(i); why('空港の道路には引けません（正門のマスで終わらせてください）'); }
     if (L === 0 && g.jct[i] & 2 && g.upH[i] - g.cellH(i % n, (i / n) | 0) < 5) { bad.add(i); why('ジャンクションのランプが低く、下を通せません'); }
     const cur = L ? g.up[i] : g.road[i];
     const len = k > 0 && isDiag(dirs[k - 1]) ? 1.41 : 1;
@@ -386,7 +391,7 @@ function planLane(
       const ax = axisOf(g.conn[i]);
       const myAxis = axisOfDir(dirAt(k));
       if ((myAxis === 0 && ax.ew > 0) || (myAxis === 1 && ax.ns > 0)) { bad.add(i); why('高速道路には直接つなげません。ランプを使ってください'); }
-    } else if (isHighway(g.road[i]) && !((k === 0 || k === last) && degreeOf(g.conn[i]) <= 1)) {
+    } else if (isHighway(g.road[i]) && !gateEnd(k) && !((k === 0 || k === last) && degreeOf(g.conn[i]) <= 1)) {
       bad.add(i);
       why('高速道路には、行き止まりの端か、ランプでつないでください');
     }
@@ -1210,7 +1215,8 @@ export function planBulldoze(
       const i = g.idx(x, y);
       cells.push(i);
       const gr = ground && g.road[i] !== 0, ur = up && g.up[i] !== 0;
-      if (gr || ur) { roads.push(i); cost += ur && isHighway(g.up[i]) ? 20 : 5; }
+      // 空港のターミナル前の道路は、空港といっしょにしか取り壊せない
+      if ((gr || ur) && !g.aport[i]) { roads.push(i); cost += ur && isHighway(g.up[i]) ? 20 : 5; }
       if (ground && g.pline[i]) { lines.push(i); cost += 1; }
       if (kinds.some((k) => g[k][i])) { transit.push(i); cost += 10; }
       const b = g.bldg[i];
@@ -1469,6 +1475,7 @@ export function planTransitLine(g: Grid, path: LinePath, kind: LineKind): Transi
     if (!mask[i]) cost += def.cost * len;
     if (kind === 'sub') continue;
     if (g.bldg[i]) { bad.add(i); why('建物があります。先に取り壊してください'); }
+    if (g.aport[i]) { bad.add(i); why('空港の道路には引けません（正門のマスで終わらせてください）'); }
     if (kind === 'rail') {
       if (g.isWater(x, y)) { bad.add(i); why('地上の線路は水の上に引けません（高架鉄道を使ってください）'); }
       if (g.up[i] && !isHighway(g.up[i])) { bad.add(i); why('立体交差の道路があります'); }

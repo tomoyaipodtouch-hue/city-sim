@@ -9,7 +9,7 @@
 import { CELL, DX, DY, WATER_LEVEL, opp } from './constants';
 
 // 同期・保存の対象になる配列の名前
-export const GRID_U8 = ['road', 'conn', 'flow', 'pline', 'zone', 'zden', 'tree', 'up', 'conn1', 'flow1', 'ictl', 'isplit', 'iflags', 'rail', 'erail', 'mono', 'sub', 'bstop', 'bstyle', 'estn', 'pstyle', 'quay', 'jct', 'oramp'] as const;
+export const GRID_U8 = ['road', 'conn', 'flow', 'pline', 'zone', 'zden', 'tree', 'up', 'conn1', 'flow1', 'ictl', 'isplit', 'iflags', 'rail', 'erail', 'mono', 'sub', 'bstop', 'bstyle', 'estn', 'pstyle', 'quay', 'jct', 'oramp', 'aport'] as const;
 export const GRID_F32 = ['deck', 'upH', 'lift'] as const;
 export const GRID_I32 = ['bldg'] as const;
 export type GridU8Key = (typeof GRID_U8)[number];
@@ -74,6 +74,8 @@ export class Grid {
   quay: Uint8Array; // 岸壁（水に面した陸のマス）：0 = なし、1 = コンクリートの岸壁、2 = 親水護岸・遊歩道
   // 重ねランプ（高架の都市高速と、その真下の一般道を結ぶ短いランプ）。ランプの始まりのマス（本線のマス）に印をつける（ORAMP_*）
   oramp: Uint8Array;
+  // 空港のターミナル前の道路（フォアコート）のマス：1 = 空港の道路（空港といっしょにしか取り壊せない。道路を引けない）
+  aport: Uint8Array;
 
   constructor(n: number) {
     this.n = n;
@@ -104,6 +106,7 @@ export class Grid {
     this.quay = new Uint8Array(c);
     this.jct = new Uint8Array(c);
     this.oramp = new Uint8Array(c);
+    this.aport = new Uint8Array(c);
     this.zden = new Uint8Array(c);
     this.bldg = new Int32Array(c);
     this.tree = new Uint8Array(c);

@@ -18,7 +18,8 @@ import { erailStationCells, HWR_MSG_STATION, isElevHighway, levelHighwaysOverRai
 import { ADVISORS, Advice, computeRating, Loan, LOAN_AMOUNTS, loanRate, makeAdvice, MAX_LOANS, newLoan, ordinanceCost, ordinanceEffects, OrdinanceEffects, OrdinanceId, ORDINANCES, payLoan, rewardUnlocked, REWARD_REQ } from './governance';
 import { defaultServiceState, facilityEffect, makeServiceMaps, ServiceMaps, ServiceState, updateServices } from './services';
 import { Ages, agesOf, FuneralState, taxFactor, updatePopulation, WORK_RATE, workersOf } from './population';
-import { AIRPORT_SPECS, AirStats, airportCells, airportLayout, airportPorts, airTimeWeight, AIR_BELLY_TONS, AIR_CARGO_TONS_PER_FLIGHT, AIR_FEE_FLIGHT, AIR_FEE_FREIGHT, AIR_FEE_PAX, AIR_FREIGHT_TONS, AIR_TRIP_OFFICE, AIR_TRIP_RES, airportGateCells, applyAirportGround, frameOf, gateLink, isUrbanHw, landToLot, loopNodes, noiseAt, toWorld, type AirPorts, type GateLink, planAirport, stationLines } from './airport';
+import { AIRPORT_SPECS, AirStats, airportCells, airportLayout, airportPorts, airTimeWeight, AIR_BELLY_TONS, AIR_CARGO_TONS_PER_FLIGHT, AIR_FEE_FLIGHT, AIR_FEE_FREIGHT, AIR_FEE_PAX, AIR_FREIGHT_TONS, AIR_TRIP_OFFICE, AIR_TRIP_RES, airportGateCells, applyAirportGround, frameOf, gateLink, isUrbanHw, noiseAt, type AirPorts, type GateLink, planAirport, stationLines, cellLocal, lotToLand } from './airport';
+import { forecourtPlan, type FcPlan } from './forecourt';
 import { isJctRamp, assignTrips, buildJunctions, buildRoadGraph, buildTransitModel, congestionFactor, Destination, junctionGroup, LAYER, normalizeAvenueJunctions, Origin, parkingMinutes, TRUCK_PCE } from './traffic';
 
 export enum BState {
@@ -56,7 +57,10 @@ export interface Building {
   ages?: Ages; // 住宅：年齢層の割合 [子ども, 働く世代, 高齢者]
   aOcc?: number; // 住宅：前の月の住人数（増えた分を引っ越してきた世帯として数える）
   air?: AirStats; // 新しい空港：運航の様子（便数・利用者・貨物・駅と高速道路）
-  airGate?: number; // 新しい空港：門の決まりの版（2 = 正門・通用門）。ない＝以前の空港（読み込むときにつなぎ直す）
+  airGate?: number; // 新しい空港：門の決まりの版（2 = 正門・通用門、3 = ターミナル前の道路を本物の道路のマスで作る）。ない＝以前の空港（読み込むときにつなぎ直す）
+  airLevel?: 0 | 1; // ターミナル前の道路：正門の道路の階（0 = 地上、1 = 高架）
+  airH?: number; // ターミナル前の道路：高架の高さ（敷地の地面から、m）
+  airFc?: boolean; // ターミナル前の道路のマスを作った（false = 作れなかった。以前の仕組みで動かす）
   airLegacy?: boolean; // 以前の空港で、正門へつなぎ直せなかった
 }
 
@@ -422,33 +426,48 @@ export class World {
   private migrateAirports() {
     const g = this.g, n = g.n;
     for (const b of this.buildings.values()) {
-      if (!b.civic || !CIVIC[b.type as CivicId]?.airfield || b.airGate === 2) continue;
-      b.airGate = 2;
-      const A = this.airportAccess(b)!;
-      if (A.main || !A.ports.gate) { if (!A.main) b.airLegacy = true; continue; }
-      const G = A.ports.gate, lot = this.lotSet(b)!;
-      let best = null as { i: number; t: number; d: number } | null;
-      for (const urban of [true, false]) {
-        for (let dy = -6; dy <= 6; dy++) for (let dx = -6; dx <= 6; dx++) {
-          const x = G.x + dx, y = G.y + dy;
-          if (!g.inb(x, y) || (!dx && !dy)) continue;
-          const i = g.idx(x, y);
-          if (lot.has(i)) continue;
-          const t = urban ? (isUrbanHw(g.up[i]) ? g.up[i] : isUrbanHw(g.road[i]) ? g.road[i] : 0) : this.isLocalRoad(g.road[i]) ? RoadType.Road : 0;
-          const d = Math.max(Math.abs(dx), Math.abs(dy));
-          if (t && (!best || d < best.d)) best = { i, t, d };
-        }
-        if (best) break;
-      }
-      let ok = false;
-      if (best) {
-        const funds = this.funds, sb = this.sandbox;
-        this.sandbox = true;
-        ok = this.exec({ t: 'road', x0: best.i % n, y0: (best.i / n) | 0, x1: G.x, y1: G.y, road: best.t as RoadType }).ok;
-        this.sandbox = sb; this.funds = funds;
-      }
-      b.airLegacy = !ok || !this.airportAccess(b)!.main;
+      if (!b.civic || !CIVIC[b.type as CivicId]?.airfield || b.airGate === 3) continue;
+      if (b.airGate !== 2) this.reconnectGate(b);
+      // 版 3：ターミナル前の道路を本物の道路のマスで作る（敷地のマスの建物の印を外して、道路を置く）。
+      // 置けないとき（思いがけないものがある）は、以前の仕組み（正門 → ターミナル）のまま動かす
+      b.airGate = 3;
+      const P = this.fcPlanOf(b, 0);
+      if (!P || !P.ok) { b.airFc = false; continue; }
+      if (P.cells.some((i) => g.road[i] || g.up[i] || g.rail[i] || g.erail[i] || g.mono[i] || (g.bldg[i] && g.bldg[i] !== b.id))) { b.airFc = false; continue; }
+      for (const i of P.cells) { if (g.bldg[i] === b.id) g.bldg[i] = 0; g.tree[i] = 0; g.zone[i] = 0; g.zden[i] = 0; }
+      this.layForecourt(b);
+      void n;
     }
+  }
+  // 以前の空港（どの道路も敷地に接すればつながった）：正門のそばの都市高速（なければ一般道）から、正門のマスまで道路を引く（無料）。
+  // 引けなければ、つながっていないままにして、情報の欄で知らせる
+  private reconnectGate(b: Building) {
+    const g = this.g, n = g.n;
+    b.airGate = 2;
+    const A = this.airportAccess(b)!;
+    if (A.main || !A.ports.gate) { if (!A.main) b.airLegacy = true; return; }
+    const G = A.ports.gate, lot = this.lotSet(b)!;
+    let best = null as { i: number; t: number; d: number } | null;
+    for (const urban of [true, false]) {
+      for (let dy = -6; dy <= 6; dy++) for (let dx = -6; dx <= 6; dx++) {
+        const x = G.x + dx, y = G.y + dy;
+        if (!g.inb(x, y) || (!dx && !dy)) continue;
+        const i = g.idx(x, y);
+        if (lot.has(i)) continue;
+        const t = urban ? (isUrbanHw(g.up[i]) ? g.up[i] : isUrbanHw(g.road[i]) ? g.road[i] : 0) : this.isLocalRoad(g.road[i]) ? RoadType.Road : 0;
+        const d = Math.max(Math.abs(dx), Math.abs(dy));
+        if (t && (!best || d < best.d)) best = { i, t, d };
+      }
+      if (best) break;
+    }
+    let ok = false;
+    if (best) {
+      const funds = this.funds, sb = this.sandbox;
+      this.sandbox = true;
+      ok = this.exec({ t: 'road', x0: best.i % n, y0: (best.i / n) | 0, x1: G.x, y1: G.y, road: best.t as RoadType }).ok;
+      this.sandbox = sb; this.funds = funds;
+    }
+    b.airLegacy = !ok || !this.airportAccess(b)!.main;
   }
 
   // ---------------- お知らせ ----------------
@@ -557,7 +576,7 @@ export class World {
         const layer: BulldozeLayer = c.layer && BULLDOZE_LAYERS.includes(c.layer) ? c.layer : 'ground';
         const plan = planBulldoze(g, r, (id) => this.buildings.get(id), layer);
         if (!plan.roads.length && !plan.lines.length && !plan.buildings.length && !plan.trees.length && !plan.transit.length)
-          return { ok: false, msg: layer === 'all' ? '取り壊すものがありません' : `${BULLDOZE_LAYER_NAMES[layer]}には取り壊すものがありません` };
+          return { ok: false, msg: plan.cells.some((i) => g.aport[i]) ? '空港の道路は、空港といっしょに取り壊します' : layer === 'all' ? '取り壊すものがありません' : `${BULLDOZE_LAYER_NAMES[layer]}には取り壊すものがありません` };
         if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
         for (const id of plan.buildings) this.removeBuilding(id);
         const touched: number[] = [];
@@ -794,6 +813,7 @@ export class World {
   }
 
   private afterGridChange() {
+    this.syncAirports();
     regradeApproaches(this.g);
     pruneORamps(this.g); // 本線や下の道路がなくなった重ねランプは取り除く
     levelHighwaysOverRail(this.g); // 高架鉄道をまたぐ高架の高速道路を、線路の上まで持ち上げる
@@ -843,10 +863,12 @@ export class World {
   private placeBuilding(b: Building) {
     const g = this.g;
     const lot = this.lotSet(b);
+    const fc = lot && b.airGate === 3 ? new Set(this.fcPlanOf(b, 0)?.cells ?? []) : null;
     for (let y = b.y; y < b.y + b.h; y++)
       for (let x = b.x; x < b.x + b.w; x++) {
         const i = g.idx(x, y);
         if (lot && !lot.has(i)) continue;
+        if (fc?.has(i)) continue;
         g.bldg[i] = b.id;
         g.tree[i] = 0;
         if (b.civic) {
@@ -863,6 +885,7 @@ export class World {
     const b = this.buildings.get(id);
     if (!b) return;
     const g = this.g;
+    if (b.airFc) { this.clearForecourt(b); this.dropGateStub(b); b.airFc = false; }
     for (let y = b.y; y < b.y + b.h; y++)
       for (let x = b.x; x < b.x + b.w; x++) {
         const i = g.idx(x, y);
@@ -949,8 +972,9 @@ export class World {
       face: plan.rot, seed: this.rng.int(1e9), den: 0, cap: 0, occ: 0,
       state: BState.Normal, stateDays: 0, powered: false, watered: false, floors: 0, commute: 0, employed: 1, badMonths: 0,
     };
-    b.airGate = 2;
+    b.airGate = 3;
     this.placeBuilding(b);
+    this.layForecourt(b);
     this.afterGridChange();
     const msg = plan.fill.length ? `埋め立て ${plan.fill.length} マス・岸壁 ${plan.quay.length} マス` : undefined;
     return { ok: true, cost: plan.cost, msg };
@@ -975,40 +999,177 @@ export class World {
     return out;
   }
 
-  // 空港の門と、陸側の U 字のループ（シミュレーションの車の経路）。
-  // 正門のノード → 出発（上りのランプ → 高架の車寄せ → 高架の U ターン → 下りのランプ）／到着（地上の車寄せ → 地上の U ターン）
-  // → 戻りの道 → 正門のノード。ターミナル（term）は両方の車寄せから。ノードは敷地のマス（地上 = マス、高架 = N + マス）で、道路はない
-  airportAccess(b: Building): { ports: AirPorts; main: GateLink | null; svc: GateLink | null; nodes: Record<string, number>; links: [number, number, number][]; term: number; cargo: number } | null {
+  // 空港の門と、ターミナル（シミュレーションの車の経路）。
+  // ターミナル前の道路は本物の道路のマス（forecourt.ts）。車寄せのマス（ターミナルの前の 1 列目の両方の階）からターミナル（term）へ短いつながり。
+  // term は道路のない敷地のマス（ターミナルの中）。以前の仕組みのまま（道路のマスを作れなかった空港）は、正門のノードから term へ直接つなぐ
+  airportAccess(b: Building): { ports: AirPorts; main: GateLink | null; svc: GateLink | null; nodes: Record<string, number>; links: [number, number, number][]; term: number; cargo: number; curb: number[] } | null {
     const def = CIVIC[b.type as CivicId];
     if (!def?.airfield) return null;
     const g = this.g, n = g.n, N = n * n, size = def.airfield, spec = AIRPORT_SPECS[size], L = airportLayout(size), f = frameOf(b, spec);
     const lot = this.lotSet(b)!;
     const ports = airportPorts(n, f, L, this.lotCells(b)!, (i) => lot.has(i));
     const main = gateLink(g, ports.gate, true), svc = gateLink(g, ports.svc, false);
-    const used = new Set<number>(), nodes: Record<string, number> = {};
-    for (const [k, [a, c, lv]] of Object.entries(loopNodes(L))) {
-      let aa = a, node = -1;
-      for (let t = 0; t < 12; t++, aa += 16) {
-        const [la, lc] = landToLot(L, aa, c), [X, Z] = toWorld(f, la, lc);
-        const cell = Math.min(n - 1, Math.max(0, Math.floor(Z / CELL))) * n + Math.min(n - 1, Math.max(0, Math.floor(X / CELL)));
-        node = lv * N + cell;
-        if (!used.has(node) && lot.has(cell)) break;
-      }
-      used.add(node);
-      nodes[k] = node;
+    const tr = L.buildings.find((q) => q.kind === 'terminal')!;
+    const P = b.airFc ? this.fcPlanOf(b, b.airLevel ?? 0) : null;
+    const fcSet = P ? new Set(P.cells) : null;
+    // ターミナルの中の、道路のない敷地のマス（ターミナルの真ん中にいちばん近い）
+    let term = -1, bd = Infinity;
+    const tc = [(tr.r.a0 + tr.r.a1) / 2 - 24, (tr.r.c0 + tr.r.c1) / 2];
+    for (const i of lot) {
+      if (fcSet?.has(i) || g.road[i] || g.up[i]) continue;
+      const [la, lc] = cellLocal(f, n, i), [a, c] = tr.sub ? lotToLand(L, la, lc) : [la, lc];
+      const d = Math.hypot(a - tc[0], c - tc[1]);
+      if (d < bd) { bd = d; term = i; }
     }
+    const nodes: Record<string, number> = { term };
     const links: [number, number, number][] = [];
-    const L2 = (u: number, v: number, m: number) => links.push([u, v, m]);
-    if (main) {
-      const G = main.node;
-      L2(G, nodes.depRamp, 0.5); L2(nodes.depRamp, nodes.depCurb, 0.4); L2(nodes.depCurb, nodes.depU, 0.4); L2(nodes.depU, nodes.ret, 0.7);
-      L2(G, nodes.arrCurb, 0.7); L2(nodes.arrCurb, nodes.arrU, 0.4); L2(nodes.arrU, nodes.ret, 0.4);
-      L2(nodes.ret, G, 0.6);
-      L2(nodes.depCurb, nodes.term, 0.6); L2(nodes.arrCurb, nodes.term, 0.6); L2(nodes.term, nodes.depCurb, 0.3); L2(nodes.term, nodes.arrCurb, 0.3);
+    const curb: number[] = [];
+    if (P && P.ok) {
+      // 車寄せ：1 列目（両方の階）のうち、ターミナルの前のマス
+      for (const p of P.paths) {
+        if (p.name !== 'Fm' && p.name !== 'Fo') continue;
+        p.cells.forEach((i, k) => {
+          const [la, lc] = cellLocal(f, n, i), [a] = lotToLand(L, la, lc);
+          if (a < tr.r.a0 - 4 || a > tr.r.a1 + 4) return;
+          curb.push(p.lv[k] ? N + i : i);
+        });
+      }
+      for (const v of curb) links.push([v, term, 0.5]);
+      if (curb.length) links.push([term, curb[0], 0.3]);
+    } else if (main) {
+      // 道路のマスを作れなかった空港：正門から直接
+      links.push([main.node, term, 1.2], [term, main.node, 1.2]);
     }
     const cargo = ports.svc ? ports.svc.inner : -1;
-    if (svc && cargo >= 0) { L2(svc.node, cargo, 1.2); L2(cargo, svc.node, 1.2); }
-    return { ports, main, svc, nodes, links, term: nodes.term, cargo };
+    if (svc && cargo >= 0) { links.push([svc.node, cargo, 1.2], [cargo, svc.node, 1.2]); }
+    return { ports, main, svc, nodes, links, term, cargo, curb };
+  }
+
+  // ---- ターミナル前の道路（フォアコート）：本物の道路のマス ----
+  private fcCache = new Map<number, { key: string; plan: FcPlan | null }>();
+  // 計画（マスの並びは階によらず同じ。階と高さで、種類と高さが変わる）
+  fcPlanOf(b: Building, level: 0 | 1, H = b.airH ?? 9): FcPlan | null {
+    const def = CIVIC[b.type as CivicId];
+    if (!def?.airfield) return null;
+    const key = `${b.x},${b.y},${b.w},${b.h},${b.face},${this.g.n},${level},${H.toFixed(2)}`;
+    const e = this.fcCache.get(b.id);
+    if (e && e.key === key) return e.plan;
+    const n = this.g.n, spec = AIRPORT_SPECS[def.airfield], L = airportLayout(def.airfield), f = frameOf(b, spec);
+    const cells = this.lotCells(b)!, lot = this.lotSet(b)!;
+    const ports = airportPorts(n, f, L, cells, (i) => lot.has(i));
+    const plan = ports.gate ? forecourtPlan(n, f, L, cells, (i) => lot.has(i), ports.gate, level, H) : null;
+    this.fcCache.set(b.id, { key, plan });
+    return plan;
+  }
+  // 正門の道路の階と、高架の高さ
+  private gateLevel(b: Building): { level: 0 | 1; H: number; gate: number } | null {
+    const def = CIVIC[b.type as CivicId];
+    if (!def?.airfield) return null;
+    const g = this.g, n = g.n, spec = AIRPORT_SPECS[def.airfield], f = frameOf(b, spec), lot = this.lotSet(b)!;
+    const ports = airportPorts(n, f, airportLayout(def.airfield), this.lotCells(b)!, (i) => lot.has(i));
+    if (!ports.gate) return null;
+    const G = ports.gate.cell;
+    if (isUrbanHw(g.up[G])) {
+      const ground = g.cellH(ports.gate.inner % n, (ports.gate.inner / n) | 0);
+      return { level: 1, H: Math.round(Math.max(7, Math.min(12, g.upH[G] - ground)) * 4) / 4, gate: G };
+    }
+    return { level: 0, H: 9, gate: G };
+  }
+  // 敷地の中のフォアコートのマスの道路を、両方の階とも外す（となりのマスの、こちらへのつながりも）
+  private clearForecourt(b: Building) {
+    const g = this.g, n = g.n;
+    for (const i of this.lotCells(b) ?? []) {
+      if (!g.aport[i]) continue;
+      const x = i % n, y = (i / n) | 0, m = g.conn[i] | g.conn1[i];
+      for (let d = 0; d < 8; d++) {
+        if (!(m & (1 << d))) continue;
+        const nx = x + DX[d], ny = y + DY[d];
+        if (!g.inb(nx, ny)) continue;
+        const j = ny * n + nx, bit = ~(1 << ((d + 4) & 7));
+        g.conn[j] &= bit; g.flow[j] &= bit; g.conn1[j] &= bit; g.flow1[j] &= bit;
+      }
+      g.road[i] = 0; g.conn[i] = 0; g.flow[i] = 0; g.up[i] = 0; g.conn1[i] = 0; g.flow1[i] = 0; g.upH[i] = 0; g.jct[i] = 0; g.lift[i] = 0; g.deck[i] = 0;
+      g.ictl[i] = 0; g.iflags[i] = 0; g.aport[i] = 0;
+    }
+  }
+  // 正門のマスに置いた地上の道路（何もつながっていないときの、引いてくる先の目印）を外す
+  private dropGateStub(b: Building) {
+    const gl = this.gateLevel(b);
+    if (!gl) return;
+    const g = this.g, i = gl.gate;
+    if (g.road[i] === RoadType.UrbanGroundHighway && !g.conn[i]) { g.road[i] = 0; g.flow[i] = 0; }
+  }
+  // フォアコートを、正門の道路の階に合わせて作り直す
+  private layForecourt(b: Building): boolean {
+    const gl = this.gateLevel(b);
+    if (!gl) { b.airFc = false; return false; }
+    const g = this.g, n = g.n, N = n * n, G = gl.gate;
+    const P = this.fcPlanOf(b, gl.level, gl.H);
+    if (!P || !P.ok) { b.airFc = false; return false; }
+    // 敷地の中に、ほかのもの（建物・線路）があれば作らない
+    const lot = this.lotSet(b)!;
+    for (const i of P.cells) if ((g.bldg[i] && g.bldg[i] !== b.id) || g.rail[i] || g.erail[i] || g.mono[i] || !lot.has(i)) { b.airFc = false; return false; }
+    if (b.airFc) this.clearForecourt(b);
+    for (const i of P.cells) if (g.road[i] || g.up[i]) { b.airFc = false; return false; }
+    // 正門のマス：地上なら都市高速（地上）の道路にする（一般道もそのまま都市高速の道路に続く）。高架なら、地上の目印を外す
+    if (gl.level === 0) {
+      if (!g.road[G] || !isUrbanHw(g.road[G])) g.road[G] = RoadType.UrbanGroundHighway;
+      g.tree[G] = 0; g.zone[G] = 0; g.zden[G] = 0;
+    } else if (g.road[G] === RoadType.UrbanGroundHighway && !(g.conn[G] & ~this.lotBits(G, lot))) {
+      g.road[G] = 0; g.conn[G] = 0; g.flow[G] = 0;
+    }
+    const ground = (i: number) => g.cellH(i % n, (i / n) | 0);
+    const lk = (a: number, la: number, c: number, lc: number, d: number, two: boolean) => {
+      if (la) { g.conn1[a] |= 1 << d; g.flow1[a] |= 1 << d; } else { g.conn[a] |= 1 << d; g.flow[a] |= 1 << d; }
+      const od = (d + 4) & 7;
+      if (lc) { g.conn1[c] |= 1 << od; if (two) g.flow1[c] |= 1 << od; } else { g.conn[c] |= 1 << od; if (two) g.flow[c] |= 1 << od; }
+    };
+    for (const p of P.paths) {
+      const m = p.cells.length;
+      for (let k = 0; k < m; k++) {
+        const i = p.cells[k];
+        if (i === G) continue;
+        const inner = p.row || (k > 0 && k < m - 1);
+        if (!inner) continue;
+        const lv = p.lv[k];
+        if (lv) { g.up[i] = p.type; g.upH[i] = ground(i) + p.h[k]; } else g.road[i] = p.type;
+        if (p.type === RoadType.Ramp) g.jct[i] |= lv ? 2 : 1;
+        g.aport[i] = 1; g.tree[i] = 0; g.zone[i] = 0; g.zden[i] = 0;
+      }
+      const two = p.type === RoadType.UrbanHighway || p.type === RoadType.UrbanGroundHighway;
+      for (let k = 0; k + 1 < m; k++) {
+        const a = p.cells[k], c = p.cells[k + 1];
+        const dx = (c % n) - (a % n), dy = ((c / n) | 0) - ((a / n) | 0);
+        let d = -1;
+        for (let q = 0; q < 8; q++) if (DX[q] === dx && DY[q] === dy) d = q;
+        if (d >= 0) lk(a, p.lv[k], c, p.lv[k + 1], d, two);
+      }
+    }
+    b.airFc = true; b.airLevel = gl.level; b.airH = gl.H;
+    void N;
+    return true;
+  }
+  // マス i の、敷地の中のとなりへの向きのビット
+  private lotBits(i: number, lot: Set<number>) {
+    const n = this.g.n, x = i % n, y = (i / n) | 0;
+    let m = 0;
+    for (let d = 0; d < 8; d++) { const xx = x + DX[d], yy = y + DY[d]; if (this.g.inb(xx, yy) && lot.has(yy * n + xx)) m |= 1 << d; }
+    return m;
+  }
+  // 正門の道路が変わったら（つながった・階が変わった・取り壊された）、フォアコートを作り直す
+  private syncAirports() {
+    const g = this.g;
+    for (const b of this.buildings.values()) {
+      if (b.airGate !== 3 || !b.civic || !CIVIC[b.type as CivicId]?.airfield) continue;
+      const gl = this.gateLevel(b);
+      if (!gl) continue;
+      const G = gl.gate;
+      const lot = this.lotSet(b)!;
+      // 正門のマスの、敷地の中へのつながり（その階）
+      const inBits = (gl.level ? g.conn1[G] : g.conn[G]) & this.lotBits(G, lot);
+      const need = !b.airFc ? false : b.airLevel !== gl.level || Math.abs((b.airH ?? 9) - gl.H) > 0.2 || !inBits || (gl.level === 0 && !g.road[G]);
+      if (need) this.layForecourt(b);
+    }
   }
 
   // 空港の門のマス（道路の端を門へ引いたとき、となりの行き止まりへ寄せない）
