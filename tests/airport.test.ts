@@ -222,7 +222,7 @@ describe('menu and legacy airports', () => {
 // 128×128 の平らな土地：西に住宅・商業・オフィス（またはハイテク工業）、東に空港（陸側が西、滑走路は南北）。
 // 空港の敷地は x 86..97, y 35..94。陸側のすぐ外の列 x = 85：北は道路（y 36..56）、駅の前（y 60..69）は線路、南は高速道路
 // opts.rail = 住宅地の駅から空港駅まで高架鉄道。opts.link = false なら線路を駅の 1 列手前で止める。opts.hw = 南から都市高速
-interface CityOpts { rail?: boolean; link?: boolean; hw?: boolean; airport?: boolean; ih?: boolean; days?: number }
+interface CityOpts { rail?: boolean; link?: boolean; hw?: boolean | RoadType; airport?: boolean; ih?: boolean; days?: number }
 const AX = 91, AY = 64, AROT = 4;
 function airCity(o: CityOpts) {
   const w = flat();
@@ -250,7 +250,9 @@ function airCity(o: CityOpts) {
   for (let x = 6; x < 60; x += 4) w.exec({ t: 'plop', id: 'nuclear', x, y: 121 });
   for (let x = 8; x <= 56; x += 3) w.exec({ t: 'plop', id: 'pump', x, y: 116 });
   run({ t: 'pline', x0: 12, y0: 119, x1: 12, y1: 105 });
-  if (o.hw) run({ t: 'road', x0: 85, y0: 72, x1: 85, y1: 127, road: RoadType.UrbanHighway });
+  // 2 マス幅の高速道路（ふつうの高速道路）は 1 列西から引く（陸側のふちに接する）
+  const wide = o.hw === RoadType.Highway || o.hw === RoadType.GroundHighway;
+  if (o.hw) run({ t: 'road', x0: wide ? 84 : 85, y0: 72, x1: wide ? 84 : 85, y1: 127, road: o.hw === true ? RoadType.UrbanHighway : o.hw });
   if (o.airport !== false) ok(w, { t: 'plop', id: 'airport_1', x: AX, y: AY, rot: AROT });
   const kinds: GrowKind[] = o.ih ? ['R1', 'R2', 'CS1', 'CS2', 'CO2', 'IH'] : ['R1', 'R2', 'CS1', 'CS2', 'CO2', 'CO3'];
   const days = o.days ?? 540;
@@ -320,12 +322,29 @@ describe('airport in a city', () => {
 });
 
 describe('highway access and air freight', () => {
-  it('an urban highway beside the landside connects directly', { timeout: 600000 }, () => {
-    const w = airCity({ hw: true, days: 90 });
-    const a = airportOf(w).air!;
-    expect(a.highway).toBe(true);
+  it('an urban highway beside the landside connects directly (elevated, ground, one-way)', { timeout: 600000 }, () => {
+    for (const t of [RoadType.UrbanHighway, RoadType.UrbanGroundHighway, RoadType.UrbanHighway1W, RoadType.UrbanGroundHighway1W]) {
+      const w = airCity({ hw: t, days: 31 });
+      expect(airportOf(w).air!.highway, `road ${t}`).toBe(true);
+    }
     const w2 = airCity({ days: 31 });
     expect(airportOf(w2).air!.highway).toBe(false);
+  });
+
+  it('an ordinary (wide) highway beside the airport does not link', { timeout: 600000 }, () => {
+    for (const t of [RoadType.Highway, RoadType.GroundHighway]) {
+      const w = airCity({ hw: t, days: 31 });
+      const g = w.g;
+      // 高速道路は引けている
+      let any = false;
+      for (let y = 72; y < 128; y++) for (const x of [84, 85, 86]) if (g.road[g.idx(x, y)] === t || g.up[g.idx(x, y)] === t) any = true;
+      expect(any, `road ${t} built`).toBe(true);
+      // 敷地のふち（x = 86）のすぐ外（x = 85）にある
+      let beside = false;
+      for (let y = 72; y < 94; y++) if (g.road[g.idx(85, y)] === t || g.up[g.idx(85, y)] === t) beside = true;
+      expect(beside, `road ${t} beside`).toBe(true);
+      expect(airportOf(w).air!.highway, `road ${t}`).toBe(false);
+    }
   });
 
   it('a share of high-tech freight flies, so fewer trucks head for the map edge', { timeout: 900000 }, () => {

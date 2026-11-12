@@ -320,7 +320,7 @@ export class ToolController {
       return plan.ok ? { text: `インターチェンジ　${yen(plan.cost)}`, bad: false } : { text: plan.reason, bad: true };
     }
     if (t.startsWith('plop:') && CIVIC[t.split(':')[1] as CivicId]?.airfield) {
-      // 空港：敷地（緑）、埋め立て（土色）、置けないマス（赤）。空港駅の線路を引く場所（紫）と、高速道路をつなげる場所（水色）
+      // 空港：敷地（緑）、埋め立て（土色）、置けないマス（赤）。空港駅の線路を引く場所（紫）と、都市高速をつなげる場所（水色）
       const id = t.split(':')[1] as CivicId;
       const plan = planAirport(g, CIVIC[id].airfield!, x, y, this.airRot);
       const fill = new Set(plan.fill), st = new Set(plan.ports.stationNear), lot = new Set(plan.cells);
@@ -328,7 +328,7 @@ export class ToolController {
       pv.setTiles(g, [...plan.cells, ...st, ...hw], (i) => (plan.bad.has(i) ? 0xe5534b : st.has(i) ? 0xb07cff : !lot.has(i) ? 0x6fc3ff : fill.has(i) ? 0xc9a26b : plan.ok ? 0x5cc46a : 0x9fb7a0));
       pv.setPath(g, []);
       const extra = plan.fill.length ? `（埋め立て ${plan.fill.length} マス・岸壁 ${plan.quay.length} マス）` : '';
-      return plan.ok ? { text: `${CIVIC[id].name}　${yen(plan.cost)}${extra}　紫＝駅の線路、水色＝高速道路`, bad: false } : { text: plan.reason, bad: true };
+      return plan.ok ? { text: `${CIVIC[id].name}　${yen(plan.cost)}${extra}　紫＝駅の線路、水色＝都市高速をつなぐ場所`, bad: false } : { text: plan.reason, bad: true };
     }
     if (t.startsWith('plop:')) {
       const id = t.split(':')[1] as CivicId;

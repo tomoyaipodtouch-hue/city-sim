@@ -10,6 +10,7 @@ import { AcKind, AirFrame, AirportLayout, LRect, rotAngle, runwayNumber } from '
 import type { TreeSpot } from '../buildingGen';
 import { buildAircraft, LIVERIES } from './aircraft';
 import { Rng } from '../../sim/rng';
+import { makePath, samplePath } from './ops';
 
 const C = (h: number) => new THREE.Color(h);
 const COL = {
@@ -55,7 +56,7 @@ export interface AirCtx {
   base: number;
   seed: number;
   access: [number, number][]; // 一般道の入口（敷地の座標）
-  highway: { a: number; c: number; h: number } | null; // 高速道路の出入口（敷地の外のマスの中心と、路面の高さ）
+  highway: { a: number; c: number; h: number } | null; // 都市高速の出入口（敷地の外のマスの中心と、路面の高さ）
   lines: string[]; // 空港駅につながっている線
 }
 
@@ -307,30 +308,56 @@ export function buildAirportGeometry(L: AirportLayout, f: AirFrame, ctx: AirCtx)
       pool(a, c, 0.3, 14);
     }
   }
-  // 高速道路の出入口（空港専用ランプ）：陸側の道路から、敷地のふちの高速道路の高さまで上る
+  // 都市高速の出入口（空港専用ランプ）：陸側の道路から、なめらかな曲線で敷地のふちの都市高速の高さまで上る。
+  // 都市高速のランプと同じ作り（幅 6m の床版、両側の壁高欄、橋脚）
   if (ctx.highway && ctx.highway.c > rc1) {
-    const H = Math.max(0, ctx.highway.h), ah = Math.max(-A / 2 + 12, Math.min(A / 2 - 12, ctx.highway.a));
+    const H = Math.max(0, ctx.highway.h), ah = Math.max(-A / 2 + 30, Math.min(A / 2 - 30, ctx.highway.a));
     let sg = ah > 0 ? 1 : -1;
-    const len = Math.max(40, H * 9);
+    const len = Math.max(70, H * 10);
     if (Math.abs(ah + sg * len) > A / 2 - 4) sg = -sg;
-    const cA = rc1 + 2.5, cB = Cw / 2 - 0.5, ae = ah, as = ah + sg * len;
-    const lo = Math.min(as, ae), hi = Math.max(as, ae);
-    const yAt = (a: number) => (H * (a - as)) / (ae - as);
-    // 床（坂）と側面、橋脚
-    const NS = 8;
-    for (let k = 0; k < NS; k++) {
-      const a0 = lo + ((hi - lo) * k) / NS, a1 = lo + ((hi - lo) * (k + 1)) / NS, y0 = yAt(a0) + 0.12, y1 = yAt(a1) + 0.12;
-      mb.quad([a0, y0, cB], [a1, y1, cB], [a1, y1, cA], [a0, y0, cA], COL.road);
-      mb.quad([a0, Math.max(0, y0 - 1), cB], [a0, y0, cB], [a1, y1, cB], [a1, Math.max(0, y1 - 1), cB], COL.concrete);
-      mb.quad([a1, Math.max(0, y1 - 1), cA], [a1, y1, cA], [a0, y0, cA], [a0, Math.max(0, y0 - 1), cA], COL.concrete);
-      mb.box(Math.min(a0, a1), y0 + 0.1, cA - 0.3, Math.max(a0, a1), y0 + 1.0, cA, COL.concrete);
-      if (y0 > 2.5) mb.box((a0 + a1) / 2 - 0.5, 0, (cA + cB) / 2 - 0.5, (a0 + a1) / 2 + 0.5, (y0 + y1) / 2 - 0.9, (cA + cB) / 2 + 0.5, COL.concreteDark);
+    const cR = rc1 - 2.5, cB = Cw / 2 + 0.5;
+    const P = makePath([[ah + sg * len, cR], [ah + sg * 26, cR], [ah, cB]], 30);
+    const DW = 6, n = Math.max(8, Math.ceil(P.len / 4));
+    const o = new Float32Array(4);
+    const yOf = (u: number) => H * u * u * (3 - 2 * u) + 0.12;
+    const at = (k: number) => {
+      const sv = (P.len * k) / n;
+      samplePath(P, sv, o);
+      return { a: o[0], c: o[1], na: -o[3], nc: o[2], y: yOf(sv / P.len) };
+    };
+    let q0 = at(0);
+    for (let k = 1; k <= n; k++) {
+      const q1 = at(k);
+      const L0: [number, number] = [q0.a + q0.na * DW / 2, q0.c + q0.nc * DW / 2], R0: [number, number] = [q0.a - q0.na * DW / 2, q0.c - q0.nc * DW / 2];
+      const L1: [number, number] = [q1.a + q1.na * DW / 2, q1.c + q1.nc * DW / 2], R1: [number, number] = [q1.a - q1.na * DW / 2, q1.c - q1.nc * DW / 2];
+      // 床版の上（路面）と下、両側の壁高欄
+      const up = (pA: [number, number], yA: number, pB: [number, number], yB: number, pC: [number, number], yC: number, pD: [number, number], yD: number, col: THREE.Color) => {
+        const v = [[pA[0], yA, pA[1]], [pB[0], yB, pB[1]], [pC[0], yC, pC[1]], [pD[0], yD, pD[1]]] as [number, number, number][];
+        // 上向き（法線の y が正）になるようにそろえる
+        const ex = v[1][0] - v[0][0], ez = v[1][2] - v[0][2], fx = v[3][0] - v[0][0], fz = v[3][2] - v[0][2];
+        if (ez * fx - ex * fz < 0) mb.quad(v[3], v[2], v[1], v[0], col); else mb.quad(v[0], v[1], v[2], v[3], col);
+      };
+      up(R0, q0.y, R1, q1.y, L1, q1.y, L0, q0.y, COL.road);
+      if (q0.y > 1) up(R0, q0.y - 1.2, L0, q0.y - 1.2, L1, q1.y - 1.2, R1, q1.y - 1.2, COL.concreteDark);
+      for (const [pa, pb] of [[L0, L1], [R0, R1]] as const) {
+        const side = (y0: number, y1: number, h0: number, h1: number) => {
+          mb.quad([pa[0], y0 + h0, pa[1]], [pb[0], y1 + h1, pb[1]], [pb[0], y1, pb[1]], [pa[0], y0, pa[1]], COL.concrete);
+          mb.quad([pa[0], y0, pa[1]], [pb[0], y1, pb[1]], [pb[0], y1 + h1, pb[1]], [pa[0], y0 + h0, pa[1]], COL.concrete);
+        };
+        side(Math.max(0, q0.y - 1.2), Math.max(0, q1.y - 1.2), q0.y - Math.max(0, q0.y - 1.2) + 1.0, q1.y - Math.max(0, q1.y - 1.2) + 1.0);
+      }
+      // 白い縁の線
+      pline([[R0[0] + q0.na * 0.6, R0[1] + q0.nc * 0.6], [R1[0] + q1.na * 0.6, R1[1] + q1.nc * 0.6]], 0.2, q0.y + 0.03, COL.white);
+      pline([[L0[0] - q0.na * 0.6, L0[1] - q0.nc * 0.6], [L1[0] - q1.na * 0.6, L1[1] - q1.nc * 0.6]], 0.2, q0.y + 0.03, COL.white);
+      // 橋脚（12m ごと）
+      if (k % 3 === 0 && q1.y > 3) mb.cylinder(q1.a, q1.c, 0, q1.y - 1.2, 0.8, 10, COL.concreteDark);
+      q0 = q1;
     }
-    // 案内標識（緑の門形）
-    const ga = as + sg * 6;
-    mb.box(ga - 0.2, 0, cA - 1.2, ga + 0.2, 6.5, cA - 0.8, COL.steelDark);
-    mb.box(ga - 0.2, 0, cB + 0.2, ga + 0.2, 6.5, cB + 0.6, COL.steelDark);
-    mb.box(ga - 0.15, 5.2, cA - 1.2, ga + 0.15, 7.2, cB + 0.6, C(0x1f6b45), PAT.glow);
+    // 案内標識（緑の門形、ランプの入口）
+    const g0 = at(1);
+    mb.box(g0.a - 0.2, 0, g0.c + 4, g0.a + 0.2, 6.5, g0.c + 4.4, COL.steelDark);
+    mb.box(g0.a - 0.2, 0, g0.c - 4.4, g0.a + 0.2, 6.5, g0.c - 4, COL.steelDark);
+    mb.box(g0.a - 0.15, 5.2, g0.c - 4.4, g0.a + 0.15, 7.2, g0.c + 4.4, C(0x1f6b45), PAT.glow);
   }
   // 陸側の植え込み
   for (let a = -A / 2 + 12; a < A / 2 - 12; a += 18) {

@@ -1904,7 +1904,8 @@ export class World {
       if (toNeighbor) tm.carToExt.set(A.road, 25);
       A.b.note = A.body < 0 ? '<span class="neg">水辺に接していません</span>' : `航路 ${routes} 本${toNeighbor ? '・隣の都市への航路あり' : ''}`;
     }
-    // 新しい空港：高速道路から空港専用のランプで直接入る（敷地の陸側に接する高速道路から、空港の道路へ）
+    // 新しい空港：都市高速から空港専用のランプで直接出入りする（敷地の陸側に接する都市高速 ⇔ 空港の道路）。
+    // 都市高速のマスのノード（一方通行なら流れの向きに走る車がいるノード）から分かれ（出口）、空港の道路から合流する（入口）
     const airFreightAt = new Map<number, Destination[]>();
     const airDest = new Map<number, Destination[]>();
     for (const b of airOpen) {
@@ -1916,6 +1917,7 @@ export class World {
         for (const a of info.acc) { const d = Math.hypot((a % n) - ux, ((a / n) | 0) - uy); if (d < bd) { bd = d; best = a; } }
         const m = 1 + (bd * CELL) / 670; // 空港の中の道路を 40km/h
         (tm.carLinks.get(u) ?? tm.carLinks.set(u, []).get(u)!).push([best, m]);
+        (tm.carLinks.get(best) ?? tm.carLinks.set(best, []).get(best)!).push([u, m]);
       }
       for (const c of info.acc) {
         (airDest.get(c) ?? airDest.set(c, []).get(c)!).push({ id: b.id, free: spec.paxCap * 1.5 });

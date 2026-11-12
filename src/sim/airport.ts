@@ -7,7 +7,7 @@
 // 世界の座標（X = 東、Z = 南、m）へは、角度 θ = (rot - 2)·π/4 で回す（建物の正面 face と同じ決まり：rot 2 = 陸側が南）。
 import { CELL, DX, DY, QUAY_LAND, WATER_LEVEL } from './constants';
 import type { Grid } from './grid';
-import { isHighway, RoadType } from './defs';
+import { isHighway, isUrbanElevated, isUrbanGround, RoadType } from './defs';
 import type { LineKind } from './defs';
 
 export type AirportSize = 1 | 2 | 3;
@@ -206,7 +206,7 @@ export interface AirportLayout {
   viaduct: { a0: number; a1: number; c0: number; c1: number; h: number; ramp: number }; // 高架の出発ロビー前の道路
   station: LRect; // 空港駅のホーム
   stationPort: LRect; // 線路が接していればよい範囲（敷地のマスの中心が入る範囲）
-  highwayC: number; // 高速道路の出入口：この c より陸側の敷地のマスに接する高速道路
+  highwayC: number; // 都市高速の出入口：この c より陸側の敷地のマスに接する都市高速
   tower: [number, number, number]; // 管制塔（a, c, 高さ）
   masts: [number, number][]; // エプロンの照明塔
   glide: number; // 進入角（度）
@@ -422,11 +422,13 @@ export function stationLines(g: Grid, P: AirPorts): Map<LineKind, number[]> {
 }
 
 // 敷地に接している高速道路のノード（車の経路のノード番号：地上 = マス、上空 = N + マス）
+// 空港専用ランプでつなげるのは都市高速だけ（高架・地上、片側 1 車線・一方通行 2 車線）。ふつうの高速道路はつながない
+export const isUrbanHw = (t: number) => isUrbanElevated(t) || isUrbanGround(t);
 export function highwayNodes(g: Grid, P: AirPorts): number[] {
   const N = g.n * g.n, out: number[] = [];
   for (const i of P.highwayNear) {
-    if (isHighway(g.road[i])) out.push(i);
-    if (isHighway(g.up[i])) out.push(N + i);
+    if (isUrbanHw(g.road[i])) out.push(i);
+    if (isUrbanHw(g.up[i])) out.push(N + i);
   }
   return out;
 }
