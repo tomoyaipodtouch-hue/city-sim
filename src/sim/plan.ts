@@ -1850,8 +1850,10 @@ export function snapRoadEnds(g: Grid, type: RoadType, x0: number, y0: number, x1
   const ts = tee(x0, y0, opp(dd)), te = tee(x1, y1, dd);
   // タップしたマスが道路でなければ、すぐ隣の道路の端（行き止まり）につなぐ
   const endScore = (c: number) => (g.road[c] && !isHighway(g.road[c]) && g.road[c] !== RoadType.Ramp && degree(c) <= 1 ? 2 : 0);
-  const s = ts ?? (g.road[y0 * n + x0] ? [x0, y0] : pick(x0, y0, endScore));
-  const e = te ?? (g.road[y1 * n + x1] ? [x1, y1] : pick(x1, y1, endScore));
+  // 空港の門のマスで始まる・終わる線は、そのまま門のマスへ（となりの行き止まりへ寄せない）
+  const keep = (x: number, y: number) => !!g.road[y * n + x] || g.gateCells.has(y * n + x);
+  const s = ts ?? (keep(x0, y0) ? [x0, y0] : pick(x0, y0, endScore));
+  const e = te ?? (keep(x1, y1) ? [x1, y1] : pick(x1, y1, endScore));
   return [s[0], s[1], e[0], e[1]];
 }
 

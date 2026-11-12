@@ -2,6 +2,8 @@
 import { LINES, type LineKind } from '../sim/defs';
 import { AIRPORT_SPECS, type AirportSize, type AirStats } from '../sim/airport';
 
+// 門から外へ向かう向き（DX/DY の番号）の方角：道路はこちらから引いてくる
+const DIRS = ['東', '南東', '南', '南西', '西', '北西', '北', '北東'];
 const num = (v: number) => Math.round(v).toLocaleString();
 const yen = (v: number) => `§${Math.round(v).toLocaleString()}`;
 
@@ -17,7 +19,11 @@ export function airportRows(size: AirportSize, air: AirStats | undefined, upkeep
   rows.push(['利用者', `${num(air.pax)} / ${num(spec.paxCap)} 人/日${air.paxRail ? `（鉄道などで ${num(air.paxRail)} 人）` : ''}`]);
   rows.push(['航空貨物', air.freight ? `${num(air.freight)} t/日` : 'なし（ハイテク産業の荷物を運ぶ）']);
   rows.push(['空港駅', air.lines.length ? `${air.lines.map((k: LineKind) => LINES[k].name).join('・')}とつながっている` : '<span class="neg">つながっていません</span>（ターミナル前の陸側のふちに線路を引く）']);
-  rows.push(['都市高速', air.highway ? '都市高速とつながっている（空港専用ランプ）' : 'つながっていません（陸側のふちの水色のマスに都市高速を通す）']);
+  const from = air.gateDir !== undefined ? DIRS[air.gateDir] : '外';
+  rows.push(['正門', air.gate === 'hw' ? '都市高速とつながっている（空港専用ランプ）' : air.gate === 'road' ? '一般道とつながっている（都市高速をつなぐと、もっと遠くから人が来る）'
+    : air.legacy ? `<span class="neg">つながっていません</span>（以前の空港：道路を正門へつなぎ直せませんでした。正門の${from}から都市高速か道路を引いて、正門のマスで終わらせる）`
+    : `<span class="neg">つながっていません</span>（正門の${from}から都市高速か道路を引いて、正門のマスで終わらせる）`]);
+  rows.push(['通用門', air.svc ? '一般道とつながっている（貨物・整備地区）' : `つながっていません（貨物のトラックは正門から）`]);
   const bal = air.income - upkeep;
   rows.push(['収入', `着陸料など ${yen(air.income)}/月・維持費 ${yen(upkeep)}/月（${bal >= 0 ? `<span class="pos">+${yen(bal)}</span>` : `<span class="neg">${yen(bal)}</span>`}）`]);
   return rows;

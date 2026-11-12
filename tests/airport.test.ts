@@ -263,6 +263,12 @@ function airCity(o: CityOpts) {
   if (o.hw) run({ t: 'road', x0: wide ? 84 : 85, y0: 72, x1: wide ? 84 : 85, y1: 127, road: o.hw === true ? RoadType.UrbanHighway : o.hw });
   // 空港（中）は 18 マス幅：敷地の西のふちを同じ x = 86 にする
   if (o.airport !== false) ok(w, { t: 'plop', id: o.size === 2 ? 'airport_2' : 'airport_1', x: o.size === 2 ? 94 : AX, y: AY, rot: AROT });
+  // 一般道を正門まで（車は門からだけ出入りする）。都市高速を引くときは、都市高速が正門を通る
+  if (o.airport !== false && !o.hw) {
+    const ab = [...w.buildings.values()].find((b) => b.type === 'airport_1' || b.type === 'airport_2')!;
+    const gc = w.airportAccess(ab)!.ports.gate!;
+    run({ t: 'road', x0: 85, y0: 56, x1: gc.x, y1: gc.y, road: RoadType.Road });
+  }
   const kinds: GrowKind[] = o.ih ? ['R1', 'R2', 'CS1', 'CS2', 'CO2', 'IH'] : ['R1', 'R2', 'CS1', 'CS2', 'CO2', 'CO3'];
   const days = o.days ?? 540;
   for (let d = 0; d < days; d++) {

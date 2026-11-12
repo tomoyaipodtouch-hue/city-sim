@@ -1,4 +1,5 @@
 // ツールの定義と、ドラッグ中のプレビュー・確定
+import { DX, DY } from '../sim/constants';
 import { CIVIC, CivicId, LineKind, RoadType, ZoneType } from '../sim/defs';
 import { normRect, planBulldoze, planBusStop, planCloverleaf, planTransitLine, planDiamond, planLine, planPlop, planPowerLine, planRamp, planRoadCmd, planZone, planURamp, planTerrain, TerrainOp, planTrees, planEStop, planReclaim, BULLDOZE_LAYERS, BULLDOZE_LAYER_NAMES } from '../sim/plan';
 import type { BulldozeLayer } from '../sim/plan';
@@ -8,7 +9,7 @@ import type { Command } from '../sim/world';
 import type { GameClient } from '../game';
 import type { CityRenderer } from '../render/renderer';
 import { sfx } from '../sound';
-import { planAirport } from '../sim/airport';
+import { airportGateCells, planAirport } from '../sim/airport';
 
 // 空港の向き（8 方向。陸側（ターミナル）が向く方角）の名前
 const DIR_NAMES = ['東', '南東', '南', '南西', '西', '北西', '北', '北東'];
@@ -84,6 +85,7 @@ export class ToolController {
   onResult: ((ok: boolean, msg: string) => void) | null = null;
   // 空港を置く向き（8 方向。0 = 陸側が東、2 = 南、奇数は斜め）
   airRot = 2;
+  private gateKey = ''; // 門のマスを作った空港の一覧
   isAirportTool() {
     return this.tool.startsWith('plop:') && !!CIVIC[this.tool.split(':')[1] as CivicId]?.airfield;
   }
@@ -171,6 +173,11 @@ export class ToolController {
     if (t.startsWith('road:') && d.line) {
       const type = Number(t.split(':')[1]) as RoadType;
       const [lx0, ly0, lx1, ly1] = d.line;
+      // 空港の門のマス（道路の端をそのまま門へ引けるように）。空港が変わったときだけ作り直す
+      const list = [];
+      for (const b of this.game.buildings.values()) { const af = b.civic ? CIVIC[b.type as CivicId]?.airfield : 0; if (af) list.push({ ...b, size: af }); }
+      const gk = list.map((b) => `${b.id}.${b.x}.${b.y}.${b.face}`).join(',');
+      if (gk !== this.gateKey) { g.gateCells = airportGateCells(g.n, list); this.gateKey = gk; }
       const plan = planRoadCmd(g, type, lx0, ly0, lx1, ly1);
       // 大通りの横でつなぐ道路のマス（と、横に向いている大通りの行き止まりの端）も、つなぎ直すマスとして見せる
       const stemJ = (plan.stemJoins ?? []).flatMap((q) => [q[0], q[1]]);
@@ -324,11 +331,22 @@ export class ToolController {
       const id = t.split(':')[1] as CivicId;
       const plan = planAirport(g, CIVIC[id].airfield!, x, y, this.airRot);
       const fill = new Set(plan.fill), st = new Set(plan.ports.stationNear), lot = new Set(plan.cells);
-      const hw = plan.ports.highwayNear.filter((i) => !st.has(i));
-      pv.setTiles(g, [...plan.cells, ...st, ...hw], (i) => (plan.bad.has(i) ? 0xe5534b : st.has(i) ? 0xc45cff : !lot.has(i) ? 0x6fc3ff : fill.has(i) ? 0xc9a26b : plan.ok ? 0x5cc46a : 0x9fb7a0));
+      // 門：門のマス（濃い色）と、外から引いてくる向きの 3 マス（うすい色）。都市高速・道路を外からこの向きに引いて、門のマスで終わらせる
+      const gate = new Map<number, number>();
+      const mark = (gc: typeof plan.ports.gate, dark: number, light: number) => {
+        if (!gc) return;
+        gate.set(gc.cell, dark);
+        for (let k = 1; k <= 3; k++) {
+          const x = gc.x + DX[gc.d] * k, y = gc.y + DY[gc.d] * k;
+          if (g.inb(x, y) && !lot.has(g.idx(x, y))) gate.set(g.idx(x, y), light);
+        }
+      };
+      mark(plan.ports.gate, 0x1f7ae0, 0x8fd0ff);
+      mark(plan.ports.svc, 0xe08a1f, 0xf5c98a);
+      pv.setTiles(g, [...plan.cells, ...st, ...gate.keys()], (i) => (plan.bad.has(i) ? 0xe5534b : gate.has(i) ? gate.get(i)! : st.has(i) ? 0xc45cff : fill.has(i) ? 0xc9a26b : plan.ok ? 0x5cc46a : 0x9fb7a0));
       pv.setPath(g, []);
       const extra = plan.fill.length ? `（埋め立て ${plan.fill.length} マス・岸壁 ${plan.quay.length} マス）` : '';
-      return plan.ok ? { text: `${CIVIC[id].name}　${yen(plan.cost)}${extra}　紫＝駅の線路、水色＝都市高速をつなぐ場所`, bad: false } : { text: plan.reason, bad: true };
+      return plan.ok ? { text: `${CIVIC[id].name}　${yen(plan.cost)}${extra}　青＝正門（都市高速・道路を水色の向きから引いて青のマスで終わらせる）、橙＝通用門、紫＝駅の線路`, bad: false } : { text: plan.reason, bad: true };
     }
     if (t.startsWith('plop:')) {
       const id = t.split(':')[1] as CivicId;

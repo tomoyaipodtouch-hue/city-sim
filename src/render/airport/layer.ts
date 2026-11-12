@@ -4,10 +4,10 @@
 //  ・飛行機（機体の種類ごと）と地上の車両（種類ごと）は InstancedMesh。毎フレーム新しいオブジェクトを作らない
 import * as THREE from 'three';
 import { Grid } from '../../sim/grid';
-import { CELL } from '../../sim/constants';
+import { CELL, DX, DY } from '../../sim/constants';
 import { CIVIC, CivicId } from '../../sim/defs';
 import type { Building } from '../../sim/world';
-import { standDir, AIRPORT_SPECS, airportCells, airportLayout, airportPorts, frameOf, highwayNodes, stationLines, toLocal, AirFrame, AirportLayout } from '../../sim/airport';
+import { standDir, AIRPORT_SPECS, airportCells, airportLayout, airportPorts, frameOf, gateLink, stationLines, toLocal, AirFrame, AirportLayout } from '../../sim/airport';
 import { MeshBuilder } from '../builder';
 import { createBuildingMaterial } from '../materials';
 import type { TreeSpot } from '../buildingGen';
@@ -15,6 +15,7 @@ import { buildAirportGeometry, LIGHT } from './geometry';
 import { AC, AC_TYPES, ALL_LIVERIES, AcType, aircraftGeometry, aircraftMaterial } from './aircraft';
 import { GSE_TYPES, GseType, gseGeometry } from './gse';
 import { AirOps } from './ops';
+import { LoopCars } from './loopCars';
 
 const CHUNK_M = 400; // 区画の大きさ（m）：画面の外は描かない。小さすぎると描画の回数が増える
 type LiveryAttrs = { tail: THREE.InstancedBufferAttribute; stripe: THREE.InstancedBufferAttribute; win: THREE.InstancedBufferAttribute };
@@ -43,6 +44,7 @@ interface Entry {
   pools: number[];
   trees: TreeSpot[];
   lightOff: number; // 全体の光の点の中の、この空港の始まり
+  loop: LoopCars | null; // 陸側のループを走る車（正門に道路・都市高速がつながっているとき）
 }
 
 // 三角形を、重心の位置で区画ごとに分ける
@@ -246,29 +248,21 @@ export class AirportLayer {
       const base = Math.round((hsum / cells.length) * 100) / 100;
       const P = airportPorts(g.n, f, L, cells, (i) => lot.has(i));
       const lines = [...stationLines(g, P).keys()].sort();
-      const hwn = highwayNodes(g, P);
-      let hw: { a: number; c: number; h: number } | null = null;
-      if (hwn.length) {
-        const N = g.n * g.n, node = hwn[0], i = node % N;
-        const [a, c] = toLocal(f, ((i % g.n) + 0.5) * CELL, (((i / g.n) | 0) + 0.5) * CELL);
-        hw = { a, c, h: g.nodeH(node) - base };
-      }
-      // 一般道の入口
-      const access: [number, number][] = [];
-      for (const i of cells) {
-        const x = i % g.n, y = (i / g.n) | 0;
-        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-          if (!g.inb(x + dx, y + dy)) continue;
-          const j = g.idx(x + dx, y + dy);
-          if (lot.has(j) || !g.road[j] || g.road[j] === 7) continue;
-          access.push(toLocal(f, (x + dx + 0.5) * CELL, (y + dy + 0.5) * CELL) as [number, number]);
-        }
-      }
-      const key = `${b.x}.${b.y}.${b.w}.${b.h}.${b.face}.${base}.${lines.join(',')}.${hw ? `${Math.round(hw.a)},${Math.round(hw.c)},${Math.round(hw.h)}` : ''}.${access.map(([a, c]) => `${Math.round(a)},${Math.round(c)}`).join(';')}`;
+      // 門（正門・通用門）：門のマスの中心（敷地の座標）、外へ向かう向き、つながっているもの、路面の高さ
+      const gateOf = (gc: typeof P.gate, main: boolean) => {
+        if (!gc) return null;
+        const lk = gateLink(g, gc, main);
+        const [a, c] = toLocal(f, (gc.x + 0.5) * CELL, (gc.y + 0.5) * CELL);
+        const wx = DX[gc.d], wz = DY[gc.d], l = Math.hypot(wx, wz);
+        const da = (wx * f.cos + wz * f.sin) / l, dc = (-wx * f.sin + wz * f.cos) / l;
+        return { a, c, da, dc, kind: lk?.kind ?? null, h: lk ? g.nodeH(lk.node) - base : 0, diag: (gc.d & 1) === 1 };
+      };
+      const gate = gateOf(P.gate, true), svc = gateOf(P.svc, false);
+      const key = `${b.x}.${b.y}.${b.w}.${b.h}.${b.face}.${base}.${lines.join(',')}.${gate?.kind}${Math.round(gate?.h ?? 0)}.${svc?.kind}`;
       const old = this.entries.get(b.id);
       if (old && old.key === key) { old.b = b; this.feed(old); continue; }
       if (old) this.drop(old);
-      const geo = buildAirportGeometry(L, f, { cells, n: g.n, base, seed: b.seed, access, highway: hw, lines });
+      const geo = buildAirportGeometry(L, f, { cells, n: g.n, base, seed: b.seed, gate, svc, lines });
       const meshes = splitChunks(geo.mb).map((gg) => {
         const m = new THREE.Mesh(gg, this.material);
         m.castShadow = true;
@@ -285,7 +279,8 @@ export class AirportLayer {
         return Math.max(t, L.A / 2) + 700;
       };
       const ops = old?.ops && old.f.rot === f.rot && old.L === L ? old.ops : new AirOps(L, { pos: exit(f.cos, f.sin), neg: exit(-f.cos, -f.sin) }, b.seed);
-      const e: Entry = { key, b, L, f, base, meshes, ops, lights: geo.lights, centre: geo.centre, beacons: geo.beacons, pools: geo.pools, trees: geo.trees, lightOff: 0 };
+      const loop = gate && gate.kind ? new LoopCars(L, LoopCars.gateLand(L, gate.a, gate.c, Math.max(0, gate.h)), b.seed) : null;
+      const e: Entry = { key, b, L, f, base, meshes, ops, lights: geo.lights, centre: geo.centre, beacons: geo.beacons, pools: geo.pools, trees: geo.trees, lightOff: 0, loop };
       ops.onDirChange = () => this.recolourCentre(e);
       this.feed(e);
       if (!old) ops.seed();
@@ -445,6 +440,12 @@ export class AirportLayer {
       }
       this.curEntry = e;
       e.ops.eachGse(this.time, this.emitGse);
+      if (e.loop) {
+        const air = e.b.air, sp = e.L.spec;
+        // 1 分あたりの台数：利用者が多いほど多く（運航していなければ、送迎の車がときどき）
+        e.loop.update(dt, air?.open ? 5 + 14 * Math.min(1, air.pax / sp.paxCap) : 1.5);
+        e.loop.each(this.emitGse);
+      }
       this.placeBridges(e);
     }
     for (const [m, t] of this.bridgeMeshes) {
@@ -543,13 +544,13 @@ export class AirportLayer {
     col.setXYZ(i, c[0], c[1], c[2]);
     size.setX(i, s);
   }
-  private emitGse = (type: GseType, a: number, c: number, ha: number, hc: number) => {
+  private emitGse = (type: GseType, a: number, c: number, ha: number, hc: number, y = 0) => {
     // 今まわしている空港の変換（eachGse の中で呼ばれる）
     const e = this.curEntryFor();
     const f = e.f;
     const k = this.cnt[type], m = this.gseMesh[type];
     if (k >= (type === 'pax' ? PAX_CAP : GSE_CAP)) return;
-    const X = a * f.cos - c * f.sin + f.cx, Z = a * f.sin + c * f.cos + f.cz, Y = e.base + 0.12;
+    const X = a * f.cos - c * f.sin + f.cx, Z = a * f.sin + c * f.cos + f.cz, Y = e.base + 0.12 + y;
     const dx = ha * f.cos - hc * f.sin, dz = ha * f.sin + hc * f.cos;
     this.q.setFromAxisAngle(this.up, Math.atan2(dx, dz));
     this.v.set(X, Y, Z);

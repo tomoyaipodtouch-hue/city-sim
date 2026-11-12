@@ -56,8 +56,12 @@ export interface AirStats {
   cargoFlights: number; // 1日の貨物便
   freight: number; // 1日の貨物（t）
   lines: LineKind[]; // 空港駅につながっている線
-  highway: boolean; // 高速道路と直結している
-  road: boolean; // 一般道につながっている
+  highway: boolean; // 正門に都市高速がつながっている
+  road: boolean; // 正門に一般道がつながっている
+  gate?: 'hw' | 'road' | null; // 正門につながっているもの
+  svc?: boolean; // 通用門（貨物・整備地区）に一般道がつながっている
+  legacy?: boolean; // 以前の空港：道路・都市高速を正門へつなぎ直せなかった
+  gateDir?: number; // 正門から外へ向かう向き（DX/DY の番号）
   income: number; // 月の収入
   note?: string;
 }
@@ -199,7 +203,7 @@ export interface TaxiNet {
 }
 export type AirBldKind = 'terminal' | 'pier' | 'concourse' | 'tower' | 'hotel' | 'office' | 'carpark' | 'station' | 'hangar' | 'fuel' | 'fire' | 'cargo' | 'plaza';
 // sub = 陸側の座標（land）で置く。flip = 区画の中心で 180° 回す。ac = 格納庫の中の機体
-export interface AirBld { kind: AirBldKind; r: LRect; h: number; sub?: boolean; flip?: boolean; ac?: AcKind }
+export interface AirBld { kind: AirBldKind; r: LRect; h: number; sub?: boolean; flip?: boolean; ac?: AcKind; loop?: boolean }
 export type AcKind = 'atr' | 'a220' | 'e190' | 'a320' | 'b737' | 'b787' | 'b777' | 'a350';
 export interface AirportLayout {
   spec: AirportSpec;
@@ -224,7 +228,9 @@ export interface AirportLayout {
   viaduct: { a0: number; a1: number; c0: number; c1: number; h: number; ramp: number }; // 高架の出発ロビー前の道路
   station: LRect; // 空港駅のホーム
   stationPort: LRect; // 線路が接していればよい範囲（敷地のマスの中心が入る範囲）
-  highwayPort: LRect; // 都市高速の出入口：敷地のマスの中心がこの範囲に入るマスに接する都市高速
+  gate: number; // 正門：陸側のふち（land の座標で c = edge）の a。ここから空港の大通りが入る
+  svcGate: { a: number; c: number; na: number; nc: number }; // 通用門（貨物・整備地区）：敷地の座標の、ふちの点と外向きの向き
+  svcRoads: [number, number][][]; // 通用門からの構内道路（敷地の座標。はじめの道の最初の点が門）
   land: { oa: number; oc: number; rot: number; A: number; edge: number }; // 陸側（道路・駅・ターミナル）の座標の置き方（敷地の座標で原点と回転）。A = 道路の長さ、edge = 陸側のふち
   parallel: boolean; // 着陸と出発を別の滑走路で同時に（大）。false なら地上は着陸と出発を交互に
   tower: [number, number, number]; // 管制塔（a, c, 高さ）
@@ -299,22 +305,23 @@ function layoutS(spec: AirportSpec): AirportLayout {
     depot: [118, 14],
     buildings: [
       { kind: 'pier', r: { a0: -88, c0: 38, a1: 88, c1: 46 }, h: 6 },
-      { kind: 'terminal', r: { a0: -88, c0: 46, a1: 88, c1: 66 }, h: 13 },
+      { kind: 'terminal', r: { a0: -88, c0: 46, a1: 88, c1: 62 }, h: 13 },
       { kind: 'tower', r: { a0: 100, c0: 36, a1: 136, c1: 62 }, h: 8 },
-      { kind: 'hotel', r: { a0: 150, c0: 30, a1: 196, c1: 64 }, h: 31 },
-      { kind: 'office', r: { a0: 206, c0: 36, a1: 236, c1: 64 }, h: 22 },
-      { kind: 'carpark', r: { a0: -192, c0: 32, a1: -110, c1: 64 }, h: 14 },
-      { kind: 'station', r: { a0: -66, c0: 85, a1: 66, c1: 95 }, h: 7 },
+      { kind: 'hotel', r: { a0: 150, c0: 30, a1: 196, c1: 62 }, h: 31 },
+      { kind: 'office', r: { a0: 206, c0: 36, a1: 236, c1: 62 }, h: 22 },
+      { kind: 'carpark', r: { a0: -192, c0: 32, a1: -122, c1: 62 }, h: 14 },
+      { kind: 'carpark', r: { a0: 304, c0: 70, a1: 370, c1: 84 }, h: 11, loop: true },
+      { kind: 'station', r: { a0: -66, c0: 86, a1: 66, c1: 95 }, h: 7 },
       { kind: 'hangar', r: { a0: -365, c0: 10, a1: -290, c1: 58 }, h: 19 },
-      { kind: 'fuel', r: { a0: -272, c0: 38, a1: -214, c1: 64 }, h: 12 },
+      { kind: 'fuel', r: { a0: -272, c0: 38, a1: -214, c1: 62 }, h: 12 },
       { kind: 'fire', r: { a0: -256, c0: 4, a1: -204, c1: 30 }, h: 8 },
-      { kind: 'cargo', r: { a0: 240, c0: 26, a1: 334, c1: 64 }, h: 12 },
+      { kind: 'cargo', r: { a0: 240, c0: 26, a1: 334, c1: 62 }, h: 12 },
     ],
-    roadC: [69, 83],
-    viaduct: { a0: -92, a1: 92, c0: 67, c1: 77, h: 6.5, ramp: 62 },
-    station: { a0: -66, c0: 85, a1: 66, c1: 95 },
+    roadC: [64, 85],
+    viaduct: { a0: -92, a1: 92, c0: 62, c1: 77, h: 6.5, ramp: 62 },
+    station: { a0: -66, c0: 86, a1: 66, c1: 95 },
     stationPort: { a0: -80, c0: 72, a1: 80, c1: C / 2 + 1 },
-    highwayPort: { a0: -A / 2 - 20, c0: 30, a1: A / 2 + 20, c1: C / 2 + 20 },
+    gate: 290, svcGate: { a: 420, c: C / 2, na: 0, nc: 1 }, svcRoads: [[[420, C / 2], [420, 66], [300, 66]]],
     land: { oa: 0, oc: 0, rot: 0, A, edge: C / 2 }, parallel: false,
     tower: [118, 49, 46],
     masts: [[-110, 36.5], [-27.5, 36.5], [27.5, 36.5], [110, 36.5], [239, 22], [-286, 8]],
@@ -376,23 +383,23 @@ function layoutM(spec: AirportSpec): AirportLayout {
     depot: [-268, 30],
     buildings: [
       { kind: 'pier', r: pier, h: 9 },
-      { kind: 'terminal', r: { a0: -150, c0: 80, a1: 150, c1: 110 }, h: 16 },
-      { kind: 'tower', r: { a0: -470, c0: 70, a1: -400, c1: 108 }, h: 10 },
-      { kind: 'hotel', r: { a0: 380, c0: 66, a1: 440, c1: 108 }, h: 40 },
-      { kind: 'office', r: { a0: 450, c0: 74, a1: 500, c1: 108 }, h: 28 },
-      { kind: 'carpark', r: { a0: -340, c0: 84, a1: -180, c1: 108 }, h: 17 },
-      { kind: 'carpark', r: { a0: 190, c0: 84, a1: 350, c1: 108 }, h: 17 },
+      { kind: 'terminal', r: { a0: -150, c0: 80, a1: 150, c1: 100 }, h: 16 },
+      { kind: 'tower', r: { a0: -470, c0: 70, a1: -400, c1: 100 }, h: 10 },
+      { kind: 'hotel', r: { a0: 380, c0: 66, a1: 440, c1: 100 }, h: 40 },
+      { kind: 'office', r: { a0: 450, c0: 74, a1: 500, c1: 100 }, h: 28 },
+      { kind: 'carpark', r: { a0: -340, c0: 84, a1: -200, c1: 100 }, h: 17 },
+      { kind: 'carpark', r: { a0: 415, c0: 104, a1: 485, c1: 128 }, h: 14, loop: true },
       { kind: 'station', r: { a0: -95, c0: 131, a1: 95, c1: 143 }, h: 7 },
       { kind: 'hangar', r: { a0: -640, c0: 4, a1: -500, c1: 84 }, h: 30 },
-      { kind: 'fuel', r: { a0: 520, c0: 70, a1: 610, c1: 108 }, h: 14 },
+      { kind: 'fuel', r: { a0: 520, c0: 70, a1: 610, c1: 100 }, h: 14 },
       { kind: 'fire', r: { a0: -462, c0: -6, a1: -388, c1: 26 }, h: 9 },
       { kind: 'cargo', r: { a0: 380, c0: 42, a1: 570, c1: 64 }, h: 14 },
     ],
-    roadC: [112, 129],
-    viaduct: { a0: -160, a1: 160, c0: 110, c1: 121, h: 7, ramp: 75 },
+    roadC: [102, 129],
+    viaduct: { a0: -160, a1: 160, c0: 100, c1: 115, h: 7, ramp: 75 },
     station: { a0: -95, c0: 131, a1: 95, c1: 143 },
     stationPort: { a0: -110, c0: 80, a1: 110, c1: C / 2 + 1 }, // 地下鉄はターミナルの下まで入れる
-    highwayPort: { a0: -A / 2 - 20, c0: 40, a1: A / 2 + 20, c1: C / 2 + 20 },
+    gate: 400, svcGate: { a: 510, c: C / 2, na: 0, nc: 1 }, svcRoads: [[[510, C / 2], [510, 68], [446, 68]]],
     land: { oa: 0, oc: 0, rot: 0, A, edge: C / 2 }, parallel: false,
     tower: [-435, 89, 64],
     masts: [[-250, 64], [-110, 64], [30, 64], [175, 64], [300, 64], [372, 40], [-495, 2]],
@@ -463,11 +470,11 @@ function layoutL(spec: AirportSpec): AirportLayout {
       { kind: 'concourse', r: { a0: -330, c0: -180, a1: -290, c1: 180 }, h: 15 },
       { kind: 'terminal', r: { a0: -180, c0: 14, a1: 180, c1: 44 }, h: 18, sub: true },
       { kind: 'station', r: { a0: -110, c0: 118, a1: 110, c1: 129 }, h: 8, sub: true },
-      { kind: 'carpark', r: { a0: -235, c0: 72, a1: -175, c1: 112 }, h: 20, sub: true },
-      { kind: 'carpark', r: { a0: 175, c0: 72, a1: 235, c1: 112 }, h: 20, sub: true },
-      { kind: 'hotel', r: { a0: -165, c0: 70, a1: -115, c1: 110 }, h: 48, sub: true },
-      { kind: 'office', r: { a0: 115, c0: 72, a1: 165, c1: 110 }, h: 36, sub: true },
-      { kind: 'plaza', r: { a0: -105, c0: 70, a1: 105, c1: 114 }, h: 0, sub: true },
+      { kind: 'carpark', r: { a0: -205, c0: 78, a1: -150, c1: 112 }, h: 20, sub: true, loop: true },
+      { kind: 'carpark', r: { a0: 150, c0: 78, a1: 200, c1: 112 }, h: 20, sub: true, loop: true },
+      { kind: 'hotel', r: { a0: -142, c0: 78, a1: -96, c1: 110 }, h: 48, sub: true },
+      { kind: 'office', r: { a0: 96, c0: 78, a1: 142, c1: 110 }, h: 36, sub: true },
+      { kind: 'plaza', r: { a0: -88, c0: 78, a1: 88, c1: 114 }, h: 0, sub: true },
       { kind: 'tower', r: { a0: 30, c0: -22, a1: 90, c1: 22 }, h: 12 },
       { kind: 'hangar', r: { a0: 405, c0: -185, a1: 540, c1: -95 }, h: 34, ac: 'b777' },
       { kind: 'hangar', r: { a0: 555, c0: -185, a1: 690, c1: -95 }, h: 34, ac: 'a350' },
@@ -476,11 +483,11 @@ function layoutL(spec: AirportSpec): AirportLayout {
       { kind: 'fire', r: { a0: -40, c0: -190, a1: 30, c1: -150 }, h: 10 },
       { kind: 'fire', r: { a0: 600, c0: 120, a1: 670, c1: 170 }, h: 10, flip: true },
     ],
-    roadC: [46, 64],
-    viaduct: { a0: -170, a1: 170, c0: 44, c1: 55, h: 7.5, ramp: 60 },
+    roadC: [46, 70],
+    viaduct: { a0: -110, a1: 110, c0: 44, c1: 59, h: 7.5, ramp: 40 },
     station: { a0: -110, c0: 118, a1: 110, c1: 129 },
     stationPort: { a0: -A / 2 - 20, c0: -115, a1: -680, c1: 115 }, // 地下鉄はターミナルの下まで入れる
-    highwayPort: { a0: -A / 2 - 20, c0: -250, a1: -760, c1: 250 },
+    gate: 225, svcGate: { a: A / 2, c: 0, na: 1, nc: 0 }, svcRoads: [[[A / 2, 0], [560, 0], [560, 34], [160, 34]], [[560, 0], [560, -90], [405, -90]]],
     land: { oa: -670, oc: 0, rot: Math.PI / 2, A: 480, edge: 130 }, parallel: true,
     tower: [60, 0, 95],
     masts: [[-590, -190], [-590, 0], [-590, 190], [-410, -190], [-410, 190], [-230, -190], [-230, 190], [-60, -190], [-60, 190], [165, 195], [395, 195]],
@@ -496,30 +503,155 @@ export function cellLocal(f: AirFrame, n: number, i: number): [number, number] {
 }
 const inRect = (r: LRect, a: number, c: number) => a >= r.a0 && a <= r.a1 && c >= r.c0 && c <= r.c1;
 
+// 陸側の座標（land）→ 敷地の座標
+export function landToLot(L: AirportLayout, a: number, c: number): [number, number] {
+  const co = Math.cos(L.land.rot), si = Math.sin(L.land.rot);
+  return [L.land.oa + a * co - c * si, L.land.oc + a * si + c * co];
+}
+export function lotToLand(L: AirportLayout, a: number, c: number): [number, number] {
+  const co = Math.cos(L.land.rot), si = Math.sin(L.land.rot), da = a - L.land.oa, dc = c - L.land.oc;
+  return [da * co + dc * si, -da * si + dc * co];
+}
+// ---- 陸側の道路：正門から入る U 字のループ（2 層） ----
+// 正門 → 空港の大通り → 2 つに分かれる：出発（高架の車寄せ。上りのランプ）と到着（地上の車寄せ）。
+// どちらもターミナルの前を -a へ（右側通行：車寄せはターミナルの側＝右）走り、奥でそれぞれの階で U ターンして、
+// 外側を +a へ戻る（出発の階は戻りながら下りのランプで地上へ降りて合流する）→ 大通り → 正門。
+// 車線（c、land の座標）：内側から 自家用車の車寄せ / 通過 / 島（タクシー乗り場・バスの停留所）/ タクシー・バスの車線 / 中央分離帯 / 戻りの 2 車線
+export interface LandLoop {
+  r0: number; r1: number; E: number; ga: number; av: number; h: number;
+  curb: number; thru: number; island: [number, number]; bay: number; ret1: number; ret2: number;
+  R: number; cm: number; aUg: number; aUe: number; // U ターン（地上・高架）：半円の端の a（半円は a の小さい側へ）、半径、中心の c
+  upA: [number, number]; // 出発の上りのランプ（地上の a → 高架の a）
+  downA: [number, number]; // 出発の戻りの下りのランプ（高架の a → 地上の a）
+  gateRamp: { cs: number; len: number } | null; // 正門が高架の都市高速：門から陸側のふちに沿って下るランプ（c、長さ）
+  garages: { r: LRect; spur: [number, number, number][] }[]; // 駐車場ビル（戻りの道から入る）
+}
+// elev = 正門に高架の都市高速がつながっている（大通りの位置が、門から下るランプの足もとへずれる）
+export function landLoop(L: AirportLayout, elev = false): LandLoop {
+  const [r0, r1] = L.roadC, V = L.viaduct, E = L.land.edge, ga = L.gate;
+  const curb = r0 + 1.75, thru = r0 + 5.25, bay = r0 + 11.25, ret1 = r1 - 5.25, ret2 = r1 - 1.75;
+  const R = (ret1 - thru) / 2, cm = (ret1 + thru) / 2;
+  const aUg = V.a0 - 25, aUe = aUg - R - 5 - V.ramp;
+  const len = L.spec.size === 3 ? 60 : 90;
+  const gateRamp = elev ? { cs: Math.min(r1 + 8.5, E - 2.5), len } : null;
+  const av = elev ? ga - len : ga;
+  const garages = L.buildings.filter((b) => b.kind === 'carpark' && b.loop).map((b) => {
+    const r = b.r;
+    // 大通りより先（小・中）：戻りの道から右へ分かれ、大通りを渡って入る。戻りの外側（大）：戻りの道から右へ入る
+    const spur: [number, number, number][] = r.a0 > ga
+      ? [[av - 22, ret2, 0], [av - 12, r1 + 3, 0], [r.a0 + 12, r1 + 3, 0], [r.a0 + 12, r.c1, 0]]
+      : [[r.a0 - 2, ret2, 0], [r.a0 + 10, ret2 + 5, 0], [r.a0 + 10, r.c0, 0]];
+    return { r, spur };
+  });
+  return {
+    r0, r1, E, ga, av, h: V.h, curb, thru, island: [r0 + 7, r0 + 9.5], bay, ret1, ret2, R, cm, aUg, aUe,
+    upA: [av - 8, V.a1], downA: [aUe, aUe + V.ramp], gateRamp, garages,
+  };
+}
+// U 字のループを走る道すじ（land の座標、[a, c, 高さ]）。stop = 車寄せに止まる a。
+// gate = 正門のマスの中心（land の座標と路面の高さ）。高架なら、門から下るランプを通る
+export type LoopKind = 'arrCar' | 'arrTaxi' | 'arrBus' | 'depCar' | 'depTaxi' | 'depBus' | 'park' | 'unpark';
+export function loopRoute(L: AirportLayout, kind: LoopKind, stopA: number, gate: [number, number, number]): { pts: [number, number, number][]; stop: number | null; level: 0 | 1 } {
+  const elev = gate[2] > 2, P = landLoop(L, elev), h = P.h, E = P.E;
+  const inA = P.av + 4, outA = P.av - 4;
+  // 門 → 大通りの上の端（入る）、大通りの上の端 → 門（出る）
+  const gr = P.gateRamp;
+  const enter: [number, number, number][] = gr
+    ? [gate, [P.ga + 3, E - 3, gate[2]], [P.ga - 12, gr.cs + 1.5, gate[2] * 0.9], [P.av + 14, gr.cs + 1.5, 0.15], [inA, P.r1 + 1, 0]]
+    : [gate, [inA, E, 0]];
+  const leave: [number, number, number][] = gr
+    ? [[outA, P.r1 + 1, 0], [P.av + 14, gr.cs - 1.5, 0.15], [P.ga - 12, gr.cs - 1.5, gate[2] * 0.9], [P.ga - 3, E - 3, gate[2]], gate]
+    : [[outA, E, 0], gate];
+  const back: [number, number, number][] = [[P.aUg + 30, P.thru, 0], [P.aUg - P.R, P.thru, 0], [P.aUg - P.R, P.ret1, 0], [outA, P.ret1, 0], ...leave];
+  if (kind === 'arrCar' || kind === 'arrTaxi' || kind === 'arrBus' || kind === 'park') {
+    const lane = kind === 'arrCar' ? P.curb : P.bay;
+    const s = Math.max(P.aUg + 70, Math.min(L.viaduct.a1 - 30, stopA));
+    const head: [number, number, number][] = [...enter, [inA, P.thru, 0]];
+    if (kind !== 'park') return { pts: [...head, [s + 40, P.thru, 0], [s + 20, lane, 0], [s - 20, lane, 0], [s - 40, P.thru, 0], ...back], stop: s, level: 0 };
+    // 駐車場へ：U ターンして戻りの道から分かれて入る
+    const g = P.garages[0];
+    const u: [number, number, number][] = [...head, [P.aUg - P.R, P.thru, 0], [P.aUg - P.R, P.ret1, 0]];
+    if (!g) return { pts: [...u, [outA, P.ret1, 0], ...leave], stop: null, level: 0 };
+    return { pts: [...u, [g.spur[0][0] - 20, P.ret2, 0], ...g.spur], stop: null, level: 0 };
+  }
+  if (kind === 'unpark') {
+    const g = P.garages[0];
+    if (!g) return { pts: [[outA, P.ret1, 0], ...leave], stop: null, level: 0 };
+    const sp = [...g.spur].reverse();
+    // 大通りより先の駐車場（小・中）：分かれ道を戻って大通りへ。戻りの外側（大）：戻りの道へ出て大通りへ
+    const pts: [number, number, number][] = g.r.a0 > P.ga
+      ? [sp[0], sp[1], [outA, P.r1 + 3, 0], ...leave.slice(gr ? 1 : 0)]
+      : [sp[0], sp[1], [sp[1][0] + 10, P.ret1, 0], [outA, P.ret1, 0], ...leave];
+    return { pts, stop: null, level: 0 };
+  }
+  // 出発：大通りから上りのランプで高架の車寄せへ。奥の U ターンも高架、戻りながら下りのランプで地上へ
+  const lane = kind === 'depCar' ? P.curb : P.bay;
+  const s = Math.max(L.viaduct.a0 + 40, Math.min(L.viaduct.a1 - 40, stopA));
+  const pts: [number, number, number][] = [
+    ...enter, [inA, P.bay, 0], [P.upA[0], P.bay, 0], [P.upA[1], P.bay, h],
+    [s + 30, P.bay, h], [s + 15, lane, h], [s - 15, lane, h], [s - 35, P.thru, h],
+    [P.aUe - P.R, P.thru, h], [P.aUe - P.R, P.ret1, h], [P.downA[0], P.ret1, h], [P.downA[1], P.ret1, 0], [outA, P.ret1, 0], ...leave,
+  ];
+  return { pts, stop: s, level: 1 };
+}
+// シミュレーションの車の経路で使う、ループの代表の点（land の座標と階：0 = 地上、1 = 高架）
+export function loopNodes(L: AirportLayout) {
+  const P = landLoop(L), term = L.buildings.find((b) => b.kind === 'terminal')!.r;
+  void P.av;
+  return {
+    depRamp: [P.upA[1], P.bay, 1], depCurb: [0, P.curb, 1], depU: [P.aUe - P.R, (P.thru + P.ret1) / 2, 1],
+    arrCurb: [0, P.thru, 0], arrU: [P.aUg - P.R, (P.thru + P.ret1) / 2, 0], ret: [(P.aUg + P.ga) / 2, P.ret1, 0],
+    term: [-24, (term.c0 + term.c1) / 2, 0],
+  } as Record<'depRamp' | 'depCurb' | 'depU' | 'arrCurb' | 'arrU' | 'ret' | 'term', [number, number, number]>;
+}
+
+// 正門・通用門の、敷地の座標でのふちの点と外向きの向き
+export function gatePoints(L: AirportLayout) {
+  const [ma, mc] = landToLot(L, L.gate, L.land.edge);
+  const co = Math.cos(L.land.rot), si = Math.sin(L.land.rot);
+  const s = L.svcGate;
+  return { main: { a: ma, c: mc, na: -si, nc: co }, svc: { a: s.a, c: s.c, na: s.na, nc: s.nc } };
+}
+// 門のマス：敷地のふちのすぐ外のマス。d = 外へ向かう向き（DX/DY の番号。斜めの敷地では斜め）。
+// 道路・都市高速は、外から d の逆向きに引いてきて、このマスで終わらせる（このマスに道路があればつながる）
+export interface GateCell { cell: number; d: number; inner: number; x: number; y: number }
+function gateCellAt(n: number, f: AirFrame, a: number, c: number, na: number, nc: number, inLot: (i: number) => boolean): GateCell | null {
+  const wx = na * f.cos - nc * f.sin, wz = na * f.sin + nc * f.cos, m = Math.max(Math.abs(wx), Math.abs(wz));
+  const dx = Math.round(wx / m), dy = Math.round(wz / m);
+  let d = 0;
+  for (let k = 0; k < 8; k++) if (DX[k] === dx && DY[k] === dy) d = k;
+  const [X, Z] = toWorld(f, a - na * 4, c - nc * 4);
+  let x = Math.floor(X / CELL), y = Math.floor(Z / CELL);
+  for (let k = 0; k < 6 && x >= 0 && y >= 0 && x < n && y < n && inLot(y * n + x); k++) { x += dx; y += dy; }
+  if (x < 0 || y < 0 || x >= n || y >= n || inLot(y * n + x)) return null;
+  const ix = x - dx, iy = y - dy;
+  return { cell: y * n + x, d, inner: iy * n + ix, x, y };
+}
+
 export interface AirPorts {
   stationCells: number[]; // 空港駅の範囲の敷地のマス
   stationNear: number[]; // 線路を接して引くマス（空港駅の範囲のまわりの、敷地の外のマス）
-  highwayNear: number[]; // 高速道路が接していればよいマス（陸側の、敷地の外のマス）
+  gate: GateCell | null; // 正門（都市高速・一般道）
+  svc: GateCell | null; // 通用門（一般道）
 }
 export function airportPorts(n: number, f: AirFrame, L: AirportLayout, cells: number[], inLot: (i: number) => boolean): AirPorts {
-  const stationCells: number[] = [], st = new Set<number>(), hw = new Set<number>();
+  const stationCells: number[] = [], st = new Set<number>();
   for (const i of cells) {
     const [a, c] = cellLocal(f, n, i);
-    const sp = inRect(L.stationPort, a, c);
-    if (sp) stationCells.push(i);
-    const land = inRect(L.highwayPort, a, c);
-    if (!sp && !land) continue;
+    if (!inRect(L.stationPort, a, c)) continue;
+    stationCells.push(i);
     const x = i % n, y = (i / n) | 0;
     for (let d = 0; d < 8; d++) {
       const qx = x + DX[d], qy = y + DY[d];
       if (qx < 0 || qy < 0 || qx >= n || qy >= n) continue;
       const j = qy * n + qx;
-      if (inLot(j)) continue;
-      if (sp) st.add(j);
-      if (land) hw.add(j);
+      if (!inLot(j)) st.add(j);
     }
   }
-  return { stationCells, stationNear: [...st], highwayNear: [...hw] };
+  const G = gatePoints(L);
+  const gate = gateCellAt(n, f, G.main.a, G.main.c, G.main.na, G.main.nc, inLot);
+  const svc = gateCellAt(n, f, G.svc.a, G.svc.c, G.svc.na, G.svc.nc, inLot);
+  return { stationCells, stationNear: [...st], gate, svc };
 }
 
 // 空港駅につながっている線の種類と、その線路のマス
@@ -535,16 +667,31 @@ export function stationLines(g: Grid, P: AirPorts): Map<LineKind, number[]> {
   return out;
 }
 
-// 敷地に接している高速道路のノード（車の経路のノード番号：地上 = マス、上空 = N + マス）
-// 空港専用ランプでつなげるのは都市高速だけ（高架・地上、片側 1 車線・一方通行 2 車線）。ふつうの高速道路はつながない
-export const isUrbanHw = (t: number) => isUrbanElevated(t) || isUrbanGround(t);
-export function highwayNodes(g: Grid, P: AirPorts): number[] {
-  const N = g.n * g.n, out: number[] = [];
-  for (const i of P.highwayNear) {
-    if (isUrbanHw(g.road[i])) out.push(i);
-    if (isUrbanHw(g.up[i])) out.push(N + i);
+// 空港の門のマス（正門・通用門）の一覧：建物の一覧から（道路を引くときの端の寄せ方に使う）
+export function airportGateCells(n: number, list: Iterable<{ x: number; y: number; w: number; h: number; face: number; size: AirportSize }>): Set<number> {
+  const out = new Set<number>();
+  for (const b of list) {
+    const spec = AIRPORT_SPECS[b.size], cells = airportCells(n, b, spec), lot = new Set(cells);
+    const P = airportPorts(n, frameOf(b, spec), airportLayout(b.size), cells, (i) => lot.has(i));
+    if (P.gate) out.add(P.gate.cell);
+    if (P.svc) out.add(P.svc.cell);
   }
   return out;
+}
+
+// 門につながっている道路（車の経路のノード番号：地上 = マス、上空 = N + マス）。
+// 正門：都市高速（高架・地上、片側 1 車線・一方通行 2 車線）か一般道（細い道・道路・一方通行・大通り）。ふつうの高速道路はつながない。
+// 通用門：一般道だけ
+export const isUrbanHw = (t: number) => isUrbanElevated(t) || isUrbanGround(t);
+export const isLocalRoadType = (t: number) => t !== 0 && !isHighway(t) && t !== RoadType.Ramp;
+export interface GateLink { node: number; kind: 'hw' | 'road' }
+export function gateLink(g: Grid, gc: GateCell | null, main: boolean): GateLink | null {
+  if (!gc) return null;
+  const i = gc.cell, N = g.n * g.n;
+  if (main && isUrbanHw(g.up[i])) return { node: N + i, kind: 'hw' };
+  if (main && isUrbanHw(g.road[i])) return { node: i, kind: 'hw' };
+  if (isLocalRoadType(g.road[i])) return { node: i, kind: 'road' };
+  return null;
 }
 
 // ---- 置く場所の計画 ----
@@ -572,7 +719,6 @@ export interface AirPlan {
 // 埋め立ての費用（1マス）と岸壁（1マス）。地形の埋め立てのツールと同じ値（plan.ts の RECLAIM_COST・QUAY_COST[1]）
 export const AIR_RECLAIM_COST = 400;
 export const AIR_QUAY_COST = 150;
-const localRoad = (t: number) => t !== 0 && !isHighway(t) && t !== RoadType.Ramp;
 export function planAirport(g: Grid, size: AirportSize, tx: number, ty: number, rot: number): AirPlan {
   const n = g.n, spec = AIRPORT_SPECS[size];
   rot &= 7;
@@ -620,21 +766,7 @@ export function planAirport(g: Grid, size: AirportSize, tx: number, ty: number, 
   let reason = '';
   if (fp.out) reason = 'マップに入りきりません';
   else if (bad.size) reason = [...new Set(bad.values())].join('・') + '（赤いマス）';
-  else {
-    // ほかの公共施設と同じく、敷地のまわりに一般道が必要
-    let road = false;
-    for (const i of fp.cells) {
-      const x = i % n, y = (i / n) | 0;
-      for (let d = 0; d < 8 && !road; d++) {
-        const qx = x + DX[d], qy = y + DY[d];
-        if (qx < 0 || qy < 0 || qx >= n || qy >= n) continue;
-        const j = qy * n + qx;
-        if (!inLot[j] && localRoad(g.road[j])) road = true;
-      }
-      if (road) break;
-    }
-    if (!road) reason = '道路に接するように置いてください';
-  }
+  else if (!ports.gate) reason = 'マップに入りきりません（正門）';
   const cost = spec.cost + Math.round(earth * AIRPORT_EARTH_COST) + fill.length * AIR_RECLAIM_COST + quay.length * AIR_QUAY_COST;
   return { ok: !reason, size, rot, x: fp.x, y: fp.y, w: fp.w, h: fp.h, cx, cz, cells: fp.cells, bad, fill, quay, flatH, cost, reason, ports };
 }

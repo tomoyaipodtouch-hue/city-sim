@@ -41,6 +41,8 @@ export const JF = {
 
 export class Grid {
   readonly n: number;
+  // 空港の門のマス（保存しない。世界・画面がそれぞれ空港の一覧から作る）：道路の端をここへ引いたら、となりの行き止まりへ寄せない
+  gateCells: Set<number> = new Set();
   heights: Float32Array; // 頂点の高さ（(n+1)^2）
   road: Uint8Array; // 地上の道路の種類
   conn: Uint8Array; // 地上の道路の接続（8方向のビット）
