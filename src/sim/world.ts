@@ -2008,7 +2008,7 @@ export class World {
         const info = airInfo.get(b.id)!;
         const open = airOpen.includes(b);
         const filled = ra && open ? ra.filled.get(b.id) || 0 : 0;
-        let pax = filled * wf;
+        let pax = filled * wf * spec.draw; // 大きい空港ほど行き先が多く、同じ街から多くの人が使う
         // 隣の都市からの利用者：高速道路と直結し、高速道路が隣の都市へつながっている／鉄道がマップの端までつながっている
         const railOut = [...info.lines.entries()].some(([k, cells]) => (k === 'rail' || k === 'erail') && cells.some((c) => edge[c]));
         const hw = info.hw.length > 0;

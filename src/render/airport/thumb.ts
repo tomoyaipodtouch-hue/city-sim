@@ -5,18 +5,21 @@ import { buildAirportGeometry } from './geometry';
 import { AC, buildAircraft, LIVERIES } from './aircraft';
 
 // 切り取る範囲（敷地の座標、m）。絵の座標では (0, 0)〜(W, D)
-const WIN = { a0: -78, a1: 140, c0: -12, c1: 70 };
-export const AIRPORT_THUMB_CELLS = { w: (WIN.a1 - WIN.a0) / 16, h: (WIN.c1 - WIN.c0) / 16 };
+const WINS: Record<AirportSize, { a0: number; a1: number; c0: number; c1: number }> = {
+  1: { a0: -78, a1: 140, c0: -12, c1: 70 },
+  2: { a0: -215, a1: 120, c0: -10, c1: 112 },
+  3: { a0: -215, a1: 120, c0: -10, c1: 112 },
+};
+export const airportThumbCells = (size: AirportSize) => ({ w: (WINS[size].a1 - WINS[size].a0) / 16, h: (WINS[size].c1 - WINS[size].c0) / 16 });
 
 export function airportThumbModel(size: AirportSize): MeshBuilder {
-  const L = airportLayout(size);
+  const L = airportLayout(size), WIN = WINS[size];
   const f = makeFrame(AIRPORT_SPECS[size], 2, -WIN.a0, -WIN.c0);
   const geo = buildAirportGeometry(L, f, { cells: [], n: 1, base: 0, seed: 7, access: [], highway: null, lines: [] });
   const mb = geo.mb;
   // 駐機中の飛行機（機首がターミナルを向く）
-  const types = ['a220', 'atr', 'e190'] as const;
   L.stands.filter((s) => !s.cargo).forEach((st, k) => {
-    const t = types[k % 3];
+    const t = st.wide && L.wideTypes.length ? L.wideTypes[0] : L.types[(k * 2 + 1) % L.types.length];
     mb.setTransform(0, st.a - WIN.a0, 0.12, st.noseC - AC[t].len / 2 - WIN.c0);
     buildAircraft(mb, t, LIVERIES[(k * 2) % LIVERIES.length]);
   });

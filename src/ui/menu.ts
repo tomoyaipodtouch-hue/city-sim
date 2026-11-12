@@ -222,7 +222,7 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { title: '地下鉄', items: [line('sub', '地下鉄の線路', 'sub'), civ('sub_station')] },
       { title: 'フェリー・港', items: [civ('ferry_p'), civ('ferry_c'), civ('seaport'), civ('seaport_l')] },
       // 以前の空港（airport_s・airport_l）はメニューから外した（保存データの空港はそのまま動く）
-      { title: '空港', items: [civ('airport_1', undefined, { thumb: { k: 'airport', size: 1 }, hint: '斜め・海上も可' })] },
+      { title: '空港', items: [civ('airport_1', undefined, { thumb: { k: 'airport', size: 1 }, hint: '斜め・海上も可' }), civ('airport_2', undefined, { thumb: { k: 'airport', size: 2 }, hint: '斜め・海上も可' })] },
     ],
   },
   {

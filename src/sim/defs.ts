@@ -199,7 +199,7 @@ export const GARBAGE_PER_RES = 0.9;
 export const GARBAGE_PER_JOB = 0.6;
 
 export type CivicId = 'coal' | 'gas' | 'oil' | 'nuclear' | 'nuclear_in' | 'nuclear_sea' | 'wind' | 'solar' | 'pump' | 'tower' | 'water_plant' | 'desal' | 'incinerator_l' | 'seaport_l' | 'park_s' | 'park_l' | 'plaza' | 'playground' | 'greenway' | 'sports' | 'garden' | 'cpark_a' | 'cpark_b' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station'
-  | 'ferry_p' | 'ferry_c' | 'seaport' | 'airport_s' | 'airport_l' | 'airport_1' | 'freight_st'
+  | 'ferry_p' | 'ferry_c' | 'seaport' | 'airport_s' | 'airport_l' | 'airport_1' | 'airport_2' | 'freight_st'
   | 'police_s' | 'police_l' | 'fire_s' | 'fire_l' | 'clinic' | 'hospital' | 'school_e' | 'school_h' | 'college' | 'library'
   | 'landfill' | 'incinerator' | 'recycling' | 'cemetery' | 'crematorium'
   | 'mayor_house' | 'city_hall' | 'statue' | 'museum' | 'stadium' | 'future_stadium' | 'ciq';
@@ -275,6 +275,10 @@ export const CIVIC: Record<CivicId, CivicDef> = {
   airport_1: {
     id: 'airport_1', name: '空港（小）', w: 12, h: 60, cost: 80000, upkeep: 650, airfield: 1, pollution: 5,
     desc: '街なかの小さな空港（滑走路 800m）。商業とオフィスの需要が上がり、着陸料の収入がある。駅や高速道路とつなぐと利用者が増える。滑走路の先は騒音で地価が下がる。斜めにも、海の上にも置ける',
+  },
+  airport_2: {
+    id: 'airport_2', name: '空港（中）', w: 18, h: 85, cost: 300000, upkeep: 1500, airfield: 2, pollution: 9,
+    desc: '地方の中心の空港（滑走路 1,200m、平行誘導路と高速脱出誘導路、搭乗橋 8 か所）。大きな旅客機と貨物機が飛ぶ。商業とオフィスの需要が大きく上がる。大きな街ほど黒字になる。駅や高速道路とつなぐと利用者が増える。斜めにも、海の上にも置ける',
   },
   police_s: { id: 'police_s', name: '交番', w: 1, h: 1, cost: 800, upkeep: 60, service: 'police', radius: 9, desc: '周りの犯罪を減らす（小さな範囲）' },
   police_l: { id: 'police_l', name: '警察署', w: 3, h: 2, cost: 5000, upkeep: 260, service: 'police', radius: 20, desc: '広い範囲の犯罪を減らす' },

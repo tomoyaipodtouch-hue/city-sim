@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { MeshBuilder, PAT } from '../builder';
 import { MAT } from '../textures';
 import { CELL } from '../../sim/constants';
-import { AirFrame, AirportLayout, LRect, rotAngle, runwayNumber } from '../../sim/airport';
+import { AcKind, AirFrame, AirportLayout, LRect, rotAngle, runwayNumber } from '../../sim/airport';
 import type { TreeSpot } from '../buildingGen';
 import { buildAircraft, LIVERIES } from './aircraft';
 import { Rng } from '../../sim/rng';
@@ -145,24 +145,37 @@ export function buildAirportGeometry(L: AirportLayout, f: AirFrame, ctx: AirCtx)
   G(rw.a0, rc + hw - 1.2, rw.a1, rc + hw - 0.3, 0.14, COL.white);
   const numA = runwayNumber(f.cos, f.sin), numB = runwayNumber(-f.cos, -f.sin);
   for (const [end, dir, num] of [[rw.a0, 1, numA], [rw.a1, -1, numB]] as const) {
-    // 進入端の標識（ピアノキー）：幅 30m の滑走路は 8 本
-    for (const o of [2.7, 6.3, 9.9, 13.5]) for (const sd of [-1, 1]) G(end + dir * 6, rc + sd * o - 0.9, end + dir * 36, rc + sd * o + 0.9, 0.14, COL.white);
+    // 進入端の標識（ピアノキー）：幅 30m の滑走路は 8 本、45m は 12 本
+    const keys = rwW >= 45 ? [2.7, 6.3, 9.9, 13.5, 17.1, 20.7] : [2.7, 6.3, 9.9, 13.5];
+    for (const o of keys) for (const sd of [-1, 1]) G(end + dir * 6, rc + sd * o - 0.9, end + dir * 36, rc + sd * o + 0.9, 0.14, COL.white);
     // 滑走路の番号（高さ 9m）
     text(num, end + dir * 48, rc, 9, dir, 0.14, COL.white);
-    // 接地帯の標識（150m）と、目標点の標識（250m）
+    // 接地帯の標識（150m ごと）と、目標点の標識（滑走路 1,200m 以上は 300m、それより短いと 250m）
+    const len = rw.a1 - rw.a0, k = rwW / 30, aim = len >= 1200 ? 300 : 250;
     for (const sd of [-1, 1]) {
-      for (const o of [5.0, 8.4]) G(end + dir * 150, rc + sd * o - 0.9, end + dir * 172.5, rc + sd * o + 0.9, 0.14, COL.white);
-      G(end + dir * 250, rc + sd * 7.5 - 2, end + dir * 295, rc + sd * 7.5 + 2, 0.14, COL.white);
+      for (let z = 150; z < Math.min(len / 2, 600); z += 150) {
+        if (Math.abs(z - aim) < 60) continue;
+        for (const o of [5.0, 8.4]) G(end + dir * z, rc + sd * o * k - 0.9, end + dir * (z + 22.5), rc + sd * o * k + 0.9, 0.14, COL.white);
+      }
+      G(end + dir * aim, rc + sd * 7.5 * k - 2 * k, end + dir * (aim + 45), rc + sd * 7.5 * k + 2 * k, 0.14, COL.white);
     }
   }
   // 中心線（30m の線と 20m のすき間）
   for (let a = rw.a0 + 70; a + 30 <= rw.a1 - 70; a += 50) G(a, rc - 0.45, a + 30, rc + 0.45, 0.14, COL.white);
 
-  // ---- 平行誘導路と取付誘導路 ----
-  const tc = L.taxiC, tw = L.taxiW;
-  G(L.taxiA0 - tw / 2, tc - tw / 2, L.taxiA1 + tw / 2, tc + tw / 2, 0.1, COL.taxi);
+  // ---- 誘導路の網（平行誘導路・エプロンの誘導路・つなぎ）、取付誘導路、高速脱出誘導路 ----
+  const tc = L.taxiC, tw = L.taxiW, net = L.net;
+  const onApron = (a: number, c: number) => L.aprons.some((ap) => a > ap.a0 + 1 && a < ap.a1 - 1 && c > ap.c0 + 1 && c < ap.c1 - 1);
+  const isLink = (i: number, j: number) => rw.links.some((la) => Math.abs(net.nodes[i][0] - la) < 0.5 && Math.abs(net.nodes[j][0] - la) < 0.5 && Math.abs(net.nodes[i][1] - net.nodes[j][1]) > 0.5);
+  net.edges.forEach(([i, j], q) => {
+    if (isLink(i, j)) return;
+    const [a0, c0] = net.nodes[i], [a1, c1] = net.nodes[j], w = net.width[q];
+    const l = Math.hypot(a1 - a0, c1 - c0) || 1, ua = (a1 - a0) / l, uc = (c1 - c0) / l, e = w / 2;
+    if (!(onApron(a0, c0) && onApron(a1, c1))) pline([[a0 - ua * e, c0 - uc * e], [a1 + ua * e, c1 + uc * e]], w, 0.1, COL.taxi);
+    pline([[a0, c0], [a1, c1]], 0.3, 0.14, COL.yellow);
+  });
   for (const la of rw.links) {
-    G(la - tw / 2, rc + hw, la + tw / 2, tc - tw / 2, 0.1, COL.taxi);
+    G(la - tw / 2, rc + hw, la + tw / 2, tc + tw / 2, 0.1, COL.taxi);
     // 角を広げる（隅切り）
     for (const sd of [-1, 1]) {
       mb.matOverride = MAT.ground;
@@ -188,8 +201,19 @@ export function buildAirportGeometry(L: AirportLayout, f: AirFrame, ctx: AirCtx)
       mb.box(a - 1.4, 0.6, hc + 1.3, a + 1.4, 1.6, hc + 1.7, COL.red);
     }
   }
-  // 誘導路の中心線
-  G(L.taxiA0 + 14, tc - 0.15, L.taxiA1 - 14, tc + 0.15, 0.14, COL.yellow);
+  // 高速脱出誘導路：滑走路から斜めに平行誘導路へ。中心線は滑走路の中心線から分かれる
+  for (const e of rw.exits) {
+    if (!e.rapid) continue;
+    const [p0, p1, p2, p3] = e.pts;
+    pline([[p1[0] - e.dir * 10, p1[1]], p2, p3], tw, 0.1, COL.taxi);
+    pline([[p0[0], p0[1]], [p1[0], p1[1] + 0.5], [p2[0], p2[1]], p3], 0.3, 0.14, COL.yellow);
+    // 出口の案内灯（緑と黄色の交互、実際の規格）
+    const n = 10;
+    for (let k = 1; k < n; k++) {
+      const t = k / n, a = p1[0] + (p2[0] - p1[0]) * t, c = p1[1] + (p2[1] - p1[1]) * t;
+      light(a, 0.2, c, k % 2 && t < 0.5 ? [1.0, 0.8, 0.2] : LIGHT.txCl, 2.4);
+    }
+  }
 
   // ---- エプロン（駐機場）：コンクリート舗装と目地 ----
   for (const ap of L.aprons) {
@@ -199,14 +223,18 @@ export function buildAirportGeometry(L: AirportLayout, f: AirFrame, ctx: AirCtx)
   }
   // 誘導路とエプロンの境：エプロンの縁の線
   // 駐機スポット：誘導路の中心線から曲がって入る誘導線、停止線、番号、機材の置き場の赤い線
+  const lc = L.laneC;
   L.stands.forEach((st, k) => {
-    const sc0 = tc + 18;
-    pline([[st.a - 18, tc], ...arc(st.a - 18, tc + 18, 18, -Math.PI / 2, 0, 10), [st.a, st.noseC - 2]], 0.3, 0.14, COL.yellow);
-    pline([[st.a + 18, tc], ...arc(st.a + 18, tc + 18, 18, -Math.PI / 2, -Math.PI, 10), [st.a, sc0]], 0.3, 0.14, COL.yellow);
+    const R = st.wide ? 24 : 18, sc0 = lc + R;
+    pline([[st.a - R, lc], ...arc(st.a - R, lc + R, R, -Math.PI / 2, 0, 10), [st.a, st.noseC - 2]], 0.3, 0.14, COL.yellow);
+    pline([[st.a + R, lc], ...arc(st.a + R, lc + R, R, -Math.PI / 2, -Math.PI, 10), [st.a, sc0]], 0.3, 0.14, COL.yellow);
     G(st.a - 2.5, st.noseC - 0.3, st.a + 2.5, st.noseC + 0.3, 0.14, COL.white); // 停止線
     G(st.a - 0.6, st.noseC - 4.3, st.a + 0.6, st.noseC - 3.7, 0.14, COL.white); // 小さい機材の停止線
+    if (st.wide) G(st.a - 2.5, st.noseC - 2.3, st.a + 2.5, st.noseC - 1.7, 0.14, COL.white);
     text(String(k + 1), sc0 + 2, st.a + 4, 4, 1, 0.14, COL.yellow);
-    if (!st.cargo) for (const sd of [-1, 1]) G(st.a + sd * 22 - 0.15, tc + 10, st.a + sd * 22 + 0.15, st.noseC + 1, 0.14, COL.red);
+    // 機材を置く場所の赤い線（スポットの両わき）
+    const half = st.wide ? 32 : 22;
+    if (!st.cargo) for (const sd of [-1, 1]) G(st.a + sd * half - 0.15, lc + 10, st.a + sd * half + 0.15, st.noseC + 1, 0.14, COL.red);
   });
   // 構内道路（エプロンの、ターミナルの前）：白い縁と破線、乗客が歩く横断歩道
   {
@@ -214,7 +242,7 @@ export function buildAirportGeometry(L: AirportLayout, f: AirFrame, ctx: AirCtx)
     G(ap.a0, sv - 3.3, ap.a1, sv - 3.0, 0.14, COL.white);
     G(ap.a0, sv + 3.0, ap.a1, sv + 3.3, 0.14, COL.white);
     for (let a = ap.a0 + 2; a < ap.a1 - 3; a += 6) G(a, sv - 0.1, a + 3, sv + 0.1, 0.14, COL.white);
-    for (const st of L.stands) {
+    if (L.walk) for (const st of L.stands) {
       if (st.cargo) continue;
       for (let a = st.a + 4.5; a < st.a + 10.5; a += 1.2) G(a, sv - 3, a + 0.6, sv + 3, 0.141, COL.white);
     }
@@ -313,14 +341,14 @@ export function buildAirportGeometry(L: AirportLayout, f: AirFrame, ctx: AirCtx)
   // ---- 建物 ----
   for (const bd of L.buildings) {
     switch (bd.kind) {
-      case 'pier': pier(mb, bd.r, bd.h, rng); break;
+      case 'pier': pier(mb, bd.r, bd.h, rng, L); break;
       case 'terminal': terminal(mb, bd.r, bd.h, L, light); break;
       case 'tower': tower(mb, bd.r, bd.h, L, beacon); break;
       case 'hotel': hotel(mb, bd.r, bd.h, beacon); break;
       case 'office': office(mb, bd.r, bd.h, beacon); break;
       case 'carpark': carpark(mb, bd.r, bd.h, rng); break;
       case 'station': station(mb, bd.r, bd.h, L, ctx.lines); break;
-      case 'hangar': hangar(mb, bd.r, bd.h, beacon, light, (a, c, rot) => mb.setTransform(ang + rot, a * f.cos - c * f.sin + f.cx, base + 0.12, a * f.sin + c * f.cos + f.cz), () => mb.setTransform(ang, f.cx, base, f.cz)); break;
+      case 'hangar': hangar(mb, bd.r, bd.h, L.hangarType, beacon, light, (a, c, rot) => mb.setTransform(ang + rot, a * f.cos - c * f.sin + f.cx, base + 0.12, a * f.sin + c * f.cos + f.cz), () => mb.setTransform(ang, f.cx, base, f.cz)); break;
       case 'fuel': fuel(mb, bd.r); break;
       case 'fire': fireStation(mb, bd.r, bd.h); break;
       case 'cargo': cargo(mb, bd.r, bd.h, rng); break;
@@ -370,20 +398,27 @@ export function buildAirportGeometry(L: AirportLayout, f: AirFrame, ctx: AirCtx)
     out.centre.push({ idx: out.lights.length / 7, a });
     light(a, 0.25, rc, LIGHT.clWhite, 2.6);
   }
-  // 誘導路の縁（青、30m ごと）と中心線（緑、15m ごと）
-  for (let a = L.taxiA0; a <= L.taxiA1; a += 30) {
-    light(a, 0.4, tc - tw / 2 - 1, LIGHT.txEdge, 3);
-    const onApron = L.aprons.some((ap) => a > ap.a0 - 4 && a < ap.a1 + 4);
-    if (!onApron) light(a, 0.4, tc + tw / 2 + 1, LIGHT.txEdge, 3);
-  }
-  for (let a = L.taxiA0 + 15; a < L.taxiA1 - 7; a += 15) light(a, 0.2, tc, LIGHT.txCl, 2.4);
+  // 誘導路の縁（青、30m ごと。エプロンの上はなし）と中心線（緑、15m ごと）
+  net.edges.forEach(([i, j], q) => {
+    if (isLink(i, j)) return;
+    const [a0, c0] = net.nodes[i], [a1, c1] = net.nodes[j], w = net.width[q];
+    const l = Math.hypot(a1 - a0, c1 - c0) || 1, ua = (a1 - a0) / l, uc = (c1 - c0) / l;
+    for (let d = 7.5; d < l; d += 15) {
+      const a = a0 + ua * d, c = c0 + uc * d;
+      if (onApron(a, c)) continue;
+      light(a, 0.2, c, LIGHT.txCl, 2.4);
+      if ((Math.round(d / 15) & 1) === 0) for (const sd of [-1, 1]) {
+        const ea = a - uc * sd * (w / 2 + 1), ec = c + ua * sd * (w / 2 + 1);
+        if (!onApron(ea, ec)) light(ea, 0.4, ec, LIGHT.txEdge, 3);
+      }
+    }
+  });
   for (const la of rw.links) {
     for (let c = rc + hw + 6; c < tc - 6; c += 7) light(la, 0.2, c, LIGHT.txCl, 2.4);
     for (let c = rc + hw + 4; c < tc - tw / 2; c += 12) for (const sd of [-1, 1]) light(la + sd * (tw / 2 + 1), 0.4, c, LIGHT.txEdge, 3);
   }
   // エプロンの照明塔
-  const masts: [number, number][] = [[-110, 36.5], [-27.5, 36.5], [27.5, 36.5], [110, 36.5], [L.aprons[1].a0 + 4, L.aprons[1].c1 - 2], [L.aprons[2].a1 - 4, L.aprons[2].c1 - 2]];
-  for (const [a, c] of masts) {
+  for (const [a, c] of L.masts) {
     mb.cylinder(a, c, 0, 24, 0.35, 8, COL.steelDark, undefined, 0.22);
     mb.box(a - 2.2, 24, c - 0.6, a + 2.2, 25.4, c + 0.4, COL.steelDark);
     for (const o of [-1.5, 0, 1.5]) light(a + o, 24.6, c - 0.8, LIGHT.flood, 6);
@@ -404,10 +439,19 @@ function car(mb: MeshBuilder, a: number, y: number, c: number, rng: Rng, rot: nu
 }
 
 // 搭乗口の低い建物（ガラス）と、屋上の展望デッキ（人が飛行機を見ている）
-function pier(mb: MeshBuilder, r: LRect, h: number, rng: Rng) {
+function pier(mb: MeshBuilder, r: LRect, h: number, rng: Rng, L: AirportLayout) {
   mb.box(r.a0, 0, r.c0, r.a1, h, r.c1, COL.glass, PAT.terminal, COL.concrete);
   // 搭乗口のドア（エプロン側、スポットの前）
-  for (const a of [-48, 7, 62]) mb.box(a - 1.8, 0, r.c0 - 0.05, a + 1.8, 2.6, r.c0, C(0x2a2f36));
+  // 搭乗口のドア（歩いて乗る空港）と、搭乗橋の付け根（回転する円い部屋と、桟橋へつなぐ固定の通路）
+  for (const st of L.stands) {
+    if (st.cargo || st.a < r.a0 || st.a > r.a1) continue;
+    if (!st.rot) { if (L.walk) mb.box(st.a + 7 - 1.8, 0, r.c0 - 0.05, st.a + 7 + 1.8, 2.6, r.c0, C(0x2a2f36)); continue; }
+    const [ra, rcc] = st.rot;
+    mb.cylinder(ra, rcc, 0, 3.6, 0.55, 10, COL.steelDark);
+    mb.cylinder(ra, rcc, 3.6, 7.0, 2.3, 14, COL.steel, C(0xb8bcc0));
+    mb.box(ra - 1.6, 3.7, rcc, ra + 1.6, 6.7, r.c0, COL.glass, PAT.terminal, COL.steel);
+    mb.box(ra - 0.35, 0, r.c0 - 2.2, ra + 0.35, 3.7, r.c0 - 1.5, COL.steelDark);
+  }
   // デッキの床（木）とガラスの手すり
   mb.matOverride = MAT.siding;
   mb.box(r.a0 + 0.5, h, r.c0 + 0.3, r.a1 - 0.5, h + 0.15, r.c1, COL.wood);
@@ -498,9 +542,10 @@ function tower(mb: MeshBuilder, r: LRect, h: number, L: AirportLayout, beacon: (
   // 足もとの建物
   mb.box(r.a0, 0, r.c0, r.a1, h, r.c1, COL.office, PAT.ribbon, COL.concrete);
   const [ta, tcc, th] = L.tower;
-  const ring = (rad: number, n: number, rot = 0): [number, number][] => Array.from({ length: n }, (_, k) => [ta + Math.cos((k / n) * Math.PI * 2 + rot) * rad, tcc + Math.sin((k / n) * Math.PI * 2 + rot) * rad]);
+  const k = th / 46; // 大きい空港ほど太く大きな管制室
+  const ring0 = (rad: number, n: number, rot = 0): [number, number][] => Array.from({ length: n }, (_, q) => [ta + Math.cos((q / n) * Math.PI * 2 + rot) * rad * k, tcc + Math.sin((q / n) * Math.PI * 2 + rot) * rad * k]);
   // 塔（下が太い）
-  mb.prism(ring(3.4, 16), h, th - 8, COL.towerWhite, PAT.none, null, ring(2.5, 16));
+  mb.prism(ring0(3.4, 16), h, th - 8, COL.towerWhite, PAT.none, null, ring0(2.5, 16));
   // 帆の壁（塔の陸側）
   mb.prism([[ta - 0.4, tcc + 2.6], [ta + 0.4, tcc + 2.6], [ta + 0.4, tcc + 9], [ta - 0.4, tcc + 9]], h, h + 2, COL.towerWhite, PAT.none, null);
   {
@@ -511,17 +556,17 @@ function tower(mb: MeshBuilder, r: LRect, h: number, L: AirportLayout, beacon: (
     mb.quad(p(ta - sd, h, tcc + 9), p(ta + sd, h, tcc + 9), p(ta + sd, th - 14, tcc + 4.5), p(ta - sd, th - 14, tcc + 4.5), COL.towerWhite);
   }
   // 機械室（暗い帯）と、外へ傾いたガラスの管制室
-  mb.prism(ring(4.6, 8, Math.PI / 8), th - 8, th - 5.5, COL.steelDark, PAT.none, COL.concrete, ring(5.2, 8, Math.PI / 8));
-  mb.prism(ring(5.2, 8, Math.PI / 8), th - 5.5, th, COL.cabGlass, PAT.fullglass, null, ring(6.6, 8, Math.PI / 8));
+  mb.prism(ring0(4.6, 8, Math.PI / 8), th - 8, th - 5.5, COL.steelDark, PAT.none, COL.concrete, ring0(5.2, 8, Math.PI / 8));
+  mb.prism(ring0(5.2, 8, Math.PI / 8), th - 5.5, th, COL.cabGlass, PAT.fullglass, null, ring0(6.6, 8, Math.PI / 8));
   // 屋根（張り出す）とアンテナ
-  mb.prism(ring(7.4, 8, Math.PI / 8), th, th + 0.8, COL.towerWhite, PAT.none, COL.concrete);
+  mb.prism(ring0(7.4, 8, Math.PI / 8), th, th + 0.8, COL.towerWhite, PAT.none, COL.concrete);
   mb.box(ta - 0.25, th + 0.8, tcc - 0.25, ta + 0.25, th + 7, tcc + 0.25, COL.steelDark);
   mb.box(ta + 2, th + 0.8, tcc - 0.15, ta + 2.3, th + 4, tcc + 0.15, COL.steelDark);
   // 夜の管制室のうす明かり（光る帯）
-  mb.prism(ring(5.0, 8, Math.PI / 8), th - 5.4, th - 5.0, C(0x7fb3a0), PAT.glow, null);
+  mb.prism(ring0(5.0, 8, Math.PI / 8), th - 5.4, th - 5.0, C(0x7fb3a0), PAT.glow, null);
   beacon(ta, th + 7.2, tcc);
-  beacon(ta + 7.3, th + 0.9, tcc);
-  beacon(ta - 7.3, th + 0.9, tcc);
+  beacon(ta + 7.3 * k, th + 0.9, tcc);
+  beacon(ta - 7.3 * k, th + 0.9, tcc);
 }
 
 // 空港ホテル：低層部はガラス、上はブロンズのカーテンウォール。屋上に光る帯と障害灯
@@ -576,14 +621,15 @@ function station(mb: MeshBuilder, r: LRect, h: number, L: AirportLayout, lines: 
   mb.box(r.a0 + 2, py + h + 0.4, r.c0 + 5, r.a1 - 2, py + h + 0.5, r.c0 + 7, C(0x8fb3c8));
   // 駅舎（真ん中）と、ターミナルへの渡り廊下
   mb.box(-16, 0, r.c0 - 1, 16, py + h + 3, r.c0 + 4, COL.glass, PAT.terminal, COL.concrete);
-  mb.box(-5, 9.5, L.buildings[1].r.c1, 5, 12.5, r.c0 - 1, COL.glass, PAT.terminal, COL.steel);
-  for (const c of [L.roadC[0] + 1, L.roadC[1] - 1]) mb.box(-0.4, 0, c - 0.4, 0.4, 9.5, c + 0.4, COL.steel);
+  const term = L.buildings.find((b) => b.kind === 'terminal')!;
+  mb.box(-5, 11.5, term.r.c1, 5, 14.5, r.c0 - 1, COL.glass, PAT.terminal, COL.steel);
+  for (const c of [L.roadC[0] + 1, L.roadC[1] - 1]) mb.box(-0.4, 0, c - 0.4, 0.4, 11.5, c + 0.4, COL.steel);
   // 駅名の看板（光る帯）
   mb.box(-12, py + h + 1.2, r.c0 - 1.05, 12, py + h + 2.4, r.c0 - 0.95, C(0x2a6fb5), PAT.glow);
 }
 
 // 格納庫：かまぼこ形の屋根、エプロン側の大きな扉は開いていて、中に整備中の機体
-function hangar(mb: MeshBuilder, r: LRect, h: number, beacon: (a: number, y: number, c: number) => void, light: (a: number, y: number, c: number, col: readonly number[], s: number) => void, at: (a: number, c: number, rot: number) => void, back: () => void) {
+function hangar(mb: MeshBuilder, r: LRect, h: number, type: AcKind, beacon: (a: number, y: number, c: number) => void, light: (a: number, y: number, c: number, col: readonly number[], s: number) => void, at: (a: number, c: number, rot: number) => void, back: () => void) {
   const wh = h - 5, NA = 12;
   const ca = r.c0, cb = r.c1;
   // 床と奥の壁、横の壁
@@ -607,7 +653,7 @@ function hangar(mb: MeshBuilder, r: LRect, h: number, beacon: (a: number, y: num
   const am = (r.a0 + r.a1) / 2, cm = (ca + cb) / 2 + 2;
   // 機首が -c（エプロン）を向く
   at(am, cm, Math.PI);
-  buildAircraft(mb, 'a220', LIVERIES[0]);
+  buildAircraft(mb, type, LIVERIES[0]);
   back();
   // 作業台と道具
   mb.box(am - 3, 0.1, cm + 8, am + 3, 3.2, cm + 10, C(0xf2c230));

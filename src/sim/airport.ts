@@ -27,11 +27,12 @@ export interface AirportSpec {
   freightShare: number; // ハイテク産業の貨物のうち、空港へ運ぶ割合
   noiseLen: number; // 騒音の範囲：滑走路の端から先へのびる長さ（m）
   noiseWidth: number; // 騒音の範囲：滑走路の中心線からの横の幅（m）
+  draw: number; // 行き先（便の多さ）による利用者の集まりやすさ（小 = 1）。大きい空港ほど、同じ街から多くの人が使う
 }
 export const AIRPORT_SPECS: Record<AirportSize, AirportSpec> = {
-  1: { size: 1, L: 60, W: 12, cost: 80000, upkeep: 650, pollution: 5, boost: 0.15, paxCap: 1600, paxPerFlight: 55, maxAircraft: 3, freightShare: 0.25, noiseLen: 1300, noiseWidth: 230 },
-  2: { size: 2, L: 85, W: 18, cost: 300000, upkeep: 2200, pollution: 9, boost: 0.25, paxCap: 6000, paxPerFlight: 120, maxAircraft: 6, freightShare: 0.5, noiseLen: 2000, noiseWidth: 320 },
-  3: { size: 3, L: 100, W: 40, cost: 1000000, upkeep: 7000, pollution: 14, boost: 0.35, paxCap: 20000, paxPerFlight: 180, maxAircraft: 12, freightShare: 0.65, noiseLen: 2600, noiseWidth: 420 },
+  1: { size: 1, L: 60, W: 12, cost: 80000, upkeep: 650, pollution: 5, boost: 0.15, paxCap: 1600, paxPerFlight: 55, maxAircraft: 3, freightShare: 0.25, noiseLen: 1300, noiseWidth: 230, draw: 1 },
+  2: { size: 2, L: 85, W: 18, cost: 300000, upkeep: 1500, pollution: 9, boost: 0.25, paxCap: 6000, paxPerFlight: 120, maxAircraft: 6, freightShare: 0.35, noiseLen: 2000, noiseWidth: 320, draw: 2.5 },
+  3: { size: 3, L: 100, W: 40, cost: 1000000, upkeep: 7000, pollution: 14, boost: 0.35, paxCap: 20000, paxPerFlight: 180, maxAircraft: 12, freightShare: 0.65, noiseLen: 2600, noiseWidth: 420, draw: 5 },
 };
 
 // 利用者・貨物・収入の計算に使う値（world.ts）
@@ -149,78 +150,127 @@ export function airportCells(n: number, b: { x: number; y: number; w: number; h:
 }
 
 // ---- 空港の配置（敷地の座標、m） ----
+// 小・中・大の共通の形：滑走路、誘導路の網（ノードと辺）、出口（取付誘導路・高速脱出誘導路）、駐機スポット、建物の区画、陸側の道路と駅。
+// 飛行機の動き（render/airport/ops.ts）と形（geometry.ts）はこの表だけを見る
 export interface LRect { a0: number; c0: number; a1: number; c1: number }
+// 滑走路から誘導路へ出る道（着陸した飛行機）。dir = 着陸の向き、pts = 滑走路の上の曲がりはじめから、止まる場所（node）まで
+export interface ExitDef { dir: 1 | -1; a: number; pts: [number, number][]; node: number; speed: number; rapid: boolean }
 export interface RunwayDef {
   c: number; // 中心線
   a0: number; // 両端
   a1: number;
   width: number;
-  links: number[]; // 誘導路とつなぐ取付誘導路の位置（a）
+  links: number[]; // 両端の取付誘導路の位置（a。[西, 東]）
   holdC: number; // 停止位置（c）
+  hold: [number, number]; // 停止位置のノード（両端：a0 側、a1 側）
+  junction: [number, number]; // 取付誘導路と平行誘導路の交わるノード（両端）
+  exits: ExitDef[];
+  td: number; // 滑走路の端から接地点まで（m）
 }
 export interface StandDef {
   a: number; // 駐機スポットの中心線（a）
   noseC: number; // 機首が止まる位置（c）
   cargo: boolean;
+  wide: boolean; // ワイドボディが入れる
+  bridge: boolean; // 搭乗橋がある
+  node: number; // 誘導路の網の、スポットの入口のノード
+  rot?: [number, number]; // 搭乗橋の回転する付け根（a, c）
+}
+export interface TaxiNet {
+  nodes: [number, number][];
+  edges: [number, number][];
+  width: number[]; // 辺ごとの幅（m）
 }
 export type AirBldKind = 'terminal' | 'pier' | 'tower' | 'hotel' | 'office' | 'carpark' | 'station' | 'hangar' | 'fuel' | 'fire' | 'cargo';
 export interface AirBld { kind: AirBldKind; r: LRect; h: number }
+export type AcKind = 'atr' | 'a220' | 'e190' | 'a320' | 'b737' | 'b787';
 export interface AirportLayout {
   spec: AirportSpec;
   A: number;
   C: number;
   runways: RunwayDef[];
+  net: TaxiNet;
   taxiC: number; // 平行誘導路の中心線（c）
   taxiW: number;
-  taxiA0: number; // 平行誘導路の両端（a）
-  taxiA1: number;
+  laneC: number; // エプロンの誘導路（駐機スポットの前）
   aprons: LRect[];
   stands: StandDef[];
+  types: AcKind[]; // 旅客便の機材（重みは並べた回数）
+  wideTypes: AcKind[]; // ワイドボディのスポットだけに入る機材
+  cargoTypes: AcKind[];
+  walk: boolean; // 乗客が歩いて乗る（搭乗橋なし）
   serviceC: number; // エプロンの構内道路（c）
   depot: [number, number]; // 地上の車両の車庫（a, c）
   buildings: AirBld[];
   roadC: [number, number]; // 陸側の道路（c の範囲）
-  roadA: [number, number];
   viaduct: { a0: number; a1: number; c0: number; c1: number; h: number; ramp: number }; // 高架の出発ロビー前の道路
-  station: LRect; // 空港駅（線路をつなぐ所）
+  station: LRect; // 空港駅のホーム
   stationPort: LRect; // 線路が接していればよい範囲（敷地のマスの中心が入る範囲）
   highwayC: number; // 高速道路の出入口：この c より陸側の敷地のマスに接する高速道路
   tower: [number, number, number]; // 管制塔（a, c, 高さ）
+  masts: [number, number][]; // エプロンの照明塔
   glide: number; // 進入角（度）
+  hangarType: AcKind; // 格納庫の中の機体
 }
 
 const layouts = new Map<AirportSize, AirportLayout>();
 export function airportLayout(size: AirportSize): AirportLayout {
   let L = layouts.get(size);
-  if (!L) layouts.set(size, (L = makeLayout(AIRPORT_SPECS[size])));
+  if (!L) layouts.set(size, (L = size === 1 ? layoutS(AIRPORT_SPECS[1]) : layoutM(AIRPORT_SPECS[size])));
   return L;
 }
 
+// 誘導路の網を組み立てる道具
+function netBuilder() {
+  const net: TaxiNet = { nodes: [], edges: [], width: [] };
+  const node = (a: number, c: number) => {
+    const k = net.nodes.findIndex(([x, y]) => Math.abs(x - a) < 0.01 && Math.abs(y - c) < 0.01);
+    if (k >= 0) return k;
+    net.nodes.push([a, c]);
+    return net.nodes.length - 1;
+  };
+  const edge = (i: number, j: number, w: number) => { net.edges.push([i, j]); net.width.push(w); };
+  // 同じ c の上の点を、a の順につなぐ
+  const line = (c: number, as: number[], w: number) => {
+    const ks = [...new Set(as)].sort((x, y) => x - y).map((a) => node(a, c));
+    for (let k = 0; k + 1 < ks.length; k++) edge(ks[k], ks[k + 1], w);
+    return ks;
+  };
+  return { net, node, edge, line };
+}
+
 // 小：ロンドン・シティ空港のような街なかの空港。滑走路 800m（建物が少しデフォルメなので短め）、搭乗橋なしで歩いて乗る
-function makeLayout(spec: AirportSpec): AirportLayout {
+function layoutS(spec: AirportSpec): AirportLayout {
   const A = spec.L * CELL, C = spec.W * CELL;
-  // ここでは「小」の配置を作る（中・大は同じ形の表を作る関数を足す）
   const rwLen = 800, rwW = 30, rc = -C / 2 + 30;
   const taxiC = -22, taxiW = 15;
   const linkA = rwLen / 2 - 15;
-  const runway: RunwayDef = { c: rc, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC: rc + rwW / 2 + 9 };
-  const apronC0 = taxiC + taxiW / 2;
+  const holdC = rc + rwW / 2 + 9, clearC = taxiC - 13;
+  const standAs = [-55, 0, 55, 285];
+  const { net, node, edge, line } = netBuilder();
+  line(taxiC, [-linkA, ...standAs, linkA], taxiW);
+  const J = [node(-linkA, taxiC), node(linkA, taxiC)] as [number, number];
+  const H = [node(-linkA, holdC), node(linkA, holdC)] as [number, number];
+  const Cl = [node(-linkA, clearC), node(linkA, clearC)];
+  for (let k = 0; k < 2; k++) { edge(H[k], Cl[k], taxiW); edge(Cl[k], J[k], taxiW); }
+  const exits: ExitDef[] = [1, -1].map((dir) => {
+    const far = dir > 0 ? linkA : -linkA, k = dir > 0 ? 1 : 0;
+    return { dir: dir as 1 | -1, a: far - dir * 30, pts: [[far - dir * 30, rc], [far, rc], [far, clearC]], node: Cl[k], speed: 11, rapid: false };
+  });
+  const runway: RunwayDef = { c: rc, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC, hold: H, junction: J, exits, td: 120 };
+  const stands: StandDef[] = standAs.map((a, k) => ({ a, noseC: k === 3 ? 16 : 27, cargo: k === 3, wide: false, bridge: false, node: node(a, taxiC) }));
   return {
     spec, A, C,
-    runways: [runway],
-    taxiC, taxiW, taxiA0: -linkA, taxiA1: linkA,
+    runways: [runway], net,
+    taxiC, taxiW, laneC: taxiC,
     aprons: [
-      { a0: -150, c0: apronC0, a1: 150, c1: 38 }, // 旅客ターミナルの前
-      { a0: 235, c0: apronC0, a1: 335, c1: 24 }, // 貨物
-      { a0: -372, c0: apronC0, a1: -282, c1: 10 }, // 格納庫の前
-      { a0: -258, c0: apronC0, a1: -200, c1: 4 }, // 消防署の前
+      { a0: -150, c0: taxiC + taxiW / 2, a1: 150, c1: 38 }, // 旅客ターミナルの前
+      { a0: 235, c0: taxiC + taxiW / 2, a1: 335, c1: 24 }, // 貨物
+      { a0: -372, c0: taxiC + taxiW / 2, a1: -282, c1: 10 }, // 格納庫の前
+      { a0: -258, c0: taxiC + taxiW / 2, a1: -200, c1: 4 }, // 消防署の前
     ],
-    stands: [
-      { a: -55, noseC: 27, cargo: false },
-      { a: 0, noseC: 27, cargo: false },
-      { a: 55, noseC: 27, cargo: false },
-      { a: 285, noseC: 16, cargo: true },
-    ],
+    stands,
+    types: ['atr', 'a220', 'e190'], wideTypes: [], cargoTypes: ['atr'], walk: true,
     serviceC: 32,
     depot: [118, 14],
     buildings: [
@@ -237,13 +287,91 @@ function makeLayout(spec: AirportSpec): AirportLayout {
       { kind: 'cargo', r: { a0: 240, c0: 26, a1: 334, c1: 64 }, h: 12 },
     ],
     roadC: [69, 83],
-    roadA: [-340, 340],
     viaduct: { a0: -92, a1: 92, c0: 67, c1: 77, h: 6.5, ramp: 62 },
     station: { a0: -66, c0: 85, a1: 66, c1: 95 },
     stationPort: { a0: -80, c0: 72, a1: 80, c1: C / 2 + 1 },
     highwayC: 30,
     tower: [118, 49, 46],
+    masts: [[-110, 36.5], [-27.5, 36.5], [27.5, 36.5], [110, 36.5], [239, 22], [-286, 8]],
     glide: 5.5,
+    hangarType: 'a220',
+  };
+}
+
+// 中：チューリッヒのような地方空港。滑走路 1,200m（幅 45m）、全長の平行誘導路と高速脱出誘導路、エプロンの誘導路、
+// 桟橋（ピア）に搭乗橋 8 か所（ワイドボディ 2）、バスで乗るスポット 2、貨物のスポット 2
+function layoutM(spec: AirportSpec): AirportLayout {
+  const A = spec.L * CELL, C = spec.W * CELL;
+  const rwLen = 1200, rwW = 45, rc = -116;
+  const taxiC = -56, taxiW = 20, laneC = -24;
+  const linkA = rwLen / 2 - 15;
+  const holdC = rc + rwW / 2 + 13.5;
+  const retA = 120, retJ = retA + (taxiC - rc) / Math.tan(Math.PI / 6);
+  const pier = { a0: -225, a1: 190, c0: 66, c1: 80 };
+  const stDefs: { a: number; wide?: boolean; bridge?: boolean; cargo?: boolean }[] = [
+    { a: -190, wide: true, bridge: true }, { a: -132, bridge: true }, { a: -86, bridge: true }, { a: -40, bridge: true },
+    { a: 6, bridge: true }, { a: 52, bridge: true }, { a: 98, bridge: true }, { a: 156, wide: true, bridge: true },
+    { a: 232 }, { a: 278 }, // バスで乗るスポット
+    { a: 425, wide: true, cargo: true }, { a: 505, cargo: true },
+  ];
+  const conns = [-300, -63, 330, 465];
+  const { net, node, edge, line } = netBuilder();
+  line(taxiC, [-linkA, -retJ, -retJ - 25, ...conns, retJ, retJ + 25, linkA], taxiW);
+  line(laneC, [conns[0], ...stDefs.map((s) => s.a), conns[1], conns[2], conns[3], 540], 18);
+  for (const a of conns) edge(node(a, taxiC), node(a, laneC), 18);
+  const J = [node(-linkA, taxiC), node(linkA, taxiC)] as [number, number];
+  const H = [node(-linkA, holdC), node(linkA, holdC)] as [number, number];
+  for (let k = 0; k < 2; k++) edge(H[k], J[k], taxiW);
+  const exits: ExitDef[] = [];
+  for (const dir of [1, -1] as const) {
+    const far = dir > 0 ? linkA : -linkA, k = dir > 0 ? 1 : 0;
+    // 高速脱出誘導路（30°）：接地からおよそ 600m で出る
+    const ra = dir * retA, rj = dir * retJ;
+    exits.push({ dir, a: ra - dir * 20, pts: [[ra - dir * 20, rc], [ra, rc], [rj, taxiC], [rj + dir * 25, taxiC]], node: node(rj + dir * 25, taxiC), speed: 22, rapid: true });
+    exits.push({ dir, a: far - dir * 40, pts: [[far - dir * 40, rc], [far, rc], [far, taxiC]], node: J[k], speed: 11, rapid: false });
+  }
+  const runway: RunwayDef = { c: rc, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC, hold: H, junction: J, exits, td: 160 };
+  const stands: StandDef[] = stDefs.map((s) => ({
+    a: s.a, noseC: s.cargo ? 30 : 58, cargo: !!s.cargo, wide: !!s.wide, bridge: !!s.bridge, node: node(s.a, laneC),
+    rot: s.bridge ? [s.a + (s.wide ? 26 : 19), 63] : undefined,
+  }));
+  return {
+    spec, A, C,
+    runways: [runway], net,
+    taxiC, taxiW, laneC,
+    aprons: [
+      { a0: -320, c0: taxiC + taxiW / 2, a1: 360, c1: 66 }, // ターミナルの前
+      { a0: 360, c0: taxiC + taxiW / 2, a1: 580, c1: 42 }, // 貨物
+      { a0: -650, c0: taxiC + taxiW / 2, a1: -490, c1: 4 }, // 整備地区
+      { a0: -470, c0: taxiC + taxiW / 2, a1: -380, c1: -6 }, // 消防署
+    ],
+    stands,
+    types: ['a320', 'a320', 'b737', 'b737', 'a320', 'e190', 'a220'], wideTypes: ['b787'], cargoTypes: ['b737', 'b787'], walk: false,
+    serviceC: 62.5,
+    depot: [-268, 30],
+    buildings: [
+      { kind: 'pier', r: pier, h: 9 },
+      { kind: 'terminal', r: { a0: -150, c0: 80, a1: 150, c1: 110 }, h: 16 },
+      { kind: 'tower', r: { a0: -470, c0: 70, a1: -400, c1: 108 }, h: 10 },
+      { kind: 'hotel', r: { a0: 380, c0: 66, a1: 440, c1: 108 }, h: 40 },
+      { kind: 'office', r: { a0: 450, c0: 74, a1: 500, c1: 108 }, h: 28 },
+      { kind: 'carpark', r: { a0: -340, c0: 84, a1: -180, c1: 108 }, h: 17 },
+      { kind: 'carpark', r: { a0: 190, c0: 84, a1: 350, c1: 108 }, h: 17 },
+      { kind: 'station', r: { a0: -95, c0: 131, a1: 95, c1: 143 }, h: 7 },
+      { kind: 'hangar', r: { a0: -640, c0: 4, a1: -500, c1: 84 }, h: 30 },
+      { kind: 'fuel', r: { a0: 520, c0: 70, a1: 610, c1: 108 }, h: 14 },
+      { kind: 'fire', r: { a0: -462, c0: -6, a1: -388, c1: 26 }, h: 9 },
+      { kind: 'cargo', r: { a0: 380, c0: 42, a1: 570, c1: 64 }, h: 14 },
+    ],
+    roadC: [112, 129],
+    viaduct: { a0: -160, a1: 160, c0: 110, c1: 121, h: 7, ramp: 75 },
+    station: { a0: -95, c0: 131, a1: 95, c1: 143 },
+    stationPort: { a0: -110, c0: 80, a1: 110, c1: C / 2 + 1 }, // 地下鉄はターミナルの下まで入れる
+    highwayC: 40,
+    tower: [-435, 89, 64],
+    masts: [[-250, 64], [-110, 64], [30, 64], [175, 64], [300, 64], [372, 40], [-495, 2]],
+    glide: 3.2,
+    hangarType: 'b787',
   };
 }
 

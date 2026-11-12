@@ -2,8 +2,8 @@
 // 停止位置 → 滑走路へ → 離陸滑走 → 上昇 → マップの外へ）、便の出し方（人口・利用者、深夜は少ない）、風向きによる滑走路の向きの入れ替え、
 // 駐機中の地上の車両（バス・給油車・荷物の車・トーイングカー）と歩いて乗り降りする人。
 // three.js には触らない。位置はすべて空港の敷地の座標（a, c, 高さ）。毎フレームの計算で新しい配列やオブジェクトを作らない。
-import type { AirportLayout } from '../../sim/airport';
-import { AC, ALL_LIVERIES, AcType, CARGO_LIVERY, LIVERIES } from './aircraft';
+import type { AirportLayout, StandDef } from '../../sim/airport';
+import { AC, ALL_LIVERIES, AcType, CARGO_LIVERY } from './aircraft';
 import type { GseType } from './gse';
 
 // ---- 道すじ（折れ線の角を円弧で丸めたもの） ----
@@ -103,8 +103,11 @@ export function moveV(m: Move, t: number): number {
 export interface Trip { type: GseType; path: Path; t: number; drive: number; stay: number; carts: number; live: boolean; attach: number; oneWay: boolean; ac: Ac | null }
 
 // ---- 飛行機 ----
-export type Phase = 'approach' | 'rollout' | 'exit' | 'holdIn' | 'taxiIn' | 'park' | 'ready' | 'push' | 'pushed' | 'taxiOut' | 'holdOut' | 'lineup' | 'takeoff' | 'gone';
+export type Phase = 'approach' | 'rollout' | 'exit' | 'holdIn' | 'taxiIn' | 'park' | 'ready' | 'push' | 'pushed' | 'taxiOut' | 'queue' | 'holdOut' | 'lineup' | 'takeoff' | 'gone';
+// 誘導路の網のノードの予約（ほかの飛行機と重ならないように、通る前に押さえ、通りすぎたら放す）
+interface Res { node: number; path: Path | null; s: number }
 export interface Ac {
+  id: number;
   type: AcType;
   livery: number; // ALL_LIVERIES の番号
   cargo: boolean;
@@ -114,6 +117,9 @@ export interface Ac {
   move: Move | null;
   t: number; // 段階の中の時刻（秒）
   T: number; // 駐機の時間（秒）
+  exit: number; // 使う出口（runway.exits の番号）
+  queue: boolean; // 停止位置があいていないので、手前の待機の場所まで行って待つ
+  res: Res[];
   // 今の姿勢（敷地の座標）
   a: number; c: number; y: number; ha: number; hc: number; pitch: number;
   rev: boolean; // 後ろ向きに動いている（プッシュバック）
@@ -121,9 +127,9 @@ export interface Ac {
   moving: boolean;
 }
 
-const TD = 120; // 滑走路の端から接地点まで（m）
-const V_APP = 64, V_TD = 60, V_EXIT = 11, V_TAXI = 9, V_ROT = 62;
-const TAKEOFF_ACC = 3.0, CLIMB = 0.16;
+const V_APP = 66, V_TAXI = 11, V_ROT = 66;
+const TAKEOFF_ACC = 2.6, CLIMB = 0.15;
+const BRIDGE_TIME = 7; // 搭乗橋がのびる・ちぢむ時間（秒）
 
 // 1 つの空港の運航
 export class AirOps {
@@ -135,87 +141,216 @@ export class AirOps {
   flights = 0;
   cargoFlights = 0;
   open = false;
+  // 搭乗橋ののび（0 = 縮んでいる、1 = 扉についている）。スポットごと
+  bridge: Float32Array;
   private spawnT = 10;
   private flipPending = false;
   private windT = 420;
-  private groundBusy: Ac | null = null; // 誘導路を使っている飛行機（1 機ずつ）
+  private owner: Int32Array; // ノードを予約している飛行機（-1 = なし）
+  private adj: { to: number; w: number }[][];
   private standUsed: (Ac | null)[];
   private rnd: () => number;
-  // 道すじ（向きごと、スポットごと）
-  private P: { appr: Path; roll: Path[]; exit: Path[]; taxiIn: Path[][]; push: Path[][]; taxiOut: Path[][]; lineup: Path[]; take: Path; outLen: number; inLen: number }[] = [];
-  private gsePaths: { fuel: Path[]; bags: Path[]; bus: Path[]; tug: Path[][] } | null = null;
+  private nextId = 1;
+  private out: { neg: number; pos: number };
+  private paths = new Map<string, Path>();
   private walk: Path[] = [];
   onDirChange: ((dir: number) => void) | null = null;
   // 進入・上昇のマップの外までの長さ（m）。向き（-1, +1）ごと
   constructor(L: AirportLayout, out: { neg: number; pos: number }, seed: number) {
     this.L = L;
+    this.out = out;
     let s = seed >>> 0 || 1;
     this.rnd = () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296);
     this.standUsed = L.stands.map(() => null);
-    this.build(out);
+    this.bridge = new Float32Array(L.stands.length);
+    const N = L.net.nodes.length;
+    this.owner = new Int32Array(N).fill(-1);
+    this.adj = Array.from({ length: N }, () => []);
+    L.net.edges.forEach(([i, j]) => {
+      const w = Math.hypot(L.net.nodes[i][0] - L.net.nodes[j][0], L.net.nodes[i][1] - L.net.nodes[j][1]);
+      this.adj[i].push({ to: j, w });
+      this.adj[j].push({ to: i, w });
+    });
+    // 歩いて乗る空港：ターミナルの出口から、前の左の扉（機首が +c のとき左は +a）
+    const sv = L.serviceC, pier = L.buildings.find((b) => b.kind === 'pier');
+    L.stands.forEach((st) => {
+      const typ = this.standType(st);
+      this.walk.push(makePath([[st.a + 7, (pier ? pier.r.c0 : sv + 4) + 0.5], [st.a + 7, sv], [st.a + AC[typ].R + 1.4, st.noseC - 4.5]]));
+    });
     this.dir = this.rnd() < 0.5 ? 1 : -1;
     this.windT = 300 + this.rnd() * 300;
   }
 
+  // スポットの大きさの目安の機材（地上の車両の止まる場所に使う）
+  private standType(st: StandDef): AcType {
+    if (st.cargo) return st.wide && this.L.cargoTypes.includes('b787') ? 'b787' : this.L.cargoTypes[0];
+    if (st.wide && this.L.wideTypes.length) return this.L.wideTypes[0];
+    return this.L.types[0];
+  }
   private standC(k: number, type: AcType) {
     return this.L.stands[k].noseC - AC[type].len / 2;
   }
+  private node(i: number): [number, number] {
+    return this.L.net.nodes[i];
+  }
 
-  private build(out: { neg: number; pos: number }) {
-    const L = this.L, r = L.runways[0], tc = L.taxiC;
-    for (const dir of [1, -1]) {
-      const thr = dir > 0 ? r.a0 : r.a1;
-      const far = dir > 0 ? r.links[1] : r.links[0];
-      const start = dir > 0 ? r.links[0] : r.links[1];
-      // 進入：マップの外（着陸する向きの反対側）から接地点まで
-      const inLen = (dir > 0 ? out.neg : out.pos) + Math.abs(thr);
-      const appr = makePath([[thr - dir * inLen, r.c], [thr + dir * TD, r.c]]);
-      const roll: Path[] = [], exit: Path[] = [], taxiIn: Path[][] = [], push: Path[][] = [], taxiOut: Path[][] = [], lineup: Path[] = [];
-      // 減速して取付誘導路の手前まで
-      roll.push(makePath([[thr + dir * TD, r.c], [far - dir * 30, r.c]]));
-      // 滑走路を出て、誘導路の手前で止まる
-      exit.push(makePath([[far - dir * 30, r.c], [far, r.c], [far, tc - 13]], 22));
-      for (const type of ['atr', 'a220', 'e190'] as AcType[]) {
-        const ti: Path[] = [], pu: Path[] = [], to: Path[] = [];
-        L.stands.forEach((st, k) => {
-          const sc = this.standC(k, type);
-          ti.push(makePath([[far, tc - 13], [far, tc], [st.a, tc], [st.a, sc]], 24));
-          // プッシュバック：スポットから後ろ向きに誘導路まで（機首が出発する端を向く）。道すじは前向きに書いて、逆にたどる
-          const away = Math.sign(st.a - start) || 1;
-          const p0: [number, number] = [st.a + away * 32, tc];
-          pu.push(makePath([p0, [st.a, tc], [st.a, sc]], 24));
-          to.push(makePath([p0, [start, tc], [start, r.holdC]], 24));
-        });
-        taxiIn.push(ti); push.push(pu); taxiOut.push(to);
-      }
-      lineup.push(makePath([[start, r.holdC], [start, r.c], [start + dir * 40, r.c]], 18));
-      const outLen = (dir > 0 ? out.pos : out.neg) + Math.abs(start) + 400;
-      const take = makePath([[start + dir * 40, r.c], [start + dir * (40 + outLen), r.c]]);
-      this.P.push({ appr, roll, exit, taxiIn, push, taxiOut, lineup, take, outLen, inLen });
+  // 誘導路の網の最短の道（ノードの並び）
+  private route(from: number, to: number): number[] {
+    const N = this.adj.length, dist = new Float64Array(N).fill(Infinity), prev = new Int32Array(N).fill(-1), done = new Uint8Array(N);
+    dist[from] = 0;
+    for (;;) {
+      let u = -1;
+      for (let i = 0; i < N; i++) if (!done[i] && dist[i] < Infinity && (u < 0 || dist[i] < dist[u])) u = i;
+      if (u < 0 || u === to) break;
+      done[u] = 1;
+      for (const { to: v, w } of this.adj[u]) if (dist[u] + w < dist[v]) { dist[v] = dist[u] + w; prev[v] = u; }
     }
-    // 地上の車両：車庫 → 構内道路 → スポットのそば
-    const [da, dc] = L.depot, sv = L.serviceC;
-    const toStand = (k: number, off: number, endC: number) => makePath([[da, dc], [da, sv], [L.stands[k].a + off, sv], [L.stands[k].a + off, endC]], 7);
-    const fuel: Path[] = [], bags: Path[] = [], bus: Path[] = [], tug: Path[][] = [];
-    L.stands.forEach((st, k) => {
-      const typ: AcType = st.cargo ? 'atr' : 'a220';
-      const cc = this.standC(k, typ), len = AC[typ].len;
-      fuel.push(toStand(k, -10, cc + 2));
-      bags.push(toStand(k, 6, cc - len * 0.22));
-      bus.push(toStand(k, 15, cc + len * 0.18));
-      // 人が歩く：ターミナルの出口から、前の左の扉（機首が +c のとき左は +a）
-      this.walk.push(makePath([[st.a + 7, L.buildings[0].r.c0 + 0.5], [st.a + 7, sv], [st.a + AC[typ].R + 1.4, st.noseC - 4.5]]));
+    const out: number[] = [];
+    for (let v = to; v >= 0; v = prev[v]) { out.push(v); if (v === from) break; }
+    return out.reverse();
+  }
+  private pathOf(key: string, make: () => [number, number][], r = 24): Path {
+    let p = this.paths.get(key);
+    if (!p) this.paths.set(key, (p = makePath(make(), r)));
+    return p;
+  }
+  private runway() {
+    return this.L.runways[0];
+  }
+  private endIdx(dir: number, start: boolean) {
+    // 離陸は滑走路の手前の端から（dir > 0 なら a0 の側）
+    return (dir > 0) === start ? 0 : 1;
+  }
+  private appr(dir: number) {
+    const r = this.runway(), thr = dir > 0 ? r.a0 : r.a1;
+    const inLen = (dir > 0 ? this.out.neg : this.out.pos) - Math.abs(thr);
+    return this.pathOf(`appr${dir}`, () => [[thr - dir * inLen, r.c], [thr + dir * r.td, r.c]]);
+  }
+  private takePath(dir: number) {
+    const r = this.runway(), start = r.links[this.endIdx(dir, true)];
+    const outLen = (dir > 0 ? this.out.pos : this.out.neg) + Math.abs(start);
+    return this.pathOf(`take${dir}`, () => [[start + dir * 40, r.c], [start + dir * (40 + outLen), r.c]]);
+  }
+  private lineupPath(dir: number) {
+    const r = this.runway(), start = r.links[this.endIdx(dir, true)];
+    return this.pathOf(`line${dir}`, () => [[start, r.holdC], [start, r.c], [start + dir * 40, r.c]], 18);
+  }
+  // 着陸機の出口：止まれる距離のある最初の高速脱出誘導路。使えなければ奥の端の取付誘導路
+  private chooseExit(dir: number): number {
+    const r = this.runway(), thr = dir > 0 ? r.a0 : r.a1, td = thr + dir * r.td;
+    let best = -1, bd = Infinity;
+    r.exits.forEach((e, k) => {
+      if (e.dir !== dir) return;
+      const d = (e.a - td) * dir;
+      const need = (60 * 60 - e.speed * e.speed) / (2 * 3.0);
+      if (d < need) return;
+      if (e.rapid && this.owner[e.node] >= 0) return;
+      if (d < bd) { bd = d; best = k; }
     });
-    for (let q = 0; q < 2; q++) tug.push(L.stands.map((st) => makePath([[da, dc], [da, sv], [st.a, sv], [st.a, st.noseC + 4.5]], 7)));
-    this.gsePaths = { fuel, bags, bus, tug };
+    if (best < 0) best = r.exits.findIndex((e) => e.dir === dir && !e.rapid);
+    return best;
+  }
+  private rollPath(dir: number, exit: number) {
+    const r = this.runway(), thr = dir > 0 ? r.a0 : r.a1, e = r.exits[exit];
+    return this.pathOf(`roll${exit}`, () => [[thr + dir * r.td, r.c], [e.a, r.c]]);
+  }
+  private exitPath(exit: number) {
+    return this.pathOf(`exit${exit}`, () => this.runway().exits[exit].pts, 26);
+  }
+  // 出口から駐機スポットまで（ノードの並びと道すじ）
+  private taxiIn(ac: Ac): { nodes: number[]; path: Path } {
+    const e = this.runway().exits[ac.exit], st = this.L.stands[ac.stand];
+    const nodes = this.route(e.node, st.node);
+    const path = this.pathOf(`in${ac.exit}.${ac.stand}.${ac.type}`, () => {
+      const pts: [number, number][] = [this.node(e.node)];
+      for (const n of nodes.slice(1)) pts.push(this.node(n));
+      pts.push([st.a, this.standC(ac.stand, ac.type)]);
+      return pts;
+    });
+    return { nodes, path };
+  }
+  // 出発：プッシュバックの道すじと、そのあと停止位置までの道すじ
+  private taxiOut(ac: Ac): { nodes: number[]; push: Path; out: Path; outA: Path; outB: Path; extra: number[] } {
+    const r = this.runway(), k = this.endIdx(ac.dir, true), st = this.L.stands[ac.stand];
+    const nodes = this.route(st.node, r.junction[k]);
+    nodes.push(r.hold[k]);
+    // 押す向き：最初に進むノードの反対側へ尾を振る（機首が進む向きを向いて止まる）
+    const [sa, sc] = this.node(st.node);
+    const nx = nodes.length > 1 ? this.node(nodes[1]) : [sa - 1, sc];
+    const along = Math.abs(nx[0] - sa) > 1;
+    const away = along ? -Math.sign(nx[0] - sa) : Math.sign(sa - r.links[k]) || 1;
+    const p0: [number, number] = [sa + away * (AC[ac.type].len * 0.5 + 14), sc];
+    // 尾を振る側のとなりのノード（押しているあいだ押さえる）
+    const extra: number[] = [];
+    for (const { to } of this.adj[st.node]) { const [ta, tcc] = this.node(to); if (Math.abs(tcc - sc) < 1 && Math.sign(ta - sa) === away) extra.push(to); }
+    const push = this.pathOf(`push${ac.stand}.${ac.type}.${away}`, () => [p0, [sa, sc], [st.a, this.standC(ac.stand, ac.type)]]);
+    const key = `${ac.stand}.${ac.type}.${ac.dir}.${away}`;
+    const out = this.pathOf(`out${key}`, () => {
+      const pts: [number, number][] = [p0];
+      for (const n of nodes) pts.push(this.node(n));
+      return pts;
+    });
+    // 停止位置がふさがっているとき：交わりの手前（待機の場所）まで行って止まり（outA）、あいたら停止位置へ（outB）
+    const q = this.queuePoint(ac, nodes, p0);
+    const outA = this.pathOf(`outA${key}`, () => {
+      const pts: [number, number][] = [p0];
+      for (const n of nodes.slice(0, -2)) pts.push(this.node(n));
+      pts.push(q);
+      return pts;
+    });
+    const outB = this.pathOf(`outB${key}`, () => [q, this.node(nodes[nodes.length - 2]), this.node(nodes[nodes.length - 1])]);
+    return { nodes, push, out, outA, outB, extra };
+  }
+  // 待機の場所：停止位置の手前の交わり（J）から、機体の半分 + 25m 手前（来た道の上）
+  private queuePoint(ac: Ac, nodes: number[], p0: [number, number]): [number, number] {
+    const J = this.node(nodes[nodes.length - 2]);
+    const prev = nodes.length >= 3 ? this.node(nodes[nodes.length - 3]) : p0;
+    const dx = J[0] - prev[0], dy = J[1] - prev[1], l = Math.hypot(dx, dy) || 1;
+    const d = Math.min(l * 0.8, AC[ac.type].len / 2 + 25);
+    return [J[0] - (dx / l) * d, J[1] - (dy / l) * d];
+  }
+  private queueUsed(k: number, ac: Ac) {
+    for (let i = 0; i < this.aircraft.length; i++) { const o = this.aircraft[i]; if (o !== ac && o.queue && this.endIdx(o.dir, true) === k && o.phase !== 'gone') return true; }
+    return false;
+  }
+
+  // ---- ノードの予約 ----
+  private free(nodes: number[], ac: Ac) {
+    for (const n of nodes) if (this.owner[n] >= 0 && this.owner[n] !== ac.id) return false;
+    return true;
+  }
+  private reserve(ac: Ac, nodes: number[], path: Path | null) {
+    for (const n of nodes) {
+      if (this.owner[n] === ac.id && ac.res.some((r) => r.node === n)) continue;
+      this.owner[n] = ac.id;
+      ac.res.push({ node: n, path, s: path ? nearestS(path, this.node(n)) : Infinity });
+    }
+  }
+  private releaseAll(ac: Ac, keep: number[] = []) {
+    let w = 0;
+    for (const r of ac.res) {
+      if (keep.includes(r.node)) { ac.res[w++] = r; continue; }
+      if (this.owner[r.node] === ac.id) this.owner[r.node] = -1;
+    }
+    ac.res.length = w;
+  }
+  // 通りすぎたノードを放す（毎フレーム。配列は作らない）
+  private releasePassed(ac: Ac, s: number) {
+    const m = ac.move;
+    if (!m) return;
+    const clear = AC[ac.type].len * 0.5 + 25;
+    let w = 0;
+    for (let i = 0; i < ac.res.length; i++) {
+      const r = ac.res[i];
+      if (r.path === m.path && (ac.rev ? m.path.len - s : s) > r.s + clear) { if (this.owner[r.node] === ac.id) this.owner[r.node] = -1; continue; }
+      ac.res[w++] = r;
+    }
+    ac.res.length = w;
   }
 
   private anyPhase(p1: Phase, p2: Phase) {
     for (let i = 0; i < this.aircraft.length; i++) { const ph = this.aircraft[i].phase; if (ph === p1 || ph === p2) return true; }
     return false;
-  }
-  private di(dir: number) {
-    return dir > 0 ? 0 : 1;
   }
 
   // 便の多さ（0..1）
@@ -226,42 +361,50 @@ export class AirOps {
 
   // 最初に駐機している飛行機（街を開いたとき、空港が空っぽに見えないように）
   seed() {
-    const k = this.open ? Math.round(1 + this.busy() * 1.4) : 1;
-    for (let q = 0; q < Math.min(k, this.L.spec.maxAircraft - 1); q++) {
+    const max = this.L.spec.maxAircraft;
+    const k = this.open ? Math.round(1 + this.busy() * (max - 1.6)) : 1;
+    for (let q = 0; q < Math.min(k, max - 1); q++) {
       const cargo = this.cargoFlights > 0 && q === 1;
       const st = this.freeStand(cargo);
       if (st < 0) break;
       const ac = this.newAc(cargo, st);
       ac.phase = 'park';
-      ac.T = this.turnTime(cargo);
+      ac.T = this.turnTime(ac);
       ac.t = this.open ? this.rnd() * ac.T * 0.8 : 0;
       this.placeAtStand(ac);
       this.aircraft.push(ac);
+      if (this.L.stands[st].bridge && ac.t > 4 && ac.t < ac.T - 16) this.bridge[st] = 1;
       // 折り返しの途中から：地上の車両も途中から
       if (this.open) {
         const n0 = this.trips.length;
         this.serviceStart(ac);
-        for (let k = n0; k < this.trips.length; k++) this.trips[k].t = ac.t;
+        for (let j = n0; j < this.trips.length; j++) this.trips[j].t = ac.t;
       }
     }
   }
 
-  private turnTime(cargo: boolean) {
-    return (cargo ? 95 : 70) + this.rnd() * 30;
+  private turnTime(ac: Ac) {
+    return (ac.cargo ? 95 : 70) + (AC[ac.type].wide ? 30 : 0) + this.rnd() * 30;
   }
 
   private freeStand(cargo: boolean) {
     const ks: number[] = [];
     this.L.stands.forEach((s, k) => { if (s.cargo === cargo && !this.standUsed[k]) ks.push(k); });
-    return ks.length ? ks[Math.floor(this.rnd() * ks.length)] : -1;
+    // 搭乗橋のあるスポットから先に使う
+    const br = ks.filter((k) => this.L.stands[k].bridge);
+    const pool = br.length && this.rnd() < 0.85 ? br : ks;
+    return pool.length ? pool[Math.floor(this.rnd() * pool.length)] : -1;
   }
 
   private newAc(cargo: boolean, stand: number): Ac {
-    const li = cargo ? ALL_LIVERIES.indexOf(CARGO_LIVERY) : Math.floor(this.rnd() * LIVERIES.length);
-    const liv = ALL_LIVERIES[li];
-    const type = liv.fleet[Math.floor(this.rnd() * liv.fleet.length)];
-    this.standUsed[stand] = null;
-    const ac: Ac = { type, livery: li, cargo, stand, dir: this.dir, phase: 'approach', move: null, t: 0, T: 0, a: 0, c: 0, y: 0, ha: 0, hc: 1, pitch: 0, rev: false, lights: false, moving: false };
+    const st = this.L.stands[stand], L = this.L;
+    let types: AcType[] = cargo ? L.cargoTypes.filter((t) => st.wide || !AC[t].wide) : st.wide && L.wideTypes.length && this.rnd() < 0.55 ? L.wideTypes : L.types;
+    if (!types.length) types = [this.standType(st)];
+    const type = types[Math.floor(this.rnd() * types.length)];
+    const ls: number[] = [];
+    ALL_LIVERIES.forEach((l, i) => { if (!!l.cargo === cargo && l.fleet.includes(type)) ls.push(i); });
+    const li = ls.length ? ls[Math.floor(this.rnd() * ls.length)] : ALL_LIVERIES.indexOf(CARGO_LIVERY);
+    const ac: Ac = { id: this.nextId++, type, livery: li, cargo, stand, dir: this.dir, phase: 'approach', move: null, t: 0, T: 0, exit: -1, queue: false, res: [], a: 0, c: 0, y: 0, ha: 0, hc: 1, pitch: 0, rev: false, lights: false, moving: false };
     this.standUsed[stand] = ac;
     return ac;
   }
@@ -271,18 +414,16 @@ export class AirOps {
     ac.a = st.a; ac.c = this.standC(ac.stand, ac.type); ac.y = 0; ac.ha = 0; ac.hc = 1; ac.pitch = 0; ac.rev = false; ac.moving = false; ac.lights = false;
   }
 
-  private typeIdx(t: AcType) {
-    return t === 'atr' ? 0 : t === 'a220' ? 1 : 2;
-  }
-
-  // 滑走路が使われているか（着陸・離陸の飛行機）
+  // 滑走路が使われているか（着陸・離陸の飛行機。滑走路は 1 機ずつ）
   private runwayBusy(forArrival: boolean) {
-    for (const ac of this.aircraft) {
-      if (ac.phase === 'rollout' || ac.phase === 'exit' || ac.phase === 'lineup') return true;
+    for (let i = 0; i < this.aircraft.length; i++) {
+      const ac = this.aircraft[i];
+      if (ac.phase === 'rollout' || ac.phase === 'lineup') return true;
+      if (ac.phase === 'exit' && ac.t < 10) return true;
       if (ac.phase === 'takeoff' && ac.y < 250) return true;
       if (ac.phase === 'approach') {
         if (forArrival) return true;
-        // 接地まで 45 秒より近い着陸機がいれば、離陸を待つ
+        // 接地まで 45 秒より近い着陸機がいれば、離陸を待つ（着陸が先）
         if (ac.move && ac.move.T - ac.t < 45) return true;
       }
     }
@@ -308,8 +449,7 @@ export class AirOps {
   update(dt: number, tod: number) {
     if (dt <= 0) return;
     const sp = this.L.spec;
-    // 風向きが変わる（滑走路を使う向きを入れかえる）：滑走路と誘導路を使う飛行機がいないとき
-    // 入れかえの時刻が来たら、新しい着陸と出発を止めて、動いている飛行機がいなくなるのを待つ
+    // 風向きが変わる（滑走路を使う向きを入れかえる）。時刻が来たら、新しい着陸と出発を止めて、動いている飛行機がいなくなるのを待つ
     this.windT -= dt;
     this.flipPending = this.windT <= 0;
     if (this.flipPending) {
@@ -329,16 +469,18 @@ export class AirOps {
       if (this.spawnT <= 0) {
         const cargo = this.cargoFlights > 0 && this.rnd() < this.cargoFlights / rate;
         const st = this.freeStand(cargo);
-        const waiting = this.anyPhase('holdOut', 'holdOut');
+        // 出発を待つ飛行機がたまっていたら、着陸を少し待たせる（滑走路は着陸が先なので、出発がとどこおらないように）
+        let backlog = 0;
+        for (let i = 0; i < this.aircraft.length; i++) { const ph = this.aircraft[i].phase; if (ph === 'ready' || ph === 'queue' || ph === 'holdOut' || ph === 'push' || ph === 'pushed' || ph === 'taxiOut') backlog++; }
+        const waiting = this.anyPhase('holdOut', 'queue') || backlog >= 2;
         if (st >= 0 && this.aircraft.length < sp.maxAircraft && !this.runwayBusy(true) && !waiting) {
           const ac = this.newAc(cargo, st);
           ac.dir = this.dir;
-          const P = this.P[this.di(ac.dir)];
-          this.startMove(ac, makeMoveCached(P.appr, V_APP, V_APP, V_TD), 'approach');
+          this.startMove(ac, makeMoveCached(this.appr(ac.dir), V_APP, V_APP, V_APP - 6), 'approach');
           ac.lights = true;
           this.aircraft.push(ac);
-          const b = this.busy();
-          this.spawnT = (160 - 105 * b) * (0.7 + 0.6 * this.rnd());
+          const b = this.busy(), base = 160 / Math.sqrt(sp.maxAircraft / 3);
+          this.spawnT = (base - base * 0.65 * b) * (0.7 + 0.6 * this.rnd());
         } else this.spawnT = 6;
       }
     }
@@ -347,6 +489,14 @@ export class AirOps {
     let w = 0;
     for (let i = 0; i < this.aircraft.length; i++) if (this.aircraft[i].phase !== 'gone') this.aircraft[w++] = this.aircraft[i];
     this.aircraft.length = w;
+    // 搭乗橋：駐機して少したったらのび、出発の前に縮む
+    for (let k = 0; k < this.bridge.length; k++) {
+      if (!this.L.stands[k].bridge) continue;
+      const ac = this.standUsed[k];
+      const want = ac && ac.phase === 'park' && ac.t > 3 && ac.t < ac.T - 16 ? 1 : 0;
+      const v = this.bridge[k] + (want ? dt : -dt) / BRIDGE_TIME;
+      this.bridge[k] = Math.max(0, Math.min(1, v));
+    }
     // 地上の車両
     for (let i = 0; i < this.trips.length; i++) {
       const tr = this.trips[i];
@@ -358,25 +508,38 @@ export class AirOps {
 
   private step(ac: Ac, dt: number) {
     ac.t += dt;
-    const P = this.P[this.di(ac.dir)], ti = this.typeIdx(ac.type);
     const done = ac.move ? ac.t >= ac.move.T : false;
+    const r = this.runway();
     switch (ac.phase) {
       case 'approach':
-        if (done) this.startMove(ac, makeMoveCached(P.roll[0], V_TD, V_TD, V_EXIT, 1, ((V_TD * V_TD - V_EXIT * V_EXIT) / (2 * P.roll[0].len))), 'rollout');
+        if (done) {
+          ac.exit = this.chooseExit(ac.dir);
+          const e = r.exits[ac.exit];
+          const roll = this.rollPath(ac.dir, ac.exit);
+          const v0 = V_APP - 6;
+          this.reserve(ac, [e.node], null);
+          this.startMove(ac, makeMoveCached(roll, v0, v0, e.speed, 1, Math.max(0.5, (v0 * v0 - e.speed * e.speed) / (2 * roll.len))), 'rollout');
+        }
         break;
       case 'rollout':
-        if (done) this.startMove(ac, makeMoveCached(P.exit[0], V_EXIT, V_EXIT, 0, 1, 1.2), 'exit');
+        if (done) { const e = r.exits[ac.exit]; this.startMove(ac, makeMoveCached(this.exitPath(ac.exit), e.speed, e.speed, 0, 1, e.rapid ? 2.2 : 1.2), 'exit'); }
         break;
       case 'exit':
         if (done) { ac.phase = 'holdIn'; ac.t = 0; ac.lights = false; }
         break;
-      case 'holdIn':
-        if (!this.groundBusy) { this.groundBusy = ac; this.startMove(ac, makeMoveCached(P.taxiIn[ti][ac.stand], 2, V_TAXI, 0, 0.8, 0.7), 'taxiIn'); }
+      case 'holdIn': {
+        // 出口で止まって、スポットまでの道が空くのを待つ
+        const ti = this.taxiIn(ac);
+        if (this.free(ti.nodes, ac)) {
+          this.reserve(ac, ti.nodes, ti.path);
+          this.startMove(ac, makeMoveCached(ti.path, 2, V_TAXI, 0, 0.8, 0.7), 'taxiIn');
+        }
         break;
+      }
       case 'taxiIn':
         if (done) {
-          if (this.groundBusy === ac) this.groundBusy = null;
-          ac.phase = 'park'; ac.t = 0; ac.T = this.turnTime(ac.cargo); ac.move = null;
+          this.releaseAll(ac);
+          ac.phase = 'park'; ac.t = 0; ac.T = this.turnTime(ac); ac.move = null;
           this.serviceStart(ac);
         }
         break;
@@ -384,44 +547,73 @@ export class AirOps {
         if (ac.t > ac.T - 14 && ac.t - dt <= ac.T - 14) this.tugIn(ac);
         if (ac.t >= ac.T) { ac.phase = 'ready'; ac.t = 0; }
         break;
-      case 'ready':
-        // 誘導路が空いていて、着陸機がこのあと誘導路に入ってこないとき
-        if (!this.flipPending && !this.groundBusy && !this.anyPhase('exit', 'holdIn')) {
-          // 駐機中に風向きが変わったら、新しい向きで出発する
-          ac.dir = this.dir;
-          this.groundBusy = ac;
-          this.startMove(ac, makeMoveCached(this.P[this.di(ac.dir)].push[ti][ac.stand], 0, 1.4, 0, 0.3, 0.3), 'push');
-          ac.rev = true;
-          this.standUsed[ac.stand] = null;
-        }
+      case 'ready': {
+        // 搭乗橋が縮み、押す道と停止位置までの道が空いているとき（着陸機の出口をふさがない）
+        if (this.flipPending || this.bridge[ac.stand] > 0.01) break;
+        ac.dir = this.dir;
+        const to = this.taxiOut(ac);
+        const head = to.nodes.slice(0, -2), tail = to.nodes.slice(-2);
+        if (!this.free([...head, ...to.extra], ac)) break;
+        // 停止位置（とその手前の交わり）がふさがっていれば、手前で待つ（待つ場所は 1 機まで）
+        const k = this.endIdx(ac.dir, true);
+        // 待機の場所に先に待っている飛行機がいれば、その飛行機が先（その後ろへは行かず、スポットで待つ）
+        if (this.queueUsed(k, ac)) break;
+        ac.queue = !this.free(tail, ac);
+        this.reserve(ac, to.extra, to.push);
+        this.reserve(ac, ac.queue ? head : to.nodes, ac.queue ? to.outA : to.out);
+        this.startMove(ac, makeMoveCached(to.push, 0, 1.4, 0, 0.3, 0.3), 'push');
+        ac.rev = true;
+        this.standUsed[ac.stand] = null;
         break;
+      }
       case 'push':
         if (done) { ac.phase = 'pushed'; ac.t = 0; ac.rev = false; this.tugAway(ac); }
         break;
       case 'pushed':
-        if (ac.t > 4) this.startMove(ac, makeMoveCached(P.taxiOut[ti][ac.stand], 0, V_TAXI, 0, 0.6, 0.7), 'taxiOut');
+        if (ac.t > 4) {
+          const to = this.taxiOut(ac);
+          // 押していたあいだのとなりのノードを放す
+          this.releaseAll(ac, to.nodes);
+          this.startMove(ac, makeMoveCached(ac.queue ? to.outA : to.out, 0, V_TAXI, 0, 0.6, 0.7), 'taxiOut');
+        }
         break;
+      case 'queue': {
+        const to = this.taxiOut(ac), tail = to.nodes.slice(-2);
+        if (this.free(tail, ac)) {
+          this.reserve(ac, tail, to.outB);
+          ac.queue = false;
+          this.startMove(ac, makeMoveCached(to.outB, 0, V_TAXI, 0, 0.6, 0.7), 'taxiOut');
+        }
+        break;
+      }
       case 'taxiOut':
-        if (done) { if (this.groundBusy === ac) this.groundBusy = null; ac.phase = 'holdOut'; ac.t = 0; }
+        if (done && ac.queue) { this.releaseAll(ac); ac.phase = 'queue'; ac.t = 0; break; }
+        if (done) {
+          // 停止位置で待つ（停止位置と、その手前の交わりを押さえたまま）
+          const k = this.endIdx(ac.dir, true);
+          this.releaseAll(ac, [r.hold[k], r.junction[k]]);
+          ac.phase = 'holdOut'; ac.t = 0;
+        }
         break;
       case 'holdOut':
-        if (ac.t > 3 && !this.runwayBusy(false)) { this.startMove(ac, makeMoveCached(P.lineup[0], 0, 6, 4, 0.6, 0.8), 'lineup'); ac.lights = true; }
+        if (ac.t > 3 && !this.runwayBusy(false)) { this.startMove(ac, makeMoveCached(this.lineupPath(ac.dir), 0, 6, 4, 0.6, 0.8), 'lineup'); ac.lights = true; }
         break;
       case 'lineup':
-        if (done) this.startMove(ac, makeMoveCached(P.take, 4, 82, 82, TAKEOFF_ACC, 1), 'takeoff');
+        if (done) { this.releaseAll(ac); this.startMove(ac, makeMoveCached(this.takePath(ac.dir), 4, 88, 88, TAKEOFF_ACC, 1), 'takeoff'); }
         break;
       case 'takeoff':
         if (done) ac.phase = 'gone';
         break;
     }
     this.pose(ac);
+    if (ac.moving && ac.res.length && ac.move) this.releasePassed(ac, moveS(ac.move, Math.min(ac.t, ac.move.T)));
   }
 
   // 今の位置と姿勢
   private tmp = new Float32Array(4);
   private pose(ac: Ac) {
     const m = ac.move;
-    if (ac.phase === 'park' || ac.phase === 'ready' || ac.phase === 'holdIn' || ac.phase === 'holdOut' || ac.phase === 'pushed' || !m) { ac.moving = false; if (ac.phase !== 'park' && ac.phase !== 'ready') return; this.placeAtStand(ac); return; }
+    if (ac.phase === 'park' || ac.phase === 'ready' || ac.phase === 'holdIn' || ac.phase === 'holdOut' || ac.phase === 'pushed' || ac.phase === 'queue' || !m) { ac.moving = false; if (ac.phase !== 'park' && ac.phase !== 'ready') return; this.placeAtStand(ac); return; }
     const t = Math.min(ac.t, m.T);
     const s = moveS(m, t);
     const o = this.tmp;
@@ -434,21 +626,29 @@ export class AirOps {
     ac.pitch = 0;
     const tg = Math.tan((this.L.glide * Math.PI) / 180);
     if (ac.phase === 'approach') {
-      // 進入角 5.5°（ロンドン・シティ空港のような急な進入）。接地の手前で引き起こす（フレア）
+      // 進入角（小は 5.5° のロンドン・シティ空港のような急な進入）。接地の手前で引き起こす（フレア）
       const d = m.path.len - s;
       ac.y = tg * (d - 40 + 40 * Math.exp(-d / 40));
       ac.pitch = 0.035 + 0.06 * Math.exp(-d / 60);
     } else if (ac.phase === 'takeoff') {
-      const v = moveV(m, t);
-      const slo = (V_ROT * V_ROT - 16) / (2 * TAKEOFF_ACC);
+      const v = moveV(m, t), vr = AC[ac.type].wide ? V_ROT + 6 : V_ROT;
+      const slo = (vr * vr - 16) / (2 * TAKEOFF_ACC);
       if (s > slo) {
         const x = s - slo, R = 1500, xs = CLIMB * R;
         ac.y = x < xs ? (x * x) / (2 * R) : (xs * xs) / (2 * R) + (x - xs) * CLIMB;
         ac.pitch = Math.min(0.17, 0.05 + x / 600);
-      } else if (v > V_ROT - 6) ac.pitch = ((v - (V_ROT - 6)) / 6) * 0.08;
+      } else if (v > vr - 6) ac.pitch = ((v - (vr - 6)) / 6) * 0.08;
     } else if (ac.phase === 'rollout') {
       ac.pitch = Math.max(0, 0.02 - t * 0.01);
     }
+  }
+
+  // 搭乗橋の扉の位置（スポットの飛行機、いなければスポットの目安の機材）。out = [a, c, 床の高さ]
+  bridgeDoor(k: number, out: Float32Array) {
+    const st = this.L.stands[k], ac = this.standUsed[k];
+    const t = ac && (ac.phase === 'park' || ac.phase === 'ready') ? ac.type : this.standType(st);
+    const d = AC[t];
+    out[0] = st.a + d.R + 0.2; out[1] = st.noseC - d.door[0]; out[2] = d.door[1];
   }
 
   // ---- 地上の車両 ----
@@ -458,14 +658,21 @@ export class AirOps {
     tr.type = type; tr.path = path; tr.t = 0; tr.drive = path.len / speed; tr.stay = stay; tr.carts = carts; tr.live = true; tr.attach = -1; tr.oneWay = false; tr.ac = null;
     return tr;
   }
+  // 車庫 → 構内道路 → スポットのそば（off = スポットの中心線からの横のずれ、endC = 止まる c）
+  private gsePath(k: number, kind: string, off: number, endC: number) {
+    const [da, dc] = this.L.depot, sv = this.L.serviceC, st = this.L.stands[k];
+    return this.pathOf(`gse.${kind}.${k}`, () => [[da, dc], [da, sv], [st.a + off, sv], [st.a + off, endC]], 7);
+  }
   private serviceStart(ac: Ac) {
-    const g = this.gsePaths!, k = ac.stand;
-    this.trip('fuel', g.fuel[k], ac.T * 0.5);
-    this.trip('tractor', g.bags[k], ac.T - 34, 2, 5);
-    if (!ac.cargo) this.trip('bus', g.bus[k], ac.T * 0.3, 0, 5.5);
+    const k = ac.stand, st = this.L.stands[k], d = AC[this.standType(st)], cc = st.noseC - d.len / 2;
+    this.trip('fuel', this.gsePath(k, 'fuel', -(d.span * 0.28), cc + 2), ac.T * 0.5);
+    this.trip('tractor', this.gsePath(k, 'bags', d.R + 4, cc - d.len * 0.22), ac.T - 34, d.wide ? 3 : 2, 5);
+    // 搭乗橋のないスポットはバス（歩いて乗る空港では、乗務員と体の不自由な人のバス）
+    if (!ac.cargo && !st.bridge) this.trip('bus', this.gsePath(k, 'bus', d.span * 0.42, cc + d.len * 0.18), ac.T * 0.3, 0, 5.5);
   }
   private tugIn(ac: Ac) {
-    const tr = this.trip('tug', this.gsePaths!.tug[this.di(this.dir)][ac.stand], 1e9, 0, 4);
+    const st = this.L.stands[ac.stand];
+    const tr = this.trip('tug', this.gsePath(ac.stand, 'tug', 0, st.noseC + 4.5), 1e9, 0, 4);
     tr.attach = 1;
     tr.ac = ac;
   }
@@ -510,7 +717,8 @@ export class AirOps {
         emit('cart', o[0], o[1], rev ? -o[2] : o[2], rev ? -o[3] : o[3]);
       }
     }
-    // 歩いて乗り降りする人：降りる（駐機の始め）、乗る（駐機の終わり）
+    // 歩いて乗り降りする人（搭乗橋のない空港）：降りる（駐機の始め）、乗る（駐機の終わり）
+    if (!this.L.walk) return;
     for (let i = 0; i < this.aircraft.length; i++) {
       const ac = this.aircraft[i];
       if (ac.phase !== 'park' || ac.cargo) continue;
@@ -530,6 +738,16 @@ export class AirOps {
     }
     void time;
   }
+}
+
+// 道すじの上で、点にいちばん近いところの道のり
+function nearestS(p: Path, q: [number, number]): number {
+  let best = 0, bd = Infinity;
+  for (let i = 0; i < p.s.length; i++) {
+    const d = Math.hypot(p.a[i] - q[0], p.c[i] - q[1]);
+    if (d < bd) { bd = d; best = p.s[i]; }
+  }
+  return best;
 }
 
 // 同じ道すじと速さの組み合わせは、作った Move を使い回す（離着陸のたびに作らない）

@@ -20,7 +20,10 @@ const CHUNK_M = 256;
 type LiveryAttrs = { tail: THREE.InstancedBufferAttribute; stripe: THREE.InstancedBufferAttribute; win: THREE.InstancedBufferAttribute };
 const AC_CAP = 16, GSE_CAP = 40, PAX_CAP = 80;
 const DYN_PER_AC = 5;
-const ALL_KEYS: string[] = [...AC_TYPES, ...GSE_TYPES];
+const ALL_KEYS: string[] = [...AC_TYPES, ...GSE_TYPES, 'tunnel', 'cab', 'leg'];
+const BRIDGE_CAP = 48;
+const ROT_H = 5.3; // 搭乗橋の付け根（回転する部屋）の高さ
+const smooth = (x: number) => x * x * (3 - 2 * x);
 // 飛行機の灯火の色（毎フレーム配列を作らない）
 const NAV_RED = [1, 0.15, 0.1], NAV_GREEN = [0.2, 1, 0.4], WHITE = [1, 1, 1], BEACON = [1, 0.12, 0.08], OFF = [0, 0, 0], LANDING = [1, 0.97, 0.9]; // 飛行機の灯火（左の赤、右の緑、尾の白、赤い衝突防止灯、着陸灯）
 
@@ -206,6 +209,18 @@ export class AirportLayer {
       this.gseMesh[t] = m;
       this.group.add(m);
     }
+    // 搭乗橋（のび縮みする通路・扉につく運転室・車輪のついた脚）
+    const bm = new THREE.MeshStandardMaterial({ color: 0xc4c9ce, roughness: 0.45, metalness: 0.35 });
+    const mk = (g: THREE.BufferGeometry, mat: THREE.Material = bm) => {
+      const m = new THREE.InstancedMesh(g, mat, BRIDGE_CAP);
+      m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      m.count = 0; m.castShadow = true; m.receiveShadow = true; m.boundingSphere = new THREE.Sphere();
+      this.group.add(m);
+      return m;
+    };
+    this.tunnel = mk(new THREE.BoxGeometry(2.8, 2.9, 1).translate(0, 0, 0.5));
+    this.cab = mk(new THREE.BoxGeometry(3.6, 3.2, 3.4).translate(0, 0, 1.7), new THREE.MeshStandardMaterial({ color: 0x9aa3ab, roughness: 0.5, metalness: 0.3 }));
+    this.leg = mk(new THREE.BoxGeometry(2.2, 1, 0.9).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ color: 0x5c6167, roughness: 0.6, metalness: 0.4 }));
     this.group.add(this.pools, this.pts);
   }
 
@@ -387,7 +402,7 @@ export class AirportLayer {
   tick(dt: number, tod: number) {
     this.time += dt;
     for (let i = 0; i < ALL_KEYS.length; i++) { const k = ALL_KEYS[i]; this.cnt[k] = 0; const b = (this.box[k] ??= [0, 0, 0, 0, 0, 0]); b[0] = b[1] = b[2] = Infinity; b[3] = b[4] = b[5] = -Infinity; }
-    if (!this.list.length) { for (const t of AC_TYPES) this.acMesh[t].count = 0; for (const t of GSE_TYPES) this.gseMesh[t].count = 0; return; }
+    if (!this.list.length) { for (const t of AC_TYPES) this.acMesh[t].count = 0; for (const t of GSE_TYPES) this.gseMesh[t].count = 0; for (const [m] of this.bridgeMeshes) m.count = 0; return; }
     const pos = this.pts.geometry.getAttribute('position') as THREE.BufferAttribute;
     const col = this.pts.geometry.getAttribute('color') as THREE.BufferAttribute;
     const size = this.pts.geometry.getAttribute('size') as THREE.BufferAttribute;
@@ -428,10 +443,18 @@ export class AirportLayer {
       }
       this.curEntry = e;
       e.ops.eachGse(this.time, this.emitGse);
+      this.placeBridges(e);
+    }
+    for (const [m, t] of this.bridgeMeshes) {
+      m.count = this.cnt[t];
+      m.visible = m.count > 0;
+      if (m.count) m.instanceMatrix.needsUpdate = true;
+      this.fitSphere(m, 'tunnel', 30);
     }
     for (const t of AC_TYPES) {
       const m = this.acMesh[t];
       m.count = this.cnt[t];
+      m.visible = m.count > 0;
       if (m.count) {
         m.instanceMatrix.needsUpdate = true;
         const L = this.livery[t];
@@ -442,6 +465,7 @@ export class AirportLayer {
     for (const t of GSE_TYPES) {
       const m = this.gseMesh[t];
       m.count = this.cnt[t];
+      m.visible = m.count > 0;
       if (m.count) m.instanceMatrix.needsUpdate = true;
       this.fitSphere(m, t, 10);
     }
@@ -450,8 +474,60 @@ export class AirportLayer {
       if (dyn > this.dynStart) { pos.needsUpdate = col.needsUpdate = size.needsUpdate = true; pos.addUpdateRange(this.dynStart * 3, (dyn - this.dynStart) * 3); }
     }
   }
+  private tunnel!: THREE.InstancedMesh;
+  private cab!: THREE.InstancedMesh;
+  private leg!: THREE.InstancedMesh;
+  private door = new Float32Array(3);
+  private sc = new THREE.Vector3();
+  // 搭乗橋：付け根（回転する部屋）から、運転室（扉につく先）まで。ext = のび（0..1）
+  private placeBridges(e: Entry) {
+    const f = e.f, L = e.L;
+    for (let k = 0; k < L.stands.length; k++) {
+      const st = L.stands[k];
+      if (!st.rot) continue;
+      const nb = this.cnt.tunnel;
+      if (nb >= BRIDGE_CAP) return;
+      const x = smooth(e.ops.bridge[k]);
+      e.ops.bridgeDoor(k, this.door);
+      const [ra, rc] = st.rot;
+      // 縮んだとき：付け根からエプロンの側へ短く。のびたとき：運転室の前が扉の横
+      const ca = (ra - 2) + (this.door[0] + 1.9 - (ra - 2)) * x, cc = (rc - 8) + (this.door[1] - (rc - 8)) * x;
+      const cy = 4.4 + (this.door[2] - 4.4) * x;
+      // 付け根の部屋のふちから運転室まで（敷地の座標）
+      let da = ca - ra, dc = cc - rc;
+      const dl = Math.hypot(da, dc) || 1;
+      da /= dl; dc /= dl;
+      const sa = ra + da * 2.3, sc = rc + dc * 2.3, sy = ROT_H - 0.2;
+      const len = Math.max(0.5, Math.hypot(ca - sa, cc - sc) - 1.2);
+      const W = (a: number, c: number, y: number) => this.v.set(a * f.cos - c * f.sin + f.cx, e.base + y, a * f.sin + c * f.cos + f.cz);
+      const wx = da * f.cos - dc * f.sin, wz = da * f.sin + dc * f.cos, yaw = Math.atan2(wx, wz);
+      const pitch = Math.atan2(sy - cy, len);
+      this.e.set(pitch, yaw, 0, 'YXZ');
+      this.q.setFromEuler(this.e);
+      W(sa, sc, sy);
+      this.m4.compose(this.v, this.q, this.sc.set(1, 1, len));
+      this.tunnel.setMatrixAt(nb, this.m4);
+      this.grow('tunnel', this.v.x, this.v.y, this.v.z);
+      // 運転室（扉の横、通路の先）
+      this.e.set(0, yaw, 0, 'YXZ');
+      this.q.setFromEuler(this.e);
+      W(ca - da * 1.8, cc - dc * 1.8, cy - 0.1);
+      this.m4.compose(this.v, this.q, this.sc.set(1, 1, 1));
+      this.cab.setMatrixAt(nb, this.m4);
+      // 車輪のついた脚（通路の 7 割のところ）
+      const la = sa + (ca - sa) * 0.7, lcc = sc + (cc - sc) * 0.7, ly = sy + (cy - sy) * 0.7 - 1.5;
+      W(la, lcc, 0);
+      this.m4.compose(this.v, this.q, this.sc.set(1, Math.max(0.5, ly), 1));
+      this.leg.setMatrixAt(nb, this.m4);
+      this.cnt.tunnel = this.cnt.cab = this.cnt.leg = nb + 1;
+    }
+  }
   private curEntry: Entry | null = null;
   private list: Entry[] = [];
+  private get bridgeMeshes(): [THREE.InstancedMesh, string][] {
+    return (this._bm ??= [[this.tunnel, 'tunnel'], [this.cab, 'cab'], [this.leg, 'leg']]);
+  }
+  private _bm: [THREE.InstancedMesh, string][] | null = null;
   private lx = 0; private ly = 0; private lz = 0; private lyaw = 0; private lpitch = 0;
   // 飛行機の灯火 1 つ（機体の座標 lx = 左右（+ が左の翼）、ly = 高さ、lz = 前後）
   private putLight(i: number, lx: number, ly: number, lz: number, c: number[], s: number) {

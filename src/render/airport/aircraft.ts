@@ -3,29 +3,36 @@
 // インスタンスごとの色（iTail・iStripe・iWin）で塗る。1 種類の機体 = 1 回の描画（InstancedMesh）
 import * as THREE from 'three';
 import { MeshBuilder } from '../builder';
+import type { AcKind } from '../../sim/airport';
 
-export type AcType = 'atr' | 'a220' | 'e190';
-export const AC_TYPES: AcType[] = ['atr', 'a220', 'e190'];
+export type AcType = AcKind;
+export const AC_TYPES: AcType[] = ['atr', 'a220', 'e190', 'a320', 'b737', 'b787'];
 
-// 機体の大きさ（m）。len = 全長、span = 翼幅、R = 胴体の半径、fy = 胴体の中心の高さ
-export interface AcDims { len: number; span: number; R: number; fy: number; high: boolean; tTail: boolean; props: boolean }
+// 低翼のジェット機の翼とエンジン：rootLE/rootTE = 付け根の前縁・後縁（z）、tipC = 翼端の翼弦、sweep = 後退（翼の長さ 1m あたり）、
+// ex/er = エンジンの位置（x）と半径、fin = 垂直尾翼の高さ、hs = 水平尾翼の半分の幅、winglet = 翼端の小翼の高さ、gear = 主脚の位置（x）
+export interface JetDims { rootLE: number; rootTE: number; tipC: number; sweep: number; ex: number; er: number; fin: number; hs: number; winglet: number; gear: number; flatEngine?: boolean }
+// 機体の大きさ（m）。len = 全長、span = 翼幅、R = 胴体の半径、fy = 胴体の中心の高さ、door = 前の左の扉（機首からの距離、床の高さ）
+export interface AcDims { len: number; span: number; R: number; fy: number; high: boolean; tTail: boolean; props: boolean; wide: boolean; door: [number, number]; jet?: JetDims }
 export const AC: Record<AcType, AcDims> = {
-  atr: { len: 27.2, span: 27.1, R: 1.33, fy: 1.95, high: true, tTail: true, props: true }, // ATR72-600
-  a220: { len: 38.7, span: 35.1, R: 1.85, fy: 2.55, high: false, tTail: false, props: false }, // A220-300
-  e190: { len: 36.2, span: 28.7, R: 1.5, fy: 2.3, high: false, tTail: false, props: false }, // E190
+  atr: { len: 27.2, span: 27.1, R: 1.33, fy: 1.95, high: true, tTail: true, props: true, wide: false, door: [4, 1.6] }, // ATR72-600
+  a220: { len: 38.7, span: 35.1, R: 1.85, fy: 2.55, high: false, tTail: false, props: false, wide: false, door: [5.2, 2.9], jet: { rootLE: 3.4, rootTE: -3.9, tipC: 1.9, sweep: 0.47, ex: 6.3, er: 1.08, fin: 6.0, hs: 5.8, winglet: 1.6, gear: 2.6 } }, // A220-300
+  e190: { len: 36.2, span: 28.7, R: 1.5, fy: 2.3, high: false, tTail: false, props: false, wide: false, door: [4.6, 2.6], jet: { rootLE: 3.0, rootTE: -3.6, tipC: 1.6, sweep: 0.45, ex: 5.4, er: 0.86, fin: 5.2, hs: 5.0, winglet: 1.6, gear: 2.6 } }, // E190
+  a320: { len: 37.6, span: 35.8, R: 1.98, fy: 2.75, high: false, tTail: false, props: false, wide: false, door: [5.5, 3.4], jet: { rootLE: 3.6, rootTE: -4.3, tipC: 1.6, sweep: 0.5, ex: 5.75, er: 1.05, fin: 5.9, hs: 6.2, winglet: 2.4, gear: 3.8 } }, // A320neo
+  b737: { len: 39.5, span: 35.9, R: 1.88, fy: 2.45, high: false, tTail: false, props: false, wide: false, door: [5.8, 2.7], jet: { rootLE: 3.8, rootTE: -4.2, tipC: 1.3, sweep: 0.52, ex: 4.9, er: 1.0, fin: 6.4, hs: 6.5, winglet: 2.8, gear: 2.9, flatEngine: true } }, // 737-800
+  b787: { len: 62.8, span: 60.1, R: 2.9, fy: 3.9, high: false, tTail: false, props: false, wide: true, door: [8.3, 5.0], jet: { rootLE: 6.8, rootTE: -7.0, tipC: 2.4, sweep: 0.55, ex: 9.8, er: 1.5, fin: 10.5, hs: 10.0, winglet: 0, gear: 4.8 } }, // 787-9（A330 級）
 };
 
 // 架空の航空会社（実在の会社は使わない）。白地に、尾翼と胴体の線の色を変える
 export interface Livery { name: string; tail: number; stripe: number; win: number; fleet: AcType[]; cargo?: boolean }
 export const LIVERIES: Livery[] = [
-  { name: 'エアロルーメン', tail: 0x16697a, stripe: 0xf2a541, win: 0x1c2530, fleet: ['a220'] },
-  { name: 'ケストレルライン', tail: 0xc22f3a, stripe: 0x2b2d42, win: 0x1c2530, fleet: ['e190', 'a220'] },
-  { name: 'マリーヴォ航空', tail: 0x2754a6, stripe: 0x6fb7f2, win: 0x1c2530, fleet: ['atr'] },
-  { name: 'テッセラ・リージョナル', tail: 0x5e3f8f, stripe: 0xe8559f, win: 0x1c2530, fleet: ['atr', 'e190'] },
-  { name: 'ヴェローラ', tail: 0x23855a, stripe: 0xa9d86e, win: 0x1c2530, fleet: ['a220', 'e190'] },
+  { name: 'エアロルーメン', tail: 0x16697a, stripe: 0xf2a541, win: 0x1c2530, fleet: ['a220', 'a320', 'b787'] },
+  { name: 'ケストレルライン', tail: 0xc22f3a, stripe: 0x2b2d42, win: 0x1c2530, fleet: ['e190', 'a220', 'b737', 'b787'] },
+  { name: 'マリーヴォ航空', tail: 0x2754a6, stripe: 0x6fb7f2, win: 0x1c2530, fleet: ['atr', 'a320'] },
+  { name: 'テッセラ・リージョナル', tail: 0x5e3f8f, stripe: 0xe8559f, win: 0x1c2530, fleet: ['atr', 'e190', 'b737'] },
+  { name: 'ヴェローラ', tail: 0x23855a, stripe: 0xa9d86e, win: 0x1c2530, fleet: ['a220', 'e190', 'a320', 'b787'] },
 ];
 // 貨物機（窓がないので、窓の帯は白）
-export const CARGO_LIVERY: Livery = { name: 'クイルカーゴ', tail: 0xe0661c, stripe: 0x3b3b3b, win: 0xf1f2f3, fleet: ['atr'], cargo: true };
+export const CARGO_LIVERY: Livery = { name: 'クイルカーゴ', tail: 0xe0661c, stripe: 0x3b3b3b, win: 0xf1f2f3, fleet: ['atr', 'b737', 'b787'], cargo: true };
 export const ALL_LIVERIES = [...LIVERIES, CARGO_LIVERY];
 
 const C = (h: number) => new THREE.Color(h);
@@ -152,27 +159,34 @@ export function buildAircraft(mb: MeshBuilder, type: AcType, livery?: Livery) {
     mb.box(-0.12, 0, L * 0.38, 0.12, fy - R * 0.8, L * 0.4, DARK);
     mb.box(-0.2, 0, L * 0.38, 0.2, 0.6, L * 0.405, TYRE);
   } else {
-    // A220・E190：胴体の下の低翼（後退翼）、翼の下のターボファン、ふつうの尾翼
-    const wy = fy - R * 0.62, sweep = type === 'a220' ? 0.47 : 0.45;
-    const rootLE = type === 'a220' ? 3.4 : 3.0, rootTE = type === 'a220' ? -3.9 : -3.6, tipC = type === 'a220' ? 1.9 : 1.6;
+    // A220・E190・A320・737・787：胴体の下の低翼（後退翼）、翼の下のターボファン、ふつうの尾翼
+    const J = d.jet!, k = d.wide ? 1.6 : 1; // 部材の厚み・反りの倍率
+    const wy = fy - R * 0.62, sweep = J.sweep;
+    const rootLE = J.rootLE, rootTE = J.rootTE, tipC = J.tipC, dih = 1.4 * k + (d.wide ? 1.2 : 0);
     for (const sd of [-1, 1]) {
       const tipLE = rootLE - (half - R) * sweep;
-      wingPanel(mb, [sd * R * 0.4, wy, rootLE, rootTE], [sd * half, wy + 1.4, tipLE, tipLE - tipC], 0.36, WING);
-      // 翼端の小さな翼（塗装）
+      wingPanel(mb, [sd * R * 0.4, wy, rootLE, rootTE], [sd * half, wy + dih, tipLE, tipLE - tipC], 0.36 * k, WING);
+      // 翼端の小さな翼（塗装）。787 は小翼のない、後ろへ流れた翼端
       const wx = sd * half;
-      mb.quad([wx, wy + 1.4, tipLE - tipC], [wx, wy + 1.4, tipLE], [wx, wy + 3.0, tipLE - tipC * 0.9], [wx, wy + 3.0, tipLE - tipC * 1.3], tail);
-      mb.quad([wx, wy + 1.4, tipLE], [wx, wy + 1.4, tipLE - tipC], [wx, wy + 3.0, tipLE - tipC * 1.3], [wx, wy + 3.0, tipLE - tipC * 0.9], tail);
-      const ex = sd * (type === 'a220' ? 6.3 : 5.4), er = type === 'a220' ? 1.08 : 0.86;
-      nacelle(mb, ex, wy - er * 0.55, rootLE - (Math.abs(ex) - R) * sweep - 1.8, rootLE - (Math.abs(ex) - R) * sweep + 2.6, er, GREY, stripe, 12);
-      // 主脚
-      mb.box(sd * 2.6 - 0.25, 0, -1.6, sd * 2.6 + 0.25, wy, -1.0, DARK);
-      mb.box(sd * 2.6 - 0.4, 0, -1.8, sd * 2.6 + 0.4, 1.0, -0.8, TYRE);
+      if (J.winglet > 0) {
+        const wh = J.winglet;
+        mb.quad([wx, wy + dih, tipLE - tipC], [wx, wy + dih, tipLE], [wx, wy + dih + wh, tipLE - tipC * 0.9], [wx, wy + dih + wh, tipLE - tipC * 1.3], tail);
+        mb.quad([wx, wy + dih, tipLE], [wx, wy + dih, tipLE - tipC], [wx, wy + dih + wh, tipLE - tipC * 1.3], [wx, wy + dih + wh, tipLE - tipC * 0.9], tail);
+      }
+      const ex = sd * J.ex, er = J.er;
+      const ez = rootLE - (Math.abs(ex) - R) * sweep;
+      nacelle(mb, ex, wy - er * 0.55, ez - er * 1.7, ez + er * 2.5, er, GREY, stripe, 12);
+      if (J.flatEngine) mb.box(ex - er * 0.9, wy - er * 1.5, ez - er * 1.2, ex + er * 0.9, wy - er * 1.1, ez + er * 2.2, GREY); // 737 の下の平らなエンジン
+      // 主脚（787 は 4 輪の台車）
+      const gx = sd * J.gear;
+      mb.box(gx - 0.25 * k, 0, -1.6 * k, gx + 0.25 * k, wy, -1.0 * k, DARK);
+      mb.box(gx - 0.45 * k, 0, -2.0 * k, gx + 0.45 * k, 1.0 * k, -0.6 * k, TYRE);
     }
     // 翼の付け根のふくらみ
     mb.box(-R * 0.75, wy - 0.3, rootTE - 1.0, R * 0.75, fy - R * 0.3, rootLE + 1.2, BELLY);
-    finPanel(mb, [fy + R * 0.55, -L * 0.3, -L * 0.47], [fy + R + (type === 'a220' ? 6.0 : 5.2), -L * 0.45, -L * 0.52], 0.4, tail);
-    const hs = type === 'a220' ? 5.8 : 5.0;
-    for (const sd of [-1, 1]) wingPanel(mb, [0, fy + R * 0.25, -L * 0.37, -L * 0.47], [sd * hs, fy + R * 0.25 + 0.7, -L * 0.45, -L * 0.5], 0.22, WING);
+    finPanel(mb, [fy + R * 0.55, -L * 0.3, -L * 0.47], [fy + R + J.fin, -L * 0.45, -L * 0.52], 0.4 * k, tail);
+    const hs = J.hs;
+    for (const sd of [-1, 1]) wingPanel(mb, [0, fy + R * 0.25, -L * 0.37, -L * 0.47], [sd * hs, fy + R * 0.25 + 0.7 * k, -L * 0.45, -L * 0.5], 0.22 * k, WING);
     mb.box(-0.15, 0, L * 0.36, 0.15, fy - R * 0.8, L * 0.38, DARK);
     mb.box(-0.25, 0, L * 0.355, 0.25, 0.75, L * 0.385, TYRE);
   }
