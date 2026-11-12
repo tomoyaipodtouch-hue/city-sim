@@ -588,6 +588,9 @@ export class CityRenderer {
     if (day > 0.02) su.uSunDir.value.set(-Math.cos(az), Math.max(-0.05, elev), 0.45 - Math.sin(az) * 0.25).normalize();
     this.renderer.toneMappingExposure = 1.15 - 0.1 * night;
     shared.uNight.value = smooth(0.25, 0.85, night);
+    // 夜の更け具合：21時から1時にかけて窓の明かりが減り、4時半から6時に少し戻る（12時を 12、翌朝6時を 30 として数える）
+    const hr = tod * 24 < 12 ? tod * 24 + 24 : tod * 24;
+    shared.uLate.value = smooth(21, 25, hr) * (1 - 0.5 * smooth(28.5, 30, hr));
     shared.uTime.value = performance.now() / 1000;
     this.stationsMesh.lights.visible = shared.uNight.value > 0.3;
     this.buildings.setNight(shared.uNight.value);

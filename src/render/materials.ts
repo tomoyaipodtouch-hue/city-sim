@@ -7,6 +7,8 @@ import { GARDEN_LIGHT_PARS, gardenUniforms } from './gardenLight';
 
 export const shared = {
   uNight: { value: 0 },
+  // 夜の更け具合（0 = 夜の早い時間 19〜21時、1 = 深夜 1〜4時）。窓の明かりの数を減らす
+  uLate: { value: 0 },
   // ガラスの映り込み用（昼夜で変わる）
   uSunDir: { value: new THREE.Vector3(0.3, 0.8, 0.2) },
   uSunCol: { value: new THREE.Color(1, 0.95, 0.85) },
@@ -54,6 +56,7 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
   m.onBeforeCompile = (sh) => {
     const hq = bldQuality.hq;
     sh.uniforms.uNight = shared.uNight;
+    sh.uniforms.uLate = shared.uLate;
     sh.uniforms.uSunDir = shared.uSunDir;
     sh.uniforms.uSunCol = shared.uSunCol;
     sh.uniforms.uSkyTop = shared.uSkyTop;
@@ -95,6 +98,7 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
         `#include <common>
         ${hq ? '#define BLD_HQ' : ''}
         uniform float uNight;
+        uniform float uLate;
         uniform vec3 uSunDir;
         uniform vec3 uSunCol;
         uniform vec3 uSkyTop;
@@ -232,10 +236,14 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
           if (mi == 5) gRough = mix(gRough, 0.85, paint);
         }
         float pat = floor(vPat + 0.5);
+        // 住宅の印（+40）と空き家の印（+20）
+        float resd = step(39.5, pat);
+        pat -= 40.0 * resd;
         float aband = 0.0;
         if (pat > 19.5) { pat -= 20.0; aband = 1.0; }
         float win = 0.0;
         float lit = 0.0;
+        vec3 litCol = vec3(0.0);
         vec2 uv = vUvm;
         vec2 cellId = vec2(0.0);
         float frame = 0.0;
@@ -488,7 +496,36 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
           glass *= 1.0 - shade * 0.45;
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.85, 0.82), clamp(frame, 0.0, 1.0) * 0.55 * (1.0 - aband));
           diffuseColor.rgb = mix(diffuseColor.rgb, glass, win);
-          lit = win * step(0.45, r) * (1.0 - aband);
+          // 夜の窓の明かり（数と色は実際の街に合わせる）。
+          //  住宅：夜の早い時間は 4 割ほど、深夜は 1 割ほど。家ごとに 昼白色（5000K）と 電球色（2700K、カーテン越し）が半々、両方の家も
+          //  オフィス：早い時間は 2 割ほど、深夜は数 %。階ごとにまとめて点く（ばらばらの点ではなく）。色は 4000〜5000K
+          //  店：1階のショーウィンドウ。3000〜3500K、閉店後は減る
+          // 色は線形の値で、ACES のトーンマップ（夜の露出 1.05）と sRGB を通したときに、その色温度の色味になるように逆算したもの。
+          // ACES は暗いところで色が濃くなるので、ふつうの明るさの 0.75 倍で色味が合うようにしてある。
+          //  住宅 昼白色 ≈ (180,164,150)、電球色（カーテン越し、あせた色）≈ (181,144,108)、オフィス 4000K ≈ (198,167,138)〜5000K ≈ (197,181,167)、店 ≈ (216,162,104)〜(215,174,129)
+          vec2 bs = floor(vWp.xz * 0.05);
+          float hb = h21(bs + 7.13);
+          float hw = h21(cellId * 1.37 + bs + 3.71);
+          float hf = h21(vec2(cellId.y * 0.731, hb * 37.0) + bs);
+          float isRes = max(resd, float(abs(pat - 1.0) < 0.5 || abs(pat - 5.0) < 0.5 || abs(pat - 9.0) < 0.5));
+          float isShow = (1.0 - isRes) * float(abs(pat - 2.0) < 0.5 && uv.y < 3.6);
+          // 店の上の階は住まいの明かり
+          isRes = max(isRes, (1.0 - isShow) * float(abs(pat - 2.0) < 0.5));
+          float isOff = (1.0 - isRes) * (1.0 - isShow);
+          float pRes = mix(0.42, 0.1, uLate);
+          float pShow = mix(0.85, 0.2, uLate);
+          // オフィス：建物ごとの忙しさ（0.5〜1.5倍）。点いた階では 85% の区画が点く
+          float pOff = mix(0.21, 0.03, uLate) * (0.5 + hb) * (1.0 / 0.85);
+          float litOn = isRes * step(hw, pRes) + isShow * step(hw, pShow) + isOff * step(hf, pOff) * step(hw, 0.85);
+          lit = win * litOn * (1.0 - aband);
+          // 色：住宅は家ごと（0..1 = 昼白色..電球色、両方の家は 0.5）、オフィスは階ごとに 4000〜5000K、店は 3000〜3500K
+          float hc = fract(hw * 13.7 + hf * 3.1);
+          float warm = step(0.45, hc) - 0.5 * step(0.86, hc);
+          vec3 cRes = mix(vec3(0.362, 0.281, 0.227), vec3(0.365, 0.213, 0.117), warm);
+          vec3 cOff = mix(vec3(0.482, 0.29, 0.183), vec3(0.484, 0.359, 0.284), hf);
+          vec3 cShow = mix(vec3(0.641, 0.265, 0.097), vec3(0.651, 0.319, 0.15), hb);
+          // 明るさのばらつき（照明の数、カーテンの厚さ）
+          litCol = (isRes * cRes + isOff * cOff + isShow * cShow) * (0.75 + 0.5 * fract(hw * 7.31));
           if (modern) {
             // オフィスは天井の照明が帯のように光る（窓の上側が明るい）
             float fy2 = mod(uv.y, abs(pat - 9.0) < 0.5 ? 3.1 : abs(pat - 10.0) < 0.5 ? 3.8 : 3.7);
@@ -592,7 +629,7 @@ export function createBuildingMaterial(): THREE.MeshStandardMaterial {
       .replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
-        totalEmissiveRadiance += vec3(1.0, 0.82, 0.5) * lit * uNight * 0.9;
+        totalEmissiveRadiance += litCol * lit * uNight;
         totalEmissiveRadiance += vec3(0.75, 0.88, 1.0) * gGlow * uNight * 1.4;
         totalEmissiveRadiance += gLed * uNight * 1.3;
         totalEmissiveRadiance += diffuseColor.rgb * gLit * uNight * 1.1;

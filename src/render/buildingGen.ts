@@ -188,6 +188,7 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
   // 工場・発電所などの斜めの屋根は金属
   mb.slopeRoofMat = b.civic || b.type === 'ID' || b.type === 'IM' || b.type === 'IH' || b.type === 'IL' ? MAT.metal : MAT.shingle;
   mb.abandoned = b.state === BState.Abandoned;
+  mb.residential = b.type === 'R1' || b.type === 'R2' || b.type === 'R3' || b.type === 'mayor_house';
   const tf = (lx: number, lz: number, s = 1, kind = 0, ly = 0, col?: number, shape?: number) => {
     // ローカル座標から世界座標へ（MeshBuilder と同じ変換）
     const a = b.face === 0 ? -Math.PI / 2 : b.face === 4 ? Math.PI / 2 : b.face === 6 ? Math.PI : 0;
@@ -198,6 +199,7 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
   };
   const feet: number[] = []; // 木の足元（敷地の座標 x, z, 高さ, 大きさ）
   if (b.state === BState.Building) {
+    mb.residential = false;
     construction(mb, f, rng);
     mb.abandoned = false;
     return;
@@ -287,6 +289,7 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
   for (let k = 0; k < feet.length; k += 4) mb.treeFoot(feet[k], feet[k + 1], feet[k + 2], feet[k + 3]);
   mb.endLot();
   mb.abandoned = false;
+  mb.residential = false;
 }
 
 export type TF = (lx: number, lz: number, s?: number, kind?: number, y?: number, col?: number, shape?: number) => void;

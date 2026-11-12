@@ -55,6 +55,8 @@ export class MeshBuilder {
   private ty = 0;
   private tz = 0;
   abandoned = false;
+  // 住宅（夜の窓の明かりの色と点き方を住宅のものにする）。窓の模様（1〜10）に +40 して渡す
+  residential = false;
 
   // 敷地の座標を世界の座標に直す（煙や炎などの動くものの位置を決めるときに使う）
   world(x: number, y: number, z: number): [number, number, number] {
@@ -94,7 +96,7 @@ export class MeshBuilder {
     const k = this.abandoned ? 0.62 : 1;
     this.col.push(c.r * k, c.g * k, c.b * k);
     this.uvm.push(u, v);
-    this.pat.push(this.abandoned && p > 0 ? p + 20 : p);
+    this.pat.push(p > 0 ? p + (this.abandoned ? 20 : 0) + (this.residential && p <= PAT.fullglass ? 40 : 0) : p);
     this.mat.push(this.curMat);
     return this.pos.length / 3 - 1;
   }
