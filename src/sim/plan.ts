@@ -1221,7 +1221,9 @@ export function planBulldoze(
   }
   for (const id of bset) {
     const b = bInfo(id);
-    if (b) cost += b.civic ? 50 * b.w * b.h : 15 * b.w * b.h;
+    // 斜めの空港は外の四角より敷地が小さいので、敷地の広さ（長い辺 × 短い辺）で数える
+    const af = b?.civic && b.type ? CIVIC[b.type as CivicId]?.airfield : undefined;
+    if (b) cost += af ? 50 * CIVIC[b.type as CivicId].w * CIVIC[b.type as CivicId].h : b.civic ? 50 * b.w * b.h : 15 * b.w * b.h;
   }
   return { layer, roads, lines, buildings: [...bset], trees, cost, cells, transit };
 }

@@ -255,7 +255,7 @@ export class ToolController {
       for (const id of plan.buildings) {
         const b = this.game.buildings.get(id);
         if (!b) continue;
-        for (let yy = b.y; yy < b.y + b.h; yy++) for (let xx = b.x; xx < b.x + b.w; xx++) cells.add(g.idx(xx, yy));
+        for (let yy = b.y; yy < b.y + b.h; yy++) for (let xx = b.x; xx < b.x + b.w; xx++) if (g.bldg[g.idx(xx, yy)] === id) cells.add(g.idx(xx, yy));
       }
       const all = plan.cells.filter((i) => !cells.has(i));
       pv.setTiles(g, [...all, ...cells], (i) => (cells.has(i) ? 0xf07030 : 0x777777));

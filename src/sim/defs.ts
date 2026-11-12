@@ -199,7 +199,7 @@ export const GARBAGE_PER_RES = 0.9;
 export const GARBAGE_PER_JOB = 0.6;
 
 export type CivicId = 'coal' | 'gas' | 'oil' | 'nuclear' | 'nuclear_in' | 'nuclear_sea' | 'wind' | 'solar' | 'pump' | 'tower' | 'water_plant' | 'desal' | 'incinerator_l' | 'seaport_l' | 'park_s' | 'park_l' | 'plaza' | 'playground' | 'greenway' | 'sports' | 'garden' | 'cpark_a' | 'cpark_b' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station'
-  | 'ferry_p' | 'ferry_c' | 'seaport' | 'airport_s' | 'airport_l' | 'freight_st'
+  | 'ferry_p' | 'ferry_c' | 'seaport' | 'airport_s' | 'airport_l' | 'airport_1' | 'freight_st'
   | 'police_s' | 'police_l' | 'fire_s' | 'fire_l' | 'clinic' | 'hospital' | 'school_e' | 'school_h' | 'college' | 'library'
   | 'landfill' | 'incinerator' | 'recycling' | 'cemetery' | 'crematorium'
   | 'mayor_house' | 'city_hall' | 'statue' | 'museum' | 'stadium' | 'future_stadium' | 'ciq';
@@ -221,7 +221,8 @@ export interface CivicDef {
   waterfront?: boolean; // 水辺に置く必要がある
   seaport?: boolean;
   portScale?: number; // 港の効果の倍率（大型コンテナターミナルは 3）
-  airport?: number; // 空港の規模（1 = 小, 2 = 大）
+  airport?: number; // 以前の空港の規模（1 = 小, 2 = 大）。今は新しく置けない（保存データのため）
+  airfield?: 1 | 2 | 3; // 新しい空港（1 = 小, 2 = 中, 3 = 大）。形と数字は airport.ts
   freightRail?: boolean; // 貨物駅
   ciq?: boolean; // CIQ庁舎（半径 radius の工業ゾーンが倉庫業になる）
   service?: ServiceKind; // 公共サービス
@@ -268,8 +269,13 @@ export const CIVIC: Record<CivicId, CivicDef> = {
   ferry_c: { id: 'ferry_c', name: 'カーフェリー乗り場', w: 3, h: 3, cost: 6000, upkeep: 110, ferry: 'car', waterfront: true, desc: '車ごと乗れるフェリー。水域がマップの端まで続いていれば、隣の都市へも行ける' },
   seaport_l: { id: 'seaport_l', name: 'コンテナターミナル（大）', w: 12, h: 16, rotate: true, cost: 90000, upkeep: 900, seaport: true, portScale: 3, waterfront: true, pollution: 10, desc: '大きなガントリークレーンが並ぶコンテナ港。工業、とくに倉庫業の需要が大きく上がり、まわりに大きな倉庫が建つ。水域がマップの端まで続いている必要がある' },
   seaport: { id: 'seaport', name: '港', w: 4, h: 4, cost: 25000, upkeep: 300, seaport: true, waterfront: true, pollution: 6, desc: '工業、とくに倉庫業の需要が上がり、トラックが荷物を運べる。水域がマップの端まで続いている必要がある' },
-  airport_s: { id: 'airport_s', name: '空港（小）', w: 11, h: 44, rotate: true, cost: 30000, upkeep: 350, airport: 1, pollution: 4, desc: '商業とオフィスの需要が上がる。周りは騒音で地価が下がる' },
-  airport_l: { id: 'airport_l', name: '空港（大）', w: 17, h: 80, rotate: true, cost: 90000, upkeep: 900, airport: 2, pollution: 10, desc: '商業とオフィスの需要が大きく上がる。周りは騒音で地価が下がる' },
+  // 以前の空港（メニューにはない。保存データの空港はそのまま動く）
+  airport_s: { id: 'airport_s', name: '空港（小・旧型）', w: 11, h: 44, rotate: true, cost: 30000, upkeep: 350, airport: 1, pollution: 4, desc: '商業とオフィスの需要が上がる。周りは騒音で地価が下がる' },
+  airport_l: { id: 'airport_l', name: '空港（大・旧型）', w: 17, h: 80, rotate: true, cost: 90000, upkeep: 900, airport: 2, pollution: 10, desc: '商業とオフィスの需要が大きく上がる。周りは騒音で地価が下がる' },
+  airport_1: {
+    id: 'airport_1', name: '空港（小）', w: 12, h: 60, cost: 80000, upkeep: 650, airfield: 1, pollution: 5,
+    desc: '街なかの小さな空港（滑走路 800m）。商業とオフィスの需要が上がり、着陸料の収入がある。駅や高速道路とつなぐと利用者が増える。滑走路の先は騒音で地価が下がる。斜めにも、海の上にも置ける',
+  },
   police_s: { id: 'police_s', name: '交番', w: 1, h: 1, cost: 800, upkeep: 60, service: 'police', radius: 9, desc: '周りの犯罪を減らす（小さな範囲）' },
   police_l: { id: 'police_l', name: '警察署', w: 3, h: 2, cost: 5000, upkeep: 260, service: 'police', radius: 20, desc: '広い範囲の犯罪を減らす' },
   fire_s: { id: 'fire_s', name: '消防分署', w: 2, h: 2, cost: 2500, upkeep: 120, service: 'fire', radius: 14, desc: '周りの火災の危険を減らす' },

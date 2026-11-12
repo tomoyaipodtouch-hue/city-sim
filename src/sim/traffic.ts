@@ -326,7 +326,7 @@ export interface TransitModel {
   lineToWalk: Map<number, number[]>; // 線のノード → 徒歩のノード
   any: boolean; // 公共交通が1つでもあるか
   walkLinks: Map<number, [number, number][]>; // 旅客フェリー：徒歩のノード → [徒歩のノード, 分]
-  carLinks: Map<number, [number, number][]>; // カーフェリー：車のノード → [車のノード, 分]
+  carLinks: Map<number, [number, number][]>; // カーフェリー・空港の専用ランプ：車のノード（地上・上空） → [車のノード, 分]
   carToExt: Map<number, number>; // カーフェリーで隣の都市へ：車のノード → 分
   railToExt: boolean; // 鉄道・高架鉄道がマップの端から隣の都市へ行ける
 }
@@ -610,10 +610,12 @@ export function assignTrips(
           if (truck) relax(EXT, t + extPen[u] + extExtra, u, -1, 0, real[u] + extPen[u]);
           else relax(EXT, t + extPen[u] + extExtra, u, -1, 0);
         }
-        if (transit && u < N) {
-          // カーフェリー
-          const fl = transit.carLinks.size ? transit.carLinks.get(u) : undefined;
+        // カーフェリー・空港の専用ランプ（高架の高速道路からも）
+        if (transit && transit.carLinks.size) {
+          const fl = transit.carLinks.get(u);
           if (fl) for (const [v, m] of fl) relax(v, t + m, u, -1, 0);
+        }
+        if (transit && u < N) {
           const fe = transit.carToExt.size ? transit.carToExt.get(u) : undefined;
           if (fe !== undefined && extFree > 0) relax(EXT, t + fe, u, -1, 0);
           if (parkRide && parkRide[u]) {

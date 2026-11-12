@@ -14,6 +14,7 @@ export type ThumbSpec =
   | { k: 'civic'; id: CivicId }
   | { k: 'grow'; type: GrowKind; den: number; floors: number; w: number; h: number; tint: number }
   | { k: 'trees' }
+  | { k: 'airport'; size: 1 | 2 | 3 } // 空港：ターミナル・管制塔・駐機中の飛行機のあたりを切り取って描く
   | { k: 'icon'; icon: string };
 
 export interface ToolItem {
@@ -220,7 +221,8 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { title: 'モノレール', items: [line('mono', 'モノレールの線路', 'mono'), civ('mono_station')] },
       { title: '地下鉄', items: [line('sub', '地下鉄の線路', 'sub'), civ('sub_station')] },
       { title: 'フェリー・港', items: [civ('ferry_p'), civ('ferry_c'), civ('seaport'), civ('seaport_l')] },
-      { title: '空港', items: [civ('airport_s'), civ('airport_l')] },
+      // 以前の空港（airport_s・airport_l）はメニューから外した（保存データの空港はそのまま動く）
+      { title: '空港', items: [civ('airport_1', undefined, { thumb: { k: 'airport', size: 1 }, hint: '斜め・海上も可' })] },
     ],
   },
   {
@@ -251,6 +253,7 @@ export function thumbKey(t: ThumbSpec): string {
     case 'civic': return `c:${t.id}`;
     case 'grow': return `g:${t.type}.${t.den}.${t.floors}.${t.w}x${t.h}.${t.tint.toString(16)}`;
     case 'trees': return 'trees';
+    case 'airport': return `a:${t.size}`;
     case 'icon': return `i:${t.icon}`;
   }
 }

@@ -18,6 +18,7 @@ import { erailStationCells, HWR_MSG_STATION, isElevHighway, levelHighwaysOverRai
 import { ADVISORS, Advice, computeRating, Loan, LOAN_AMOUNTS, loanRate, makeAdvice, MAX_LOANS, newLoan, ordinanceCost, ordinanceEffects, OrdinanceEffects, OrdinanceId, ORDINANCES, payLoan, rewardUnlocked, REWARD_REQ } from './governance';
 import { defaultServiceState, facilityEffect, makeServiceMaps, ServiceMaps, ServiceState, updateServices } from './services';
 import { Ages, agesOf, FuneralState, taxFactor, updatePopulation, WORK_RATE, workersOf } from './population';
+import { AIRPORT_SPECS, AirStats, airportCells, airportLayout, airportPorts, airTimeWeight, AIR_BELLY_TONS, AIR_CARGO_TONS_PER_FLIGHT, AIR_FEE_FLIGHT, AIR_FEE_FREIGHT, AIR_FEE_PAX, AIR_FREIGHT_TONS, AIR_TRIP_OFFICE, AIR_TRIP_RES, applyAirportGround, frameOf, highwayNodes, noiseAt, planAirport, stationLines } from './airport';
 import { isJctRamp, assignTrips, buildJunctions, buildRoadGraph, buildTransitModel, congestionFactor, Destination, junctionGroup, LAYER, normalizeAvenueJunctions, Origin, parkingMinutes, TRUCK_PCE } from './traffic';
 
 export enum BState {
@@ -54,6 +55,7 @@ export interface Building {
   badMonths: number;
   ages?: Ages; // 住宅：年齢層の割合 [子ども, 働く世代, 高齢者]
   aOcc?: number; // 住宅：前の月の住人数（増えた分を引っ越してきた世帯として数える）
+  air?: AirStats; // 新しい空港：運航の様子（便数・利用者・貨物・駅と高速道路）
 }
 
 export interface Stats {
@@ -97,6 +99,7 @@ export interface Maps extends ServiceMaps {
   jctl: Uint8Array; // 交差点の実際の制御方式（自動の場合は交通量で決まったもの）
   riders: Float32Array; // 公共交通の1日の乗客数（バス、鉄道、高架鉄道、モノレール、地下鉄の順に n*n ずつ）
   congestion: Float32Array;
+  noise: Uint8Array; // 空港の騒音（0..255）
 }
 
 export interface SaveData {
@@ -159,7 +162,7 @@ export type Command =
   | { t: 'zone'; x0: number; y0: number; x1: number; y1: number; zone: ZoneType; den: number }
   | { t: 'bulldoze'; x0: number; y0: number; x1: number; y1: number; layer?: BulldozeLayer } // layer を省くと地上だけ
   | { t: 'pline'; x0: number; y0: number; x1: number; y1: number }
-  | { t: 'plop'; id: CivicId; x: number; y: number }
+  | { t: 'plop'; id: CivicId; x: number; y: number; rot?: number } // rot = 空港の向き（陸側の方角、8方向）
   | { t: 'tax'; kind: GrowKind; rate: number }
   | { t: 'ramp'; x: number; y: number }
   | { t: 'diamond'; x: number; y: number }
@@ -190,6 +193,8 @@ const LOGI_PORT_W = 1.0;
 const LOGI_ROAD_W = 0.15;
 // 倉庫業の需要：街の荷物（工業と店の雇用）に対する割合（港がないとき）、港 1 つあたりの割合と、港 1 つあたりの量、港の効果の割合
 const IL_WANT_BASE = 0.03;
+// 空港の騒音で下がる地価（騒音がいちばん強いところ、0..1 の地価から）
+export const AIR_NOISE_LV = 0.32;
 const IL_WANT_PORT = 0.06;
 const IL_WANT_PORT_FLAT = 100;
 const IL_PORT_SHARE = 0.5;
@@ -202,6 +207,8 @@ export const freightTrips = (b: { type: string; occ: number }) => Math.max(1, Ma
 // 遠くへの荷物は、マップの端より FREIGHT_TERMINAL_PREF 分以上遠くなければ港・貨物駅へ運ぶ
 export const FREIGHT_LONG = 0.7;
 const FREIGHT_TERMINAL_PREF = 30;
+// 航空貨物：空港まで遠くても（この時間（分）までは）隣の都市より空港を選ぶ
+const AIR_FREIGHT_PREF = 45;
 // CIQ庁舎のまわり：需要が足りないときでも、毎日これだけの回数は倉庫業が建つのをためす。種類を選ぶときの需要の下限
 const CIQ_TRIES = 2;
 const CIQ_DEMAND = 0.6;
@@ -214,7 +221,8 @@ const CIQ_REDEV_PICK = 3;
 const emptyKinds = (v: number) => Object.fromEntries(GROW_KINDS.map((k) => [k, v])) as Record<GrowKind, number>;
 
 // 2回に分けて計算した貨物の結果を合わせる（交通量・運べた数・輸送時間）
-function mergeTrips(a: ReturnType<typeof assignTrips>, b: ReturnType<typeof assignTrips>) {
+type TripSum = Pick<ReturnType<typeof assignTrips>, 'volume' | 'served' | 'time' | 'external' | 'avgTime'>;
+function mergeTrips(a: TripSum, b: TripSum): TripSum {
   const volume = a.volume.slice();
   for (let i = 0; i < volume.length; i++) volume[i] += b.volume[i];
   const served = new Map(a.served), time = new Map<number, number>();
@@ -303,6 +311,7 @@ export class World {
       riders: new Float32Array(c * 5),
       ...makeServiceMaps(c),
       congestion,
+      noise: new Uint8Array(c),
     };
   }
 
@@ -546,6 +555,7 @@ export class World {
         return { ok: true, cost: plan.cost };
       }
       case 'plop': {
+        if (CIVIC[c.id]?.airfield) return this.plopAirport(c.id, c.x, c.y, c.rot ?? 2);
         const plan = planPlop(g, c.id, c.x, c.y);
         if (!plan.ok) return { ok: false, msg: plan.reason };
         if (c.id === 'el_station' && [...erailStationCells(g, [{ type: c.id, x: plan.x, y: plan.y, w: plan.w, h: plan.h }])].some((i) => isElevHighway(g.up[i])))
@@ -724,6 +734,7 @@ export class World {
         // 見た目の向きだけを変える（正方形の敷地は 90 度ずつ、長方形は 180 度）。道路への出入りは向きに関係ない
         const b = this.buildings.get(c.id);
         if (!b) return { ok: false, msg: '建物が見つかりません' };
+        if (b.civic && CIVIC[b.type as CivicId]?.airfield) return { ok: false, msg: '空港の向きは変えられません（取り壊して置き直してください）' };
         const order = [2, 0, 6, 4]; // 南 → 東 → 北 → 西
         const k = Math.max(0, order.indexOf(b.face));
         b.face = b.w === b.h ? order[(k + 1) % 4] : (b.face + 4) & 7;
@@ -793,9 +804,11 @@ export class World {
 
   private placeBuilding(b: Building) {
     const g = this.g;
+    const lot = this.lotSet(b);
     for (let y = b.y; y < b.y + b.h; y++)
       for (let x = b.x; x < b.x + b.w; x++) {
         const i = g.idx(x, y);
+        if (lot && !lot.has(i)) continue;
         g.bldg[i] = b.id;
         g.tree[i] = 0;
         if (b.civic) {
@@ -866,10 +879,64 @@ export class World {
     return (best + 4) & 7;
   }
 
+  // 新しい空港の敷地のマス（斜めの敷地は外の四角の一部だけ）。ほかの建物は null（外の四角すべて）
+  private lotCache = new Map<number, { key: string; cells: number[]; set: Set<number> }>();
+  lotCells(b: Building): number[] | null {
+    if (!b.civic) return null;
+    const def = CIVIC[b.type as CivicId];
+    if (!def?.airfield) return null;
+    const key = `${b.x},${b.y},${b.w},${b.h},${b.face},${this.g.n}`;
+    let e = this.lotCache.get(b.id);
+    if (!e || e.key !== key) {
+      const cells = airportCells(this.g.n, b, AIRPORT_SPECS[def.airfield]);
+      this.lotCache.set(b.id, (e = { key, cells, set: new Set(cells) }));
+    }
+    return e.cells;
+  }
+  private lotSet(b: Building): Set<number> | null {
+    return this.lotCells(b) ? this.lotCache.get(b.id)!.set : null;
+  }
+
+  // 新しい空港を置く（向き rot。斜めにも、水の上にも置ける：水は埋め立てて、まわりを岸壁にする）
+  private plopAirport(id: CivicId, x: number, y: number, rot: number): CmdResult {
+    const def = CIVIC[id];
+    const size = def.airfield!;
+    const plan = planAirport(this.g, size, x, y, rot);
+    if (!plan.ok) return { ok: false, msg: plan.reason };
+    if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
+    applyAirportGround(this.g, plan);
+    this.heightVersion++;
+    const b: Building = {
+      id: this.nextId++, civic: true, type: id, x: plan.x, y: plan.y, w: plan.w, h: plan.h,
+      face: plan.rot, seed: this.rng.int(1e9), den: 0, cap: 0, occ: 0,
+      state: BState.Normal, stateDays: 0, powered: false, watered: false, floors: 0, commute: 0, employed: 1, badMonths: 0,
+    };
+    this.placeBuilding(b);
+    this.afterGridChange();
+    const msg = plan.fill.length ? `埋め立て ${plan.fill.length} マス・岸壁 ${plan.quay.length} マス` : undefined;
+    return { ok: true, cost: plan.cost, msg };
+  }
+
   // 敷地の周りにある道路マス
   accessCells(b: { x: number; y: number; w: number; h: number }): number[] {
     const g = this.g;
     const out: number[] = [];
+    const lot = (b as Building).id !== undefined ? this.lotSet(b as Building) : null;
+    if (lot) {
+      const seen = new Set<number>();
+      for (const i of lot) {
+        const x = i % g.n, y = (i / g.n) | 0;
+        for (let d = 0; d < 8; d++) {
+          const qx = x + DX[d], qy = y + DY[d];
+          if (!g.inb(qx, qy)) continue;
+          const j = g.idx(qx, qy);
+          if (lot.has(j) || seen.has(j)) continue;
+          seen.add(j);
+          if (this.isLocalRoad(g.road[j])) out.push(j);
+        }
+      }
+      return out;
+    }
     for (let y = b.y - 1; y <= b.y + b.h; y++)
       for (let x = b.x - 1; x <= b.x + b.w; x++) {
         if (x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h) continue;
@@ -1514,7 +1581,7 @@ export class World {
         for (const i of roadCells) water[i] = 1;
         for (const b of cons) {
           if (!b.watered) continue;
-          for (let y = b.y; y < b.y + b.h; y++) for (let x = b.x; x < b.x + b.w; x++) water[g.idx(x, y)] = 1;
+          for (let y = b.y; y < b.y + b.h; y++) for (let x = b.x; x < b.x + b.w; x++) if (g.bldg[g.idx(x, y)] === b.id) water[g.idx(x, y)] = 1;
         }
         // 空き地のゾーンも道路の隣なら水が届く
         for (const i of roadCells) {
@@ -1553,6 +1620,13 @@ export class World {
     const res = new Float32Array(N);
     for (const b of this.buildings.values()) {
       if (b.state === BState.Building) continue;
+      const lot = this.lotCells(b);
+      if (lot) {
+        // 新しい空港：汚染は敷地のマスに分ける（斜めの敷地は外の四角の一部）
+        const p = (CIVIC[b.type as CivicId].pollution || 0) / lot.length;
+        for (const i of lot) src[i] += p;
+        continue;
+      }
       const area = b.w * b.h;
       let p = 0, pk = 0;
       if (b.civic) {
@@ -1605,7 +1679,36 @@ export class World {
         lv[i] = Math.max(0, Math.min(1, v));
       }
     const lvb = blur(lv, n, 1, 1);
-    for (let i = 0; i < N; i++) this.maps.landValue[i] = Math.round(Math.max(0, Math.min(1, lvb[i])) * 255);
+    // 空港の騒音：滑走路の向きに沿ってのびる範囲の地価が下がる
+    const noise = this.airportNoise();
+    for (let i = 0; i < N; i++) {
+      if (noise[i]) lvb[i] -= (noise[i] / 255) * AIR_NOISE_LV;
+      this.maps.landValue[i] = Math.round(Math.max(0, Math.min(1, lvb[i])) * 255);
+    }
+  }
+
+  // 新しい空港の騒音の地図（0..255）。運航が多いほど広く強い
+  private airportNoise(): Uint8Array {
+    const g = this.g, n = g.n, out = this.maps.noise;
+    out.fill(0);
+    for (const b of this.buildings.values()) {
+      const def = b.civic ? CIVIC[b.type as CivicId] : undefined;
+      if (!def?.airfield) continue;
+      const spec = AIRPORT_SPECS[def.airfield], L = airportLayout(def.airfield), f = frameOf(b, spec);
+      const act = b.air ? (b.air.open ? Math.min(1, (b.air.flights + b.air.cargoFlights) / (spec.paxCap / spec.paxPerFlight)) : 0) : 0.3;
+      const lot = this.lotSet(b)!;
+      // 調べる範囲：滑走路の両端から騒音の長さまでの四角
+      const R = Math.ceil((f.A / 2 + spec.noiseLen) / CELL) + 1;
+      const bx = Math.round(f.cx / CELL), bz = Math.round(f.cz / CELL);
+      for (let y = Math.max(0, bz - R); y <= Math.min(n - 1, bz + R); y++)
+        for (let x = Math.max(0, bx - R); x <= Math.min(n - 1, bx + R); x++) {
+          const i = y * n + x;
+          if (lot.has(i)) continue;
+          const v = noiseAt(f, L, (x + 0.5) * CELL, (y + 0.5) * CELL, act);
+          if (v > 0) out[i] = Math.max(out[i], Math.round(v * 255));
+        }
+    }
+    return out;
   }
 
   // ---------------- 交通（通勤・買い物・貨物） ----------------
@@ -1646,6 +1749,12 @@ export class World {
       if (r === undefined) rep.set(key, (r = c));
       return r;
     };
+    // 新しい空港（運航しているもの）：旅客と、ハイテク産業の航空貨物
+    const airports = [...this.buildings.values()].filter((b) => b.civic && CIVIC[b.type as CivicId]?.airfield);
+    const airOpen = airports.filter((b) => b.powered && this.accessCells(b).length > 0);
+    const airShare = airOpen.reduce((m, b) => Math.max(m, AIRPORT_SPECS[CIVIC[b.type as CivicId].airfield!].freightShare), 0);
+    const airTravel = new Map<number, Origin>();
+    const airTrucks = new Map<number, Origin>();
     for (const b of this.buildings.values()) {
       if (b.civic || b.state !== BState.Normal) continue;
       const def = GROW[b.type as GrowKind];
@@ -1660,14 +1769,25 @@ export class World {
         addOrigin(commuters, cell, b.id, Math.round(workers * f), NO_CAR_PENALTY);
         addOrigin(shoppers, cell, b.id, Math.round(shop * (1 - f)), 0);
         addOrigin(shoppers, cell, b.id, Math.round(shop * f), NO_CAR_PENALTY);
+        if (airOpen.length) {
+          const t = b.occ * AIR_TRIP_RES;
+          addOrigin(airTravel, cell, b.id, t * (1 - f), 0);
+          addOrigin(airTravel, cell, b.id, t * f, NO_CAR_PENALTY);
+        }
       } else {
+        if (airOpen.length && (b.type === 'CO2' || b.type === 'CO3')) addOrigin(airTravel, cell, b.id, b.occ * AIR_TRIP_OFFICE, 0);
         addDest(jobsAt, acc, { id: b.id, free: b.cap });
         if (def.zone === ZoneType.C) {
           const park = parkingMinutes(b.den, core[g.idx(b.x + (b.w >> 1), b.y + (b.h >> 1))]);
           for (const c of acc) if (park > carArrive[c]) carArrive[c] = park;
         }
         if (b.type === 'CS1' || b.type === 'CS2' || b.type === 'CS3') addDest(shopsAt, acc, { id: b.id, free: b.cap * 6 });
-        if (def.zone === ZoneType.I || def.zone === ZoneType.F) addOrigin(trucks, cell, b.id, freightTrips(b));
+        if (def.zone === ZoneType.I || def.zone === ZoneType.F) {
+          // ハイテク産業の荷物の一部は航空貨物（空港へ運ぶ）。そのぶん隣の都市へ向かうトラックが減る
+          const k = freightTrips(b), ka = b.type === 'IH' ? k * airShare : 0;
+          if (ka > 0) addOrigin(airTrucks, cell, b.id, ka);
+          addOrigin(trucks, cell, b.id, k - ka);
+        }
       }
     }
     const pop = this.population();
@@ -1707,6 +1827,17 @@ export class World {
         const roadCells = estopRoads(g, cells);
         if (roadCells.length) stations.push({ kind: 'erail', roadCells, lineCells: cells.filter((c) => g.erail[c]) });
       }
+    }
+    // 新しい空港の駅：駅の範囲に接して引いた線路（地下鉄はターミナルの下も）。乗り降りは空港のまわりの道路のマス
+    const airInfo = new Map<number, { acc: number[]; lines: Map<LineKind, number[]>; hw: number[] }>();
+    for (const b of airports) {
+      const def = CIVIC[b.type as CivicId], size = def.airfield!;
+      const lot = this.lotSet(b)!;
+      const ports = airportPorts(n, frameOf(b, AIRPORT_SPECS[size]), airportLayout(size), this.lotCells(b)!, (i) => lot.has(i));
+      const acc = this.accessCells(b);
+      const lines = stationLines(g, ports);
+      airInfo.set(b.id, { acc, lines, hw: highwayNodes(g, ports) });
+      if (acc.length && b.powered) for (const [kind, cells] of lines) stations.push({ kind, roadCells: acc, lineCells: cells });
     }
     // 道路に重ねたバス停
     const roadStops: number[] = [];
@@ -1773,17 +1904,37 @@ export class World {
       if (toNeighbor) tm.carToExt.set(A.road, 25);
       A.b.note = A.body < 0 ? '<span class="neg">水辺に接していません</span>' : `航路 ${routes} 本${toNeighbor ? '・隣の都市への航路あり' : ''}`;
     }
+    // 新しい空港：高速道路から空港専用のランプで直接入る（敷地の陸側に接する高速道路から、空港の道路へ）
+    const airFreightAt = new Map<number, Destination[]>();
+    const airDest = new Map<number, Destination[]>();
+    for (const b of airOpen) {
+      const info = airInfo.get(b.id)!;
+      const spec = AIRPORT_SPECS[CIVIC[b.type as CivicId].airfield!];
+      for (const u of info.hw) {
+        const c = u % N, ux = c % n, uy = (c / n) | 0;
+        let best = info.acc[0], bd = Infinity;
+        for (const a of info.acc) { const d = Math.hypot((a % n) - ux, ((a / n) | 0) - uy); if (d < bd) { bd = d; best = a; } }
+        const m = 1 + (bd * CELL) / 670; // 空港の中の道路を 40km/h
+        (tm.carLinks.get(u) ?? tm.carLinks.set(u, []).get(u)!).push([best, m]);
+      }
+      for (const c of info.acc) {
+        (airDest.get(c) ?? airDest.set(c, []).get(c)!).push({ id: b.id, free: spec.paxCap * 1.5 });
+        (airFreightAt.get(c) ?? airFreightAt.set(c, []).get(c)!).push({ id: b.id, free: 1e9 });
+      }
+    }
     this.airportBoost = airportBoost;
     this.seaportBoost = seaportBoost;
     this.freightBoost = freightBoost;
     const graph = buildRoadGraph(g, cong, junctions);
     const rc = assignTrips(g, [...commuters.values()], jobsAt, cong, junctions, rnd, { externalCap: external, maxMinutes: 80, weight: 1, parkRide: true, carArrive }, tm, graph);
     const rs = assignTrips(g, [...shoppers.values()], shopsAt, cong, junctions, rnd, { externalCap: this.neighborConnected ? pop * 0.03 : 0, maxMinutes: 30, weight: 0.5 }, tm, graph);
+    // 空港へ行く人（旅行・出張）。車・鉄道・地下鉄・バス・高速道路のランプ。近いほど、この空港を使う
+    const ra = airDest.size && airTravel.size ? assignTrips(g, [...airTravel.values()], airDest, cong, junctions, rnd, { externalCap: 0, maxMinutes: 75, weight: 1, parkRide: true }, tm, graph) : null;
     // 公共交通の乗客数（バス、鉄道、高架鉄道、モノレール、地下鉄の順に N マスずつ）
     const riders = this.maps.riders;
     for (let l = 0; l < 5; l++) {
       const base = (LAYER.bus + l) * N;
-      for (let i = 0; i < N; i++) riders[l * N + i] = riders[l * N + i] * 0.4 + (rc.volume[base + i] + rs.volume[base + i] * 2) * 0.6;
+      for (let i = 0; i < N; i++) riders[l * N + i] = riders[l * N + i] * 0.4 + (rc.volume[base + i] + rs.volume[base + i] * 2 + (ra ? ra.volume[base + i] * 2 : 0)) * 0.6;
     }
     this.transitRiders = Math.round(rc.modes.transit + rs.modes.transit);
     const tot = Math.max(1, rc.modes.car + rc.modes.transit + rc.modes.walk);
@@ -1796,13 +1947,16 @@ export class World {
     const truckOpt = { externalCap: 1e9, carOnly: true, maxMinutes: 90, weight: TRUCK_PCE, truck: true };
     const rfR = assignTrips(g, term ? part(1 - FREIGHT_LONG) : truckOrigins, freightAt, cong, junctions, rnd, { ...truckOpt, externalOnly: true }, undefined, graph);
     const rfL = term ? assignTrips(g, part(FREIGHT_LONG), freightAt, cong, junctions, rnd, { ...truckOpt, extExtra: FREIGHT_TERMINAL_PREF }, undefined, graph) : null;
-    const rf = rfL ? mergeTrips(rfR, rfL) : rfR;
+    let rf = rfL ? mergeTrips(rfR, rfL) : rfR;
+    // 航空貨物：空港へ（行けないときは隣の都市へ）
+    const rfA = airTrucks.size && airFreightAt.size ? assignTrips(g, [...airTrucks.values()], airFreightAt, cong, junctions, rnd, { ...truckOpt, extExtra: AIR_FREIGHT_PREF }, undefined, graph) : null;
+    if (rfA) rf = mergeTrips(rf, rfA);
     // 交通量と混雑度（前の月と平均してなめらかにする）。重ねランプが車線をふさぐマスは容量が小さい
     const orCap = orampCapScale(g);
     for (let v = 0; v < 2 * N; v++) {
       const t = g.nodeType(v);
       if (!t) { traffic[v] = 0; cong[v] = 1; this.maps.freight[v] = 0; continue; }
-      const vol = (rc.volume[v] + rs.volume[v] + rf.volume[v]) * this.fx.traffic;
+      const vol = (rc.volume[v] + rs.volume[v] + rf.volume[v] + (ra ? ra.volume[v] : 0)) * this.fx.traffic;
       traffic[v] = traffic[v] * 0.4 + vol * 0.6;
       this.maps.freight[v] = this.maps.freight[v] * 0.4 + rf.volume[v] * 0.6;
       const cap = (t === RoadType.Ramp && isJctRamp(g, v) ? JCT_RAMP_CAP : ROADS[t].capacity) * (orCap.get(v) ?? 1);
@@ -1841,6 +1995,36 @@ export class World {
     }
     this.employedTotal = employed;
     this.avgCommute = rc.avgTime;
+    // 空港ごとの利用者・便数・貨物
+    {
+      let served = 0, weighted = 0;
+      if (ra) for (const [id, k] of ra.served) { served += k; weighted += k * airTimeWeight(ra.time.get(id) || 0); }
+      const wf = served > 0 ? weighted / served : 0;
+      let filledAll = 0;
+      if (ra) for (const b of airOpen) filledAll += ra.filled.get(b.id) || 0;
+      const edge = railEdge;
+      for (const b of airports) {
+        const spec = AIRPORT_SPECS[CIVIC[b.type as CivicId].airfield!];
+        const info = airInfo.get(b.id)!;
+        const open = airOpen.includes(b);
+        const filled = ra && open ? ra.filled.get(b.id) || 0 : 0;
+        let pax = filled * wf;
+        // 隣の都市からの利用者：高速道路と直結し、高速道路が隣の都市へつながっている／鉄道がマップの端までつながっている
+        const railOut = [...info.lines.entries()].some(([k, cells]) => (k === 'rail' || k === 'erail') && cells.some((c) => edge[c]));
+        const hw = info.hw.length > 0;
+        pax *= 1 + (hw && this.highwayConnected ? 0.15 : 0) + (railOut ? 0.1 : 0);
+        pax = open ? Math.min(spec.paxCap, Math.round(pax)) : 0;
+        const trucks = rfA && open ? rfA.filled.get(b.id) || 0 : 0;
+        const freight = Math.round(trucks * AIR_FREIGHT_TONS);
+        const flights = pax > 0 ? Math.ceil(pax / spec.paxPerFlight) : 0;
+        const cargoFlights = freight > 0 ? Math.ceil(Math.max(0, freight - flights * AIR_BELLY_TONS) / AIR_CARGO_TONS_PER_FLIGHT) : 0;
+        const paxRail = ra && filledAll > 0 ? Math.round((ra.modes.transit * (filled / filledAll)) * wf) : 0;
+        const income = open ? Math.round(pax * AIR_FEE_PAX + (flights + cargoFlights) * AIR_FEE_FLIGHT + trucks * AIR_FEE_FREIGHT) : 0;
+        b.air = { open, pax, paxRail: Math.min(pax, paxRail), flights, cargoFlights, freight, lines: [...info.lines.keys()], highway: hw, road: info.acc.length > 0, income };
+        b.note = !info.acc.length ? '<span class="neg">道路に接していません</span>' : !b.powered ? '<span class="neg">電力がないので運航していません</span>' : '運航中';
+        if (open) this.airportBoost += spec.boost * (0.5 + 0.5 * Math.min(1, pax / spec.paxCap));
+      }
+    }
     const truckTrips = truckOrigins.reduce((a, o) => a + o.trips, 0);
     this.tripStats = { shopping: Math.round(rs.avgTime * 10) / 10, freight: Math.round(rf.avgTime * 10) / 10, trucks: Math.round(truckTrips), truckExt: Math.round(rf.external) };
     // マスごとの通勤時間（近くの空き地の魅力に使う）
@@ -2034,6 +2218,12 @@ export class World {
     for (const b of this.buildings.values()) {
       if (b.civic) {
         const def = CIVIC[b.type as CivicId];
+        if (def.airfield) {
+          // 空港：維持費と、着陸料などの収入（利用者が多いと黒字、少ないと赤字）
+          exp.空港 = (exp.空港 || 0) + def.upkeep;
+          inc.空港 = (inc.空港 || 0) + (b.air?.income ?? 0);
+          continue;
+        }
         if (def.service) {
           const dept = SERVICE_DEPT[def.service];
           const k = DEPT_NAMES[dept];
