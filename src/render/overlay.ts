@@ -71,7 +71,7 @@ export function buildOverlay(out: Uint8Array, g: Grid, maps: Maps | null, view: 
       } else if (view === 'transit') {
         // バス・鉄道などの乗客数（いちばん多い路線）
         let v = 0;
-        for (let l = 0; l < 5; l++) v = Math.max(v, maps.riders[l * N + i]);
+        for (let l = 0; l < 6; l++) v = Math.max(v, maps.riders[l * N + i] ?? 0);
         if (v > 0.5) {
           [r, gg, b] = ramp(Math.min(1, v / 1500), [[120, 200, 255], [60, 110, 240], [150, 60, 220]]);
           a = 230;

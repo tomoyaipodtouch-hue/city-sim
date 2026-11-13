@@ -61,7 +61,7 @@ export async function listSaves(): Promise<SaveMeta[]> {
 }
 
 // ---- ファイル ----
-const TYPED = ['heights', 'road', 'conn', 'flow', 'deck', 'up', 'conn1', 'flow1', 'upH', 'lift', 'ictl', 'isplit', 'iflags', 'pline', 'zone', 'zden', 'bldg', 'tree', 'rail', 'erail', 'mono', 'sub', 'bstop', 'congestion', 'traffic'] as const;
+const TYPED = ['heights', 'road', 'conn', 'flow', 'deck', 'up', 'conn1', 'flow1', 'upH', 'lift', 'ictl', 'isplit', 'iflags', 'pline', 'zone', 'zden', 'bldg', 'tree', 'rail', 'erail', 'mono', 'sub', 'hsr', 'hsrf', 'bstop', 'congestion', 'traffic'] as const;
 
 function toB64(a: ArrayBufferView): string {
   const u = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);

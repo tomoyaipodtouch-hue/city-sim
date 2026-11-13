@@ -921,7 +921,7 @@ export class CarLayer {
       }
       build(this.people, pv, 0.012);
     }
-    if (riders && riders.length === 5 * N) {
+    if (riders && riders.length >= 5 * N) {
       // バスは40人に1台、電車は1両に乗る人数を多めに見て台数を決める
       // バスは前の 4 割の台数にし、バス停の数の 1.5 倍までにする
       build(this.bus, riders.subarray(0, N), 0.0008);

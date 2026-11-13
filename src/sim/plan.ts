@@ -2,6 +2,7 @@
 import { Grid } from './grid';
 import { DX, DY, MAX_ROAD_GRADE, CELL, WATER_LEVEL, QUAY_LAND, dirOf, isDiag, opp } from './constants';
 import { checkHwRail, isElevHighway, HWR_MSG_STATION, HWR_MSG_PARALLEL_RAIL } from './hwrail';
+import { applyHsrLine, hsrGroundBlock, HsrLinePlan, HSRF_COVER, isHsrElevated, isHsrGround, planHsrLine, planHsrPlaza, planHsrStation, removeHsrAt, HSR_MSG_PARALLEL } from './hsr';
 import { ROADS, RoadType, ZoneType, ZONE_COST, POWER_LINE_COST, CIVIC, CivicId, BRIDGE_COST_MUL, MAX_BRIDGE, OVERPASS_LIFT, RAMP_COST, isHighway, isGroundHighway, isUrbanElevated, isUrbanGround, LINES, LineKind, BUS_STOP_COST, ESTOP_COST } from './defs';
 
 export interface LinePath {
@@ -395,6 +396,9 @@ function planLane(
       bad.add(i);
       why('高速道路には、行き止まりの端か、ランプでつないでください');
     }
+    // 高速鉄道：地上の線路とは交差できない（踏切は作らない）。高架の線路の真下に沿って高架の道路は引けない
+    if (L === 0 && hsrGroundBlock(g, i)) { bad.add(i); why('地上の高速鉄道とは交差できません（高速鉄道を高架にしてください）'); }
+    if (L === 1 && isHsrElevated(g, i) && g.hsr[i] & ((1 << dirAt(k)) | (1 << opp(dirAt(k))) | (k > 0 ? (1 << dirs[k - 1]) | (1 << opp(dirs[k - 1])) : 0))) { bad.add(i); why('高速鉄道の高架の真下に沿っては引けません（交差だけできます）'); }
     if (L === 0 && g.rail[i]) {
       // 踏切：まっすぐな線路と直角に交わる場合だけ
       const ra = axisOf(g.rail[i]);
@@ -1184,6 +1188,8 @@ export type BulldozeLayer = 'ground' | 'up' | 'sub' | 'all';
 export const BULLDOZE_LAYERS: BulldozeLayer[] = ['ground', 'up', 'sub', 'all'];
 export const BULLDOZE_LAYER_NAMES: Record<BulldozeLayer, string> = { ground: '地上', up: '高架', sub: '地下', all: 'すべて' };
 export const TRANSIT_LAYER: Record<'rail' | 'erail' | 'mono' | 'sub', BulldozeLayer> = { rail: 'ground', erail: 'up', mono: 'up', sub: 'sub' };
+// 高速鉄道の線路の階層：高架は「高架」、地上は「地上」
+export const hsrLayer = (g: Grid, i: number): BulldozeLayer => (isHsrGround(g, i) ? 'ground' : 'up');
 
 export interface BulldozePlan {
   layer: BulldozeLayer;
@@ -1196,13 +1202,14 @@ export interface BulldozePlan {
   cells: number[];
 }
 
-// 建物の階層：地下鉄の駅は地下（地上にあるのは入口だけ）、それ以外は地上
-export const buildingLayer = (type: string | undefined): BulldozeLayer => (type === 'sub_station' ? 'sub' : 'ground');
+// 建物の階層：地下鉄の駅は地下（地上にあるのは入口だけ）、高速鉄道の駅は線路と同じ（高架の駅は高架）、それ以外は地上
+export const buildingLayer = (type: string | undefined, hsrGround?: boolean): BulldozeLayer =>
+  type === 'sub_station' ? 'sub' : type === 'hsr_station' && !hsrGround ? 'up' : 'ground';
 
 export function planBulldoze(
   g: Grid,
   r: Rect,
-  bInfo: (id: number) => { civic: boolean; w: number; h: number; type?: string } | undefined,
+  bInfo: (id: number) => { civic: boolean; w: number; h: number; type?: string; hsr?: { ground: boolean } } | undefined,
   layer: BulldozeLayer = 'ground',
 ): BulldozePlan {
   const roads: number[] = [], lines: number[] = [], trees: number[] = [], cells: number[] = [], transit: number[] = [];
@@ -1218,10 +1225,11 @@ export function planBulldoze(
       // 空港のターミナル前の道路は、空港といっしょにしか取り壊せない
       if ((gr || ur) && !g.aport[i]) { roads.push(i); cost += ur && isHighway(g.up[i]) ? 20 : 5; }
       if (ground && g.pline[i]) { lines.push(i); cost += 1; }
-      if (kinds.some((k) => g[k][i])) { transit.push(i); cost += 10; }
+      if (kinds.some((k) => g[k][i]) || (g.hsr[i] && (all || hsrLayer(g, i) === layer))) { transit.push(i); cost += g.hsr[i] ? 30 : 10; }
       const b = g.bldg[i];
       if (b) {
-        if (all || buildingLayer(bInfo(b)?.type) === layer) bset.add(b);
+        const bi = bInfo(b);
+        if (all || buildingLayer(bi?.type, bi?.hsr?.ground) === layer) bset.add(b);
       } else if (ground && g.tree[i]) { trees.push(i); cost += 1; }
     }
   }
@@ -1313,6 +1321,8 @@ export interface PlopPlan {
 // 細長い公園などは、長い辺が道路に面する向きに自動で回す
 export function planPlop(g: Grid, id: CivicId, cx: number, cy: number): PlopPlan {
   const def = CIVIC[id];
+  if (id === 'hsr_station') return planHsrStation(g, cx, cy);
+  if (id === 'hsr_plaza') return planHsrPlaza(g, cx, cy, (W, H) => planPlopSized(g, id, cx, cy, W, H));
   const a = planPlopSized(g, id, cx, cy, def.w, def.h);
   if (!def.rotate || def.w === def.h) return a;
   const b = planPlopSized(g, id, cx, cy, def.h, def.w);
@@ -1446,7 +1456,7 @@ export function regradeApproaches(g: Grid) {
 // ---- 公共交通の線路 ----
 // 地上を通る線路（地上の鉄道・高架鉄道・モノレール）があるか。地下鉄は地上に影響しない
 export function hasSurfaceLine(g: Grid, i: number) {
-  return g.rail[i] !== 0 || g.erail[i] !== 0 || g.mono[i] !== 0;
+  return g.rail[i] !== 0 || g.erail[i] !== 0 || g.mono[i] !== 0 || g.hsr[i] !== 0 || (g.hsrf[i] & HSRF_COVER) !== 0;
 }
 
 export interface TransitPlan {
@@ -1456,9 +1466,15 @@ export interface TransitPlan {
   cost: number;
   bad: Set<number>;
   reason: string;
+  hsr?: HsrLinePlan; // 高速鉄道
 }
 
-export function planTransitLine(g: Grid, path: LinePath, kind: LineKind): TransitPlan {
+// ground = 高速鉄道を地上に引く（ほかの線路では使わない）
+export function planTransitLine(g: Grid, path: LinePath, kind: LineKind, ground = false): TransitPlan {
+  if (kind === 'hsr') {
+    const h = planHsrLine(g, path, ground);
+    return { ok: h.ok, kind, path, cost: h.cost, bad: h.bad, reason: h.reason, hsr: h };
+  }
   const def = LINES[kind];
   const n = g.n;
   const bad = new Set<number>();
@@ -1475,6 +1491,12 @@ export function planTransitLine(g: Grid, path: LinePath, kind: LineKind): Transi
     if (!mask[i]) cost += def.cost * len;
     if (kind === 'sub') continue;
     if (g.bldg[i]) { bad.add(i); why('建物があります。先に取り壊してください'); }
+    // 高速鉄道：地上の線路・カーブとは交差できない。高架の線路の真下・真上に沿っては引けない
+    if (hsrGroundBlock(g, i)) { bad.add(i); why('地上の高速鉄道とは交差できません'); }
+    else if (g.hsr[i]) {
+      const din = k > 0 ? dirs[k - 1] : -1, dout = k < dirs.length ? dirs[k] : -1;
+      if ([din, dout].some((dd) => dd >= 0 && g.hsr[i] & ((1 << dd) | (1 << opp(dd))))) { bad.add(i); why(HSR_MSG_PARALLEL); }
+    }
     if (g.aport[i]) { bad.add(i); why('空港の道路には引けません（正門のマスで終わらせてください）'); }
     if (kind === 'rail') {
       if (g.isWater(x, y)) { bad.add(i); why('地上の線路は水の上に引けません（高架鉄道を使ってください）'); }
@@ -1526,6 +1548,10 @@ export function planTransitLine(g: Grid, path: LinePath, kind: LineKind): Transi
 }
 
 export function applyTransitLine(g: Grid, p: TransitPlan) {
+  if (p.kind === 'hsr') {
+    if (p.hsr) applyHsrLine(g, p.hsr);
+    return;
+  }
   const mask = g[p.kind];
   const { cells, dirs } = p.path;
   for (let k = 0; k < dirs.length; k++) {
@@ -1541,6 +1567,7 @@ export function applyTransitLine(g: Grid, p: TransitPlan) {
 export function removeTransitAt(g: Grid, i: number, layer: BulldozeLayer = 'all') {
   const n = g.n;
   const x = i % n, y = (i / n) | 0;
+  if (g.hsr[i] && (layer === 'all' || hsrLayer(g, i) === layer)) removeHsrAt(g, i);
   for (const kind of ['rail', 'erail', 'mono', 'sub'] as const) {
     if (layer !== 'all' && TRANSIT_LAYER[kind] !== layer) continue;
     const mask = g[kind];
@@ -1646,7 +1673,7 @@ function vertexLocked(g: Grid, vx: number, vy: number) {
   for (const [cx, cy] of [[vx - 1, vy - 1], [vx, vy - 1], [vx - 1, vy], [vx, vy]]) {
     if (!g.inb(cx, cy)) continue;
     const i = g.idx(cx, cy);
-    if (g.road[i] || g.up[i] || g.bldg[i] || g.rail[i] || g.erail[i] || g.mono[i] || g.pline[i]) return true;
+    if (g.road[i] || g.up[i] || g.bldg[i] || g.rail[i] || g.erail[i] || g.mono[i] || g.pline[i] || g.hsr[i]) return true;
   }
   return false;
 }
@@ -1680,7 +1707,7 @@ export function planTerrain(g: Grid, op: TerrainOp, sx: number, sy: number, ex: 
   for (let y = r.y0; y <= r.y1; y++)
     for (let x = r.x0; x <= r.x1; x++) {
       const i = g.idx(x, y);
-      if (g.road[i] || g.up[i] || g.bldg[i] || g.rail[i] || g.erail[i] || g.mono[i] || g.pline[i]) locked.push(i);
+      if (g.road[i] || g.up[i] || g.bldg[i] || g.rail[i] || g.erail[i] || g.mono[i] || g.pline[i] || g.hsr[i]) locked.push(i);
       else cells.push(i);
     }
   return { changes, cells, locked, cost: Math.round(cost) };
@@ -1717,7 +1744,7 @@ export interface ReclaimPlan {
   changes: Map<number, number>; // 頂点 → 新しい高さ
   cost: number;
 }
-const occupied = (g: Grid, i: number) => !!(g.road[i] || g.up[i] || g.bldg[i] || g.rail[i] || g.erail[i] || g.mono[i] || g.pline[i]);
+const occupied = (g: Grid, i: number) => !!(g.road[i] || g.up[i] || g.bldg[i] || g.rail[i] || g.erail[i] || g.mono[i] || g.pline[i] || g.hsr[i] || g.hsrf[i]);
 export function planReclaim(g: Grid, style: number, sx: number, sy: number, ex: number, ey: number): ReclaimPlan {
   const r = normRect(sx, sy, ex, ey, g.n);
   const n = g.n, V = n + 1;

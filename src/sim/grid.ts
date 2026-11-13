@@ -9,7 +9,7 @@
 import { CELL, DX, DY, WATER_LEVEL, opp } from './constants';
 
 // 同期・保存の対象になる配列の名前
-export const GRID_U8 = ['road', 'conn', 'flow', 'pline', 'zone', 'zden', 'tree', 'up', 'conn1', 'flow1', 'ictl', 'isplit', 'iflags', 'rail', 'erail', 'mono', 'sub', 'bstop', 'bstyle', 'estn', 'pstyle', 'quay', 'jct', 'oramp', 'aport'] as const;
+export const GRID_U8 = ['road', 'conn', 'flow', 'pline', 'zone', 'zden', 'tree', 'up', 'conn1', 'flow1', 'ictl', 'isplit', 'iflags', 'rail', 'erail', 'mono', 'sub', 'bstop', 'bstyle', 'estn', 'pstyle', 'quay', 'jct', 'oramp', 'aport', 'hsr', 'hsrf'] as const;
 export const GRID_F32 = ['deck', 'upH', 'lift'] as const;
 export const GRID_I32 = ['bldg'] as const;
 export type GridU8Key = (typeof GRID_U8)[number];
@@ -76,6 +76,9 @@ export class Grid {
   oramp: Uint8Array;
   // 空港のターミナル前の道路（フォアコート）のマス：1 = 空港の道路（空港といっしょにしか取り壊せない。道路を引けない）
   aport: Uint8Array;
+  // 高速鉄道の線路（8方向の接続ビット）と、マスの印（HSRF_*：地上の線路、カーブの内側、駅のホーム）。hsr.ts
+  hsr: Uint8Array;
+  hsrf: Uint8Array;
 
   constructor(n: number) {
     this.n = n;
@@ -107,6 +110,8 @@ export class Grid {
     this.jct = new Uint8Array(c);
     this.oramp = new Uint8Array(c);
     this.aport = new Uint8Array(c);
+    this.hsr = new Uint8Array(c);
+    this.hsrf = new Uint8Array(c);
     this.zden = new Uint8Array(c);
     this.bldg = new Int32Array(c);
     this.tree = new Uint8Array(c);

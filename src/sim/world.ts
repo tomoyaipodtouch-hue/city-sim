@@ -4,7 +4,7 @@ import { Grid, GRID_U8, GRID_F32, Ctl } from './grid';
 import { Rng } from './rng';
 import { DAYS_PER_MONTH, DX, DY } from './constants';
 import {
-  CIVIC, CivicId, plantPower, DEFAULT_TAX, DEPT_NAMES, Dept, DIFFICULTY, isHighway, SERVICE_DEPT, LineKind, LINES, FARE, BUS_STOP_UPKEEP, ESTOP_UPKEEP, GROW, GROW_KINDS, GrowKind, IND_DENSITY_MUL, maxFloorsFor, POWER_LINE_UPKEEP, ROADS, RoadType,
+  CIVIC, CivicId, plantPower, DEFAULT_TAX, DEPT_NAMES, Dept, DIFFICULTY, isHighway, SERVICE_DEPT, LineKind, LINES, FARE, HSR_FARE, BUS_STOP_UPKEEP, ESTOP_UPKEEP, GROW, GROW_KINDS, GrowKind, IND_DENSITY_MUL, maxFloorsFor, POWER_LINE_UPKEEP, ROADS, RoadType,
   JCT_RAMP_CAP, ZONE_KINDS, ZoneType, FARM_TILE, IL_BIG_SIZES, LOGI_REACH, logiReach,
 } from './defs';
 import { generateTerrain, MapStyle } from './terrain';
@@ -20,7 +20,8 @@ import { defaultServiceState, facilityEffect, makeServiceMaps, ServiceMaps, Serv
 import { Ages, agesOf, FuneralState, taxFactor, updatePopulation, WORK_RATE, workersOf } from './population';
 import { AIRPORT_SPECS, AirStats, airportCells, airportLayout, airportPorts, airTimeWeight, AIR_BELLY_TONS, AIR_CARGO_TONS_PER_FLIGHT, AIR_FEE_FLIGHT, AIR_FEE_FREIGHT, AIR_FEE_PAX, AIR_FREIGHT_TONS, AIR_TRIP_OFFICE, AIR_TRIP_RES, airportGateCells, applyAirportGround, frameOf, gateLink, isUrbanHw, noiseAt, type AirPorts, type GateLink, planAirport, stationLines, cellLocal, lotToLand } from './airport';
 import { forecourtPlan, type FcPlan } from './forecourt';
-import { isJctRamp, assignTrips, buildJunctions, buildRoadGraph, buildTransitModel, congestionFactor, Destination, junctionGroup, LAYER, normalizeAvenueJunctions, Origin, parkingMinutes, TRUCK_PCE } from './traffic';
+import { applyHsrStation, hsrNoise, hsrReachEdge, hsrStationOut, hsrStationTrack, recomputeHsrCover, HSRF_STATION, HSR_STN_LEN, stnCell, type HsrStn, type HsrStationPlan } from './hsr';
+import { type TransitModel, TRANSFER_MIN, isJctRamp, assignTrips, buildJunctions, buildRoadGraph, buildTransitModel, congestionFactor, Destination, junctionGroup, LAYER, normalizeAvenueJunctions, Origin, parkingMinutes, TRUCK_PCE } from './traffic';
 
 export enum BState {
   Building = 0,
@@ -62,6 +63,19 @@ export interface Building {
   airH?: number; // ターミナル前の道路：高架の高さ（敷地の地面から、m）
   airFc?: boolean; // ターミナル前の道路のマスを作った（false = 作れなかった。以前の仕組みで動かす）
   airLegacy?: boolean; // 以前の空港で、正門へつなぎ直せなかった
+  hsr?: HsrStn; // 高速鉄道の駅：駅の向き・線路の列・床版の高さ・端から線路が続いているか
+}
+
+// 高速鉄道の様子（情報の画面）
+export interface HsrStats {
+  stations: number;
+  riders: number; // 1日の乗客（街の人 + 隣の都市から来た人）
+  visitors: number; // 隣の都市から高速鉄道で来た人（1日）
+  tourists: number; // そのうちの観光客
+  income: number; // 月の運賃収入
+  expense: number; // 月の維持費
+  edge: boolean; // マップの端までつながっている
+  trains: number; // 1日の列車の本数（片道、いちばん多い路線）
 }
 
 export interface Stats {
@@ -85,6 +99,7 @@ export interface Stats {
   speed: number;
   neighborConnected: boolean;
   transitRiders: number;
+  hsr?: HsrStats; // 高速鉄道
   modeShare: { car: number; transit: number; walk: number; parkRide?: number }; // parkRide は transit のうち駅まで車で行った割合
   rating: number;
   ratingParts: [string, number][];
@@ -103,9 +118,9 @@ export interface Maps extends ServiceMaps {
   traffic: Float32Array;
   freight: Float32Array; // トラックの交通量（見た目用）
   jctl: Uint8Array; // 交差点の実際の制御方式（自動の場合は交通量で決まったもの）
-  riders: Float32Array; // 公共交通の1日の乗客数（バス、鉄道、高架鉄道、モノレール、地下鉄の順に n*n ずつ）
+  riders: Float32Array; // 公共交通の1日の乗客数（バス、鉄道、高架鉄道、モノレール、地下鉄、高速鉄道の順に n*n ずつ）
   congestion: Float32Array;
-  noise: Uint8Array; // 空港の騒音（0..255）
+  noise: Uint8Array; // 空港と高速鉄道の騒音（0..255）
 }
 
 export interface SaveData {
@@ -133,6 +148,8 @@ export interface SaveData {
   erail?: Uint8Array;
   mono?: Uint8Array;
   sub?: Uint8Array;
+  hsr?: Uint8Array; // 高速鉄道（古い保存データにはない）
+  hsrf?: Uint8Array;
   bstop?: Uint8Array;
   ictl?: Uint8Array;
   isplit?: Uint8Array;
@@ -174,7 +191,7 @@ export type Command =
   | { t: 'diamond'; x: number; y: number }
   | { t: 'clover'; x: number; y: number }
   | { t: 'jct'; form: JctForm; x: number; y: number }
-  | { t: 'transit'; x0: number; y0: number; x1: number; y1: number; kind: LineKind }
+  | { t: 'transit'; x0: number; y0: number; x1: number; y1: number; kind: LineKind; ground?: boolean } // ground = 高速鉄道を地上に引く
   | { t: 'busstop'; x: number; y: number }
   | { t: 'junction'; cell: number; ctl: number; split: number; flags: number }
   | { t: 'bridgeStyle'; cell: number; style: number }
@@ -201,6 +218,12 @@ const LOGI_ROAD_W = 0.15;
 const IL_WANT_BASE = 0.03;
 // 空港の騒音で下がる地価（騒音がいちばん強いところ、0..1 の地価から）
 export const AIR_NOISE_LV = 0.32;
+// 高速鉄道：線路の騒音で下がる地価（騒音がいちばん強いところ）と、駅のまわりで上がる地価（いちばん大きいところ）
+export const HSR_NOISE_LV = 0.1;
+export const HSR_STATION_LV = 0.3;
+// 1日の列車の本数（片道）：乗客が多いほど多い（30〜120 本）。描画の列車の数もこれに合わせる
+export const hsrTrainsPerDay = (riders: number) => Math.max(30, Math.min(120, Math.round(30 + riders / 60)));
+const LINE_LAYER_OF = { rail: LAYER.rail, erail: LAYER.erail, mono: LAYER.mono, sub: LAYER.sub, hsr: LAYER.hsr } as const;
 const IL_WANT_PORT = 0.06;
 const IL_WANT_PORT_FLAT = 100;
 const IL_PORT_SHARE = 0.5;
@@ -314,7 +337,7 @@ export class World {
       traffic: new Float32Array(c * 2),
       freight: new Float32Array(c * 2),
       jctl: new Uint8Array(c),
-      riders: new Float32Array(c * 5),
+      riders: new Float32Array(c * 6),
       ...makeServiceMaps(c),
       congestion,
       noise: new Uint8Array(c),
@@ -626,11 +649,18 @@ export class World {
         const def = CIVIC[c.id];
         flattenRect(g, plan.x, plan.y, plan.w, plan.h, plan.flatH);
         this.heightVersion++;
+        // 高速鉄道の駅：線路の列を駅の端から端まで線路にして、ホームの印をつける
+        const hs = (plan as HsrStationPlan).hsr;
+        if (hs) {
+          applyHsrStation(g, plan.x, plan.y, hs);
+          recomputeHsrCover(g);
+        }
         const b: Building = {
           id: this.nextId++, civic: true, type: c.id, x: plan.x, y: plan.y, w: plan.w, h: plan.h,
-          face: def.waterfront ? this.waterFace(plan.x, plan.y, plan.w, plan.h) : this.findFace(plan.x, plan.y, plan.w, plan.h), seed: this.rng.int(1e9), den: 0, cap: 0, occ: 0,
+          face: hs ? (hs.axis === 0 ? 2 : 0) : def.waterfront ? this.waterFace(plan.x, plan.y, plan.w, plan.h) : this.findFace(plan.x, plan.y, plan.w, plan.h), seed: this.rng.int(1e9), den: 0, cap: 0, occ: 0,
           state: BState.Normal, stateDays: 0, powered: false, watered: false, floors: 0, commute: 0, employed: 1, badMonths: 0,
         };
+        if (hs) b.hsr = { axis: hs.axis, row: hs.row, ground: hs.ground, deck: hs.deck, out: hsrStationOut(g, plan.x, plan.y, hs) };
         this.placeBuilding(b);
         this.afterGridChange();
         let msg: string | undefined;
@@ -682,7 +712,7 @@ export class World {
       }
       case 'transit': {
         const path = planLine(g, c.x0, c.y0, c.x1, c.y1);
-        const plan = planTransitLine(g, path, c.kind);
+        const plan = planTransitLine(g, path, c.kind, !!c.ground);
         if (!plan.ok) return { ok: false, msg: plan.reason || '線路を引けません' };
         if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
         applyTransitLine(g, plan);
@@ -792,6 +822,7 @@ export class World {
         const b = this.buildings.get(c.id);
         if (!b) return { ok: false, msg: '建物が見つかりません' };
         if (b.civic && CIVIC[b.type as CivicId]?.airfield) return { ok: false, msg: '空港の向きは変えられません（取り壊して置き直してください）' };
+        if (b.type === 'hsr_station') return { ok: false, msg: '高速鉄道の駅の向きは、線路の向きで決まります' };
         const order = [2, 0, 6, 4]; // 南 → 東 → 北 → 西
         const k = Math.max(0, order.indexOf(b.face));
         b.face = b.w === b.h ? order[(k + 1) % 4] : (b.face + 4) & 7;
@@ -812,7 +843,23 @@ export class World {
     }
   }
 
+  // 高速鉄道の駅：駅の端から線路が続いているか（ターミナル駅か中間駅か）を線路から決め直す
+  private updateHsrStations() {
+    const g = this.g;
+    for (const b of this.buildings.values()) {
+      if (b.type !== 'hsr_station' || !b.hsr) continue;
+      const out = hsrStationOut(g, b.x, b.y, b.hsr);
+      const trk = hsrStationTrack(g, b);
+      if (out[0] !== b.hsr.out[0] || out[1] !== b.hsr.out[1]) { b.hsr.out = out; this.buildingVersion++; }
+      b.note = trk.length < HSR_STN_LEN ? '<span class="neg">駅の中の線路が切れています</span>'
+        : out[0] && out[1] ? '中間駅（止まる列車と通過する列車がある）'
+          : out[0] || out[1] ? 'ターミナル駅（列車はここで折り返す）'
+            : '<span class="neg">線路がつながっていません</span>';
+    }
+  }
+
   private afterGridChange() {
+    this.updateHsrStations();
     this.syncAirports();
     regradeApproaches(this.g);
     pruneORamps(this.g); // 本線や下の道路がなくなった重ねランプは取り除く
@@ -886,6 +933,8 @@ export class World {
     if (!b) return;
     const g = this.g;
     if (b.airFc) { this.clearForecourt(b); this.dropGateStub(b); b.airFc = false; }
+    // 高速鉄道の駅：ホームの印を外す（線路は残す）
+    if (b.hsr) for (let a = 0; a < HSR_STN_LEN; a++) g.hsrf[stnCell(g, b.x, b.y, b.hsr.axis, a, b.hsr.row)] &= ~HSRF_STATION;
     for (let y = b.y; y < b.y + b.h; y++)
       for (let x = b.x; x < b.x + b.w; x++) {
         const i = g.idx(x, y);
@@ -1949,10 +1998,29 @@ export class World {
         lv[i] = Math.max(0, Math.min(1, v));
       }
     const lvb = blur(lv, n, 1, 1);
+    // 高速鉄道の駅のまわりは地価が上がる（大きな駅のまわりが繁華街になる）
+    const stn = new Float32Array(N);
+    let anyStn = false;
+    for (const b of this.buildings.values()) {
+      if (b.type !== 'hsr_station' || !b.hsr || hsrStationTrack(g, b).length < HSR_STN_LEN) continue;
+      anyStn = true;
+      for (let y = b.y; y < b.y + b.h; y++) for (let x = b.x; x < b.x + b.w; x++) stn[g.idx(x, y)] = 1;
+    }
+    if (anyStn) {
+      const sf = blur(stn, n, 7, 2);
+      for (let i = 0; i < N; i++) lvb[i] += Math.min(HSR_STATION_LV, sf[i] * 1.3);
+    }
     // 空港の騒音：滑走路の向きに沿ってのびる範囲の地価が下がる
     const noise = this.airportNoise();
+    // 高速鉄道の騒音：線路沿いの地価が少し下がる（住宅地のそばは防音壁で小さくなる）
+    let hn: Float32Array | null = null;
+    for (let i = 0; i < N; i++) if (g.hsr[i]) { hn = hsrNoise(g, Math.min(1, this.hsrStats.trains / 120), new Float32Array(N)); break; }
     for (let i = 0; i < N; i++) {
       if (noise[i]) lvb[i] -= (noise[i] / 255) * AIR_NOISE_LV;
+      if (hn && hn[i] > 0) {
+        lvb[i] -= hn[i] * HSR_NOISE_LV;
+        noise[i] = Math.max(noise[i], Math.round(hn[i] * 160));
+      }
       this.maps.landValue[i] = Math.round(Math.max(0, Math.min(1, lvb[i])) * 255);
     }
   }
@@ -2077,10 +2145,25 @@ export class World {
     const rnd = () => this.rng.next();
     // 駅とバス停
     const stations: { kind: 'bus' | LineKind; roadCells: number[]; lineCells: number[] }[] = [];
+    // 高速鉄道の駅と、隣の駅前広場（バス乗り場・タクシー乗り場）
+    const hsrStns: { b: Building; roadCells: number[]; lineCells: number[]; plazas: Building[] }[] = [];
+    const plazas = [...this.buildings.values()].filter((b) => b.type === 'hsr_plaza');
+    const rectGap = (a: Building, b: Building) => Math.max(a.x - (b.x + b.w), b.x - (a.x + a.w), a.y - (b.y + b.h), b.y - (a.y + a.h), 0);
+    for (const b of this.buildings.values()) {
+      if (b.type !== 'hsr_station' || !b.hsr) continue;
+      const lineCells = hsrStationTrack(g, b);
+      const pl = plazas.filter((p) => rectGap(p, b) === 0);
+      const roadCells = [...new Set([...this.accessCells(b), ...pl.flatMap((p) => this.accessCells(p))])];
+      if (!roadCells.length || lineCells.length < HSR_STN_LEN) continue;
+      hsrStns.push({ b, roadCells, lineCells, plazas: pl });
+      stations.push({ kind: 'hsr', roadCells, lineCells });
+      // 駅前広場のバス乗り場：広場の前の道路がバス停になる
+      for (const p of pl) { const rc = this.accessCells(p); if (rc.length) stations.push({ kind: 'bus', roadCells: rc, lineCells: [] }); }
+    }
     for (const b of this.buildings.values()) {
       if (!b.civic) continue;
       const def = CIVIC[b.type as CivicId];
-      if (!def.transit) continue;
+      if (!def.transit || def.transit === 'hsr') continue;
       const roadCells = this.accessCells(b);
       if (!roadCells.length) continue;
       const lineCells: number[] = [];
@@ -2118,6 +2201,27 @@ export class World {
     for (let i = 0; i < N; i++) if (g.bstop[i] && g.road[i]) roadStops.push(i);
     if (roadStops.length) stations.push({ kind: 'bus', roadCells: roadStops, lineCells: [] });
     const tm = buildTransitModel(g, stations);
+    // 乗り換え：高速鉄道の駅（か、その駅前広場）の隣に置いたほかの路線の駅とは、連絡通路で結ぶ
+    this.transitModel = tm;
+    this.hsrTransfers.clear();
+    for (const S of hsrStns) {
+      const hub = LAYER.hsr * N + S.lineCells[S.lineCells.length >> 1];
+      for (const b of this.buildings.values()) {
+        const def = b.civic ? CIVIC[b.type as CivicId] : undefined;
+        if (!def?.transit || def.transit === 'bus' || def.transit === 'hsr') continue;
+        if (rectGap(b, S.b) > 1 && !S.plazas.some((p) => rectGap(b, p) <= 1)) continue;
+        const mask = g[def.transit];
+        const lc: number[] = [];
+        const r0 = def.transit === 'sub' ? 0 : 1;
+        for (let yy = b.y - r0; yy < b.y + b.h + r0; yy++) for (let xx = b.x - r0; xx < b.x + b.w + r0; xx++) if (g.inb(xx, yy) && mask[g.idx(xx, yy)]) lc.push(g.idx(xx, yy));
+        for (const c of lc) {
+          const ln = LINE_LAYER_OF[def.transit] * N + c;
+          (tm.lineLinks.get(hub) ?? tm.lineLinks.set(hub, []).get(hub)!).push([ln, TRANSFER_MIN]);
+          (tm.lineLinks.get(ln) ?? tm.lineLinks.set(ln, []).get(ln)!).push([hub, TRANSFER_MIN]);
+        }
+        if (lc.length) this.hsrTransfers.add(`${S.b.id}:${b.id}`);
+      }
+    }
     // ---- フェリー・港・貨物駅 ----
     // 水域の番号づけは、地形が変わったときだけやり直す
     if (this.waterCache?.v !== this.heightVersion) this.waterCache = { v: this.heightVersion, w: labelWater(g) };
@@ -2198,13 +2302,36 @@ export class World {
     const rs = assignTrips(g, [...shoppers.values()], shopsAt, cong, junctions, rnd, { externalCap: this.neighborConnected ? pop * 0.03 : 0, maxMinutes: 30, weight: 0.5 }, tm, graph);
     // 空港へ行く人（旅行・出張）。車・鉄道・地下鉄・バス・高速道路のランプ。近いほど、この空港を使う
     const ra = airDest.size && airTravel.size ? assignTrips(g, [...airTravel.values()], airDest, cong, junctions, rnd, { externalCap: 0, maxMinutes: 75, weight: 1, parkRide: true }, tm, graph) : null;
-    // 公共交通の乗客数（バス、鉄道、高架鉄道、モノレール、地下鉄の順に N マスずつ）
+    // 公共交通の乗客数（バス、鉄道、高架鉄道、モノレール、地下鉄、高速鉄道の順に N マスずつ）
     const riders = this.maps.riders;
-    for (let l = 0; l < 5; l++) {
+    const hsrVis = this.hsrVisitors(hsrStns.map((S) => S.b), N);
+    for (let l = 0; l < 6; l++) {
       const base = (LAYER.bus + l) * N;
-      for (let i = 0; i < N; i++) riders[l * N + i] = riders[l * N + i] * 0.4 + (rc.volume[base + i] + rs.volume[base + i] * 2 + (ra ? ra.volume[base + i] * 2 : 0)) * 0.6;
+      for (let i = 0; i < N; i++) riders[l * N + i] = riders[l * N + i] * 0.4 + (rc.volume[base + i] + rs.volume[base + i] * 2 + (ra ? ra.volume[base + i] * 2 : 0) + (l === 5 ? hsrVis.vol[i] : 0)) * 0.6;
     }
     this.transitRiders = Math.round(rc.modes.transit + rs.modes.transit);
+    // 高速鉄道：街の人の乗客と、隣の都市から来た人。運賃と、商業・オフィスの需要と観光
+    {
+      const resid = Math.round(rc.modes.hsr + rs.modes.hsr + (ra ? ra.modes.hsr : 0));
+      this.hsrResidents = resid;
+      const pop = this.population();
+      const V = hsrVis.total;
+      this.hsrBoost = hsrVis.edge && hsrStns.length ? 0.06 + 0.24 * Math.min(1, V / (1500 + pop * 0.05)) : 0;
+      let maxTrains = 0;
+      for (const S of hsrStns) {
+        let v = 0;
+        for (const c of S.lineCells) v = Math.max(v, riders[5 * N + c]);
+        const trains = hsrTrainsPerDay(v);
+        maxTrains = Math.max(maxTrains, trains);
+        const xfer = [...this.hsrTransfers].filter((k) => k.startsWith(`${S.b.id}:`)).length;
+        const role = S.b.hsr && S.b.hsr.out[0] && S.b.hsr.out[1] ? '中間駅' : 'ターミナル駅';
+        S.b.note = `${role}・乗客 ${Math.round(v).toLocaleString()} 人/日・列車 ${trains} 本/日${S.plazas.length ? '・駅前広場あり' : ''}${xfer ? `・乗り換え ${xfer} 路線` : ''}`;
+      }
+      this.hsrStats = {
+        stations: hsrStns.length, riders: resid + V, visitors: V, tourists: Math.round(V * 0.45),
+        income: Math.round((resid + V) * HSR_FARE), expense: this.hsrStats.expense, edge: hsrVis.edge, trains: maxTrains,
+      };
+    }
     const tot = Math.max(1, rc.modes.car + rc.modes.transit + rc.modes.walk);
     this.modeShare = { car: rc.modes.car / tot, transit: rc.modes.transit / tot, walk: rc.modes.walk / tot, parkRide: rc.modes.parkRide / tot };
     // 貨物：トラックは幹線道路・高速道路を通る（街路・住宅地の道路を避ける）。
@@ -2328,6 +2455,57 @@ export class World {
   private svcCover = { police: 0, fire: 0, health: 0 };
   private schoolSeats = 1;
   private airportBoost = 0;
+  private hsrBoost = 0; // 高速鉄道で隣の都市とつながった（商業・オフィスの需要と観光）
+  private hsrResidents = 0; // 高速鉄道に乗った街の人（1日）
+  private hsrTransfers = new Set<string>(); // 乗り換えの組（高速鉄道の駅の id : ほかの駅の id）
+  transitModel: TransitModel | null = null; // 直前の月の公共交通のつながり（確かめる用）
+  hsrStats: HsrStats = { stations: 0, riders: 0, visitors: 0, tourists: 0, income: 0, expense: 0, edge: false, trains: 0 };
+
+  // 隣の都市から高速鉄道で来る人：マップの端までつながった駅に、街の大きさと駅のまわりの仕事の数に応じて来る。
+  // 乗客は、マップの端から駅までの線路に数える
+  private hsrVisitors(stns: Building[], N: number): { total: number; vol: Float32Array; edge: boolean } {
+    const g = this.g, n = g.n;
+    const vol = new Float32Array(N);
+    if (!stns.length) return { total: 0, vol, edge: false };
+    const reach = hsrReachEdge(g);
+    // マップの端からの道すじ（端のマスから幅優先）
+    const prev = new Int32Array(N).fill(-2);
+    const q: number[] = [];
+    let exits = 0;
+    for (let i = 0; i < N; i++) {
+      const x = i % n, y = (i / n) | 0;
+      if (g.hsr[i] && (x === 0 || y === 0 || x === n - 1 || y === n - 1)) { prev[i] = -1; q.push(i); exits++; }
+    }
+    for (let h = 0; h < q.length; h++) {
+      const c = q[h], x = c % n, y = (c / n) | 0;
+      for (let d = 0; d < 8; d++) {
+        if (!(g.hsr[c] & (1 << d)) || !g.inb(x + DX[d], y + DY[d])) continue;
+        const j = (y + DY[d]) * n + x + DX[d];
+        if (prev[j] === -2) { prev[j] = c; q.push(j); }
+      }
+    }
+    const linked = stns.filter((b) => hsrStationTrack(g, b).some((c) => reach[c]));
+    if (!linked.length) return { total: 0, vol, edge: false };
+    const pop = this.population();
+    const total = Math.round((250 + pop * 0.04) * Math.min(2, 0.7 + 0.3 * exits) * this.fx.traffic);
+    // 駅ごとの重み：駅のまわり（12 マス）の仕事の数と、駅前広場
+    const w = linked.map((b) => {
+      let jobs = 100;
+      for (const o of this.buildings.values()) {
+        if (o.civic || o.state !== BState.Normal || GROW[o.type as GrowKind].zone === ZoneType.R) continue;
+        if (Math.abs(o.x - b.x - b.w / 2) < 12 + b.w / 2 && Math.abs(o.y - b.y - b.h / 2) < 12 + b.h / 2) jobs += o.cap;
+      }
+      return jobs;
+    });
+    const sw = w.reduce((a, b) => a + b, 0);
+    linked.forEach((b, k) => {
+      const v = (total * w[k]) / sw;
+      const trk = hsrStationTrack(g, b);
+      let c = trk[trk.length >> 1];
+      for (let step = 0; step < N && c >= 0; step++) { vol[c] += v; c = prev[c]; }
+    });
+    return { total, vol, edge: true };
+  }
   zoneDemand: [number, number, number] = [0, 0, 0];
   private seaportBoost = 0;
   private freightBoost = 0; // 貨物駅（倉庫業の需要）
@@ -2400,8 +2578,8 @@ export class World {
     // 内陸の倉庫業は、街の荷物の分だけ（港があっても内陸にはあまり建たない）
     const rawILIn = (wantILIn > 0 ? (wantILIn - capILIn) / Math.max(60, wantILIn * 0.5) + unemployment : -0.3) + this.fx.demand.I;
     // 空港と港（港の効果は、ほとんどが倉庫業に向かう）
-    for (const k of ['CS2', 'CS3', 'CO2', 'CO3'] as const) raw[k] += this.airportBoost;
-    raw.CS1 += this.airportBoost * 0.5;
+    for (const k of ['CS2', 'CS3', 'CO2', 'CO3'] as const) raw[k] += this.airportBoost + this.hsrBoost;
+    raw.CS1 += this.airportBoost * 0.5 + this.hsrBoost * 0.8; // 高速鉄道の観光客は、小さな店にも来る
     raw.ID += this.seaportBoost * 0.3;
     raw.IM += this.seaportBoost * 0.4;
     raw.IL += (this.seaportBoost + this.freightBoost) * IL_PORT_SHARE;
@@ -2482,7 +2660,8 @@ export class World {
 
   // ---------------- 予算 ----------------
   private updateBudget() {
-    const inc: Record<string, number> = { 住宅: 0, 商業: 0, 工業: 0, 運賃: Math.round(this.transitRiders * FARE) };
+    const inc: Record<string, number> = { 住宅: 0, 商業: 0, 工業: 0, 運賃: Math.round(Math.max(0, this.transitRiders - this.hsrResidents) * FARE) };
+    let hsrExp = 0;
     const exp: Record<string, number> = { 道路: 0, 公共交通: 0, 電力: 0, 水道: 0, 公園: 0 };
     for (const b of this.buildings.values()) {
       if (b.civic) {
@@ -2499,6 +2678,7 @@ export class World {
           exp[k] = (exp[k] || 0) + def.upkeep * (this.services.funding[dept] / 100) * ((b.fund ?? 100) / 100);
           continue;
         }
+        if (b.type === 'hsr_station' || b.type === 'hsr_plaza') { hsrExp += def.upkeep * (this.services.funding.transit / 100); continue; }
         const cat = def.power ? '電力' : def.water ? '水道' : def.transit ? '公共交通' : '公園';
         exp[cat] += def.upkeep * (def.transit ? this.services.funding.transit / 100 : 1);
         continue;
@@ -2516,10 +2696,17 @@ export class World {
       if (g.road[i]) exp.道路 += ROADS[g.road[i]].upkeep;
       if (g.up[i]) exp.道路 += ROADS[g.up[i]].upkeep;
       for (const k of ['rail', 'erail', 'mono', 'sub'] as const) if (g[k][i]) exp.公共交通 += LINES[k].upkeep;
+      if (g.hsr[i]) hsrExp += LINES.hsr.upkeep;
       if (g.bstop[i]) exp.公共交通 += BUS_STOP_UPKEEP;
       if (g.estn[i]) exp.公共交通 += ESTOP_UPKEEP / 4;
       if (g.pline[i]) exp.電力 += POWER_LINE_UPKEEP;
     }
+    // 高速鉄道：運賃（街の人と、隣の都市から来た人）と維持費。乗客が多いと黒字
+    if (hsrExp > 0 || this.hsrStats.income > 0) {
+      inc.高速鉄道 = this.hsrStats.income;
+      exp.高速鉄道 = hsrExp;
+    }
+    this.hsrStats.expense = Math.round(hsrExp);
     // 条例（カジノは収入）
     const pop = this.population();
     for (const id of this.ordinances) {
@@ -2713,6 +2900,7 @@ export class World {
       neighborConnected: this.neighborConnected,
       transitRiders: this.transitRiders,
       modeShare: this.modeShare,
+      hsr: { ...this.hsrStats },
       services: {
         funding: { ...this.services.funding }, strike: { ...this.services.strike }, eq: { ...this.services.eq }, hq: this.services.hq,
         lifeExp: this.svc.lifeExp, crime: this.svc.crimeAvg, garbage: { ...this.services.garbage },

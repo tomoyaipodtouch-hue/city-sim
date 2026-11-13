@@ -220,8 +220,11 @@ export class ToolController {
     if (t.startsWith('line:') && d.line) {
       const kind = t.split(':')[1] as LineKind;
       const path = planLine(g, d.line[0], d.line[1], d.line[2], d.line[3]);
-      const plan = planTransitLine(g, path, kind);
-      pv.setTiles(g, path.cells, (i) => (plan.bad.has(i) ? 0xe5534b : 0xffd27a));
+      const plan = planTransitLine(g, path, kind, t.split(':')[2] === 'g');
+      // 高速鉄道：カーブの内側にかかるマス（うすい色）も見せる
+      const cover = plan.hsr?.cover ?? [];
+      const cv = new Set(cover);
+      pv.setTiles(g, [...path.cells, ...cover], (i) => (plan.bad.has(i) ? 0xe5534b : cv.has(i) ? 0xffeec2 : 0xffd27a));
       pv.setPath(g, path.cells);
       if (path.cells.length < 2) return { text: 'ドラッグして線路を引く', bad: false };
       return plan.ok ? { text: yen(plan.cost), bad: false } : { text: plan.reason || '引けません', bad: true };
@@ -383,7 +386,7 @@ export class ToolController {
     } else if (t === 'pline') cmd = { t: 'pline', x0: ln[0], y0: ln[1], x1: ln[2], y1: ln[3] };
     else if (t.startsWith('line:')) {
       if (ln[0] === ln[2] && ln[1] === ln[3]) return;
-      cmd = { t: 'transit', x0: ln[0], y0: ln[1], x1: ln[2], y1: ln[3], kind: t.split(':')[1] as LineKind };
+      cmd = { t: 'transit', x0: ln[0], y0: ln[1], x1: ln[2], y1: ln[3], kind: t.split(':')[1] as LineKind, ...(t.split(':')[2] === 'g' ? { ground: true } : {}) };
     }
     else if (t.startsWith('zone:')) {
       const [, z, den] = t.split(':');

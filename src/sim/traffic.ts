@@ -309,10 +309,12 @@ export interface TripOptions {
 
 // ---------------- 公共交通 ----------------
 // ノード番号の並び：
-//   0..N-1 車（地上）, N..2N-1 車（上空）, 2N 徒歩, 3N バス, 4N 鉄道, 5N 高架鉄道, 6N モノレール, 7N 地下鉄
-export const LAYER = { walk: 2, bus: 3, rail: 4, erail: 5, mono: 6, sub: 7 } as const;
-export const LINE_LAYER: Record<LineKind, number> = { rail: 4, erail: 5, mono: 6, sub: 7 };
-export const LAYERS = 8;
+//   0..N-1 車（地上）, N..2N-1 車（上空）, 2N 徒歩, 3N バス, 4N 鉄道, 5N 高架鉄道, 6N モノレール, 7N 地下鉄, 8N 高速鉄道
+export const LAYER = { walk: 2, bus: 3, rail: 4, erail: 5, mono: 6, sub: 7, hsr: 8 } as const;
+export const LINE_LAYER: Record<LineKind, number> = { rail: 4, erail: 5, mono: 6, sub: 7, hsr: 8 };
+export const LAYERS = 9;
+// 乗り換え（高速鉄道の駅と、隣に置いたほかの路線の駅のあいだの連絡通路）の歩く時間（分）
+export const TRANSFER_MIN = 3;
 // 歩く速さ（m/分）。実際は 80m/分 くらいだが、人は長く歩くのを嫌うので、半分の速さとして扱う
 const WALK_MPM = 40;
 const WALK_MAX_MIN = 15; // 1回に歩く時間の上限（体感、分）。600m くらい
@@ -328,7 +330,8 @@ export interface TransitModel {
   walkLinks: Map<number, [number, number][]>; // 旅客フェリー：徒歩のノード → [徒歩のノード, 分]
   carLinks: Map<number, [number, number][]>; // カーフェリー・空港の専用ランプ：車のノード（地上・上空） → [車のノード, 分]
   carToExt: Map<number, number>; // カーフェリーで隣の都市へ：車のノード → 分
-  railToExt: boolean; // 鉄道・高架鉄道がマップの端から隣の都市へ行ける
+  railToExt: boolean; // 鉄道・高架鉄道・高速鉄道がマップの端から隣の都市へ行ける
+  lineLinks: Map<number, [number, number][]>; // 乗り換えの連絡通路：線のノード → [線のノード, 分]（乗る線の待ち時間は別に足す）
 }
 
 export function buildTransitModel(
@@ -358,7 +361,7 @@ export function buildTransitModel(
       }
     }
   }
-  return { walkable, busStop, walkToLine, lineToWalk, parkRide, any: stations.length > 0, walkLinks: new Map(), carLinks: new Map(), carToExt: new Map(), railToExt: true };
+  return { walkable, busStop, walkToLine, lineToWalk, parkRide, any: stations.length > 0, walkLinks: new Map(), carLinks: new Map(), carToExt: new Map(), railToExt: true, lineLinks: new Map() };
 }
 
 export interface ModeStats {
@@ -366,6 +369,7 @@ export interface ModeStats {
   transit: number; // パーク&ライドも含む
   walk: number;
   parkRide: number; // 公共交通のうち、駅まで車で行った人
+  hsr: number; // 公共交通のうち、高速鉄道に乗った人
 }
 
 // 車の道路網を、探索しやすい形（隣のノードと所要時間の一覧）にまとめたもの。
@@ -465,7 +469,7 @@ export function assignTrips(
   const filled = new Map<number, number>();
   const W = getWork(NN + 1 + N);
   const { dist, real, prev, inDir, walkFrom, stamp, done } = W;
-  const modes: ModeStats = { car: 0, transit: 0, walk: 0, parkRide: 0 };
+  const modes: ModeStats = { car: 0, transit: 0, walk: 0, parkRide: 0, hsr: 0 };
   const useWalk = !opt.carOnly && !!transit;
   const carArrive = opt.carArrive;
   // パーク&ライド：駅に面した道路マスから、駅の線へ（駐車場からまっすぐホームへ。車を降りて街を歩くのには使わない）
@@ -495,9 +499,9 @@ export function assignTrips(
   }
 
   const { edge, extPen, urban } = G;
-  const lineMask = [null, null, null, null, g.rail, g.erail, g.mono, g.sub] as (Uint8Array | null)[];
-  const lineMin = [0, 0, 0, 0, LINES.rail, LINES.erail, LINES.mono, LINES.sub].map((d) => (typeof d === 'number' ? 0 : CELL / ((d.speedKmh * 1000) / 60)));
-  const lineWait = [0, 0, 0, 0, LINES.rail.wait, LINES.erail.wait, LINES.mono.wait, LINES.sub.wait];
+  const lineMask = [null, null, null, null, g.rail, g.erail, g.mono, g.sub, g.hsr] as (Uint8Array | null)[];
+  const lineMin = [0, 0, 0, 0, LINES.rail, LINES.erail, LINES.mono, LINES.sub, LINES.hsr].map((d) => (typeof d === 'number' ? 0 : CELL / ((d.speedKmh * 1000) / 60)));
+  const lineWait = [0, 0, 0, 0, LINES.rail.wait, LINES.erail.wait, LINES.mono.wait, LINES.sub.wait, LINES.hsr.wait];
   const conn = g.conn;
   const WALK_ORTHO = CELL / WALK_MPM, WALK_DIAG = (CELL * 1.414) / WALK_MPM;
   const WALK = LAYER.walk * N, BUS = LAYER.bus * N;
@@ -574,14 +578,15 @@ export function assignTrips(
         // 経路に人数を加え、交通手段を数える
         let c = u >= EXT ? prev[u] : u;
         const w = take * opt.weight;
-        let usedCar = false, usedTransit = false;
+        let usedCar = false, usedTransit = false, usedHsr = false;
         while (c >= 0) {
           volume[c] += w;
           const l = (c / N) | 0;
           if (l <= 1) usedCar = true;
-          else if (l >= LAYER.bus) usedTransit = true;
+          else if (l >= LAYER.bus) { usedTransit = true; if (l === LAYER.hsr) usedHsr = true; }
           c = prev[c];
         }
+        if (usedHsr) modes.hsr += take;
         if (usedTransit) {
           modes.transit += take;
           if (usedCar) modes.parkRide += take;
@@ -672,8 +677,13 @@ export function assignTrips(
       }
       const exits = T.lineToWalk.get(u);
       if (exits) for (const wn of exits) relax(wn, t + 0.5, u, -1, t + 0.5);
-      // 鉄道・高架鉄道は、マップの端から隣の都市へ行ける
-      if (T.railToExt && (layer === LAYER.rail || layer === LAYER.erail) && extFree > 0 && edge[cell]) relax(EXT, t + 10, u, -1, 0);
+      // 乗り換え（連絡通路）
+      if (T.lineLinks.size) {
+        const tl = T.lineLinks.get(u);
+        if (tl) for (const [v, m] of tl) relax(v, t + m + lineWait[(v / N) | 0], u, -1, 0);
+      }
+      // 鉄道・高架鉄道・高速鉄道は、マップの端から隣の都市へ行ける
+      if (T.railToExt && (layer === LAYER.rail || layer === LAYER.erail || layer === LAYER.hsr) && extFree > 0 && edge[cell]) relax(EXT, t + 10, u, -1, 0);
     }
     // 建物ごとに配分（同じ建物が複数の出発グループに入ることがあるので足し合わせる）
     const ratio = o.trips > 0 ? got / o.trips : 0;

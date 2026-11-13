@@ -12,6 +12,7 @@
 import { Grid, ORAMP_LEN, ORAMP_ON, ORAMP_PARTNER } from './grid';
 import { CELL, DX, DY, WATER_LEVEL, dirOf, isDiag, opp } from './constants';
 import { LINES, ROADS, RoadType, isUrbanElevated } from './defs';
+import { hsrDeckH, isHsrElevated, HSR_CLEAR, HSR_GIRDER } from './hsr';
 
 export const ERAIL_CATENARY = 6.6; // 鉄道の床版から架線柱の上端まで（railLayer の架線柱の門型）
 export const ERAIL_RAIL_TOP = 0.36; // 鉄道の床版からレールの上面まで
@@ -30,6 +31,7 @@ export const HWR_MSG_PARALLEL_RAIL = '高架の高速道路の真下に沿って
 export const HWR_MSG_STATION = '高架鉄道の駅の上は通せません';
 export const HWR_MSG_RAMP = '高速の坂を作る場所がありません（ランプやジャンクションが近すぎます）';
 export const HWR_MSG_END = '高速の坂を作る場所がありません（高速道路の端が近すぎます）';
+export const HWR_MSG_HSR = '高速鉄道の高架が上にあるので、高速道路を持ち上げられません';
 
 // 線路の上を越える高架の高速道路の種類
 export const isElevHighway = (t: number) => isUrbanElevated(t) || t === RoadType.Highway;
@@ -203,6 +205,8 @@ function plan(g: Grid, cells: number[], rail: number[], blocked: Set<number>): H
     if (h > g.upH[c] + 0.01) res.target.set(c, Math.max(res.target.get(c) ?? 0, h));
   };
   for (const c of cells) setT(c, need);
+  // 持ち上げた高速道路の上に高速鉄道の高架があると、ぶつかる
+  for (const c of cells) if (isHsrElevated(g, c) && need + HW_ROAD_LIFT + HSR_CLEAR > hsrDeckH(g, c) - HSR_GIRDER) fail(HWR_MSG_HSR, [c]);
   // 交差のマスから、高速道路に沿って両側へ
   const starts: [number, number][] = [];
   if (corner) {
@@ -241,6 +245,7 @@ function plan(g: Grid, cells: number[], rail: number[], blocked: Set<number>): H
       }
       if (need2) setT(j, want);
       else if (r < nat - SOFT) break;
+      if (need2 && isHsrElevated(g, j) && want + HW_ROAD_LIFT + HSR_CLEAR > hsrDeckH(g, j) - HSR_GIRDER) fail(HWR_MSG_HSR, [j]);
       const nb2 = bits(g.conn1[j]).find((k) => k !== opp(d))!;
       cur = j;
       d = nb2;

@@ -16,6 +16,7 @@ import type { MapStyle } from '../sim/terrain';
 import type { NewCityOpts } from '../sim/protocol';
 import { BRIDGE_STYLES } from '../render/bridgeStyles';
 import { platformCells, BULLDOZE_LAYERS, BULLDOZE_LAYER_NAMES } from '../sim/plan';
+import { hsrBarrier } from '../sim/hsr';
 import type { BulldozeLayer } from '../sim/plan';
 import { junctionGroup } from '../sim/traffic';
 import { decodeORamp, DIR_NAMES, editORampDir, orampAnchor, orampHw, orampOptions, orampsAt, orampSlots, ORampOption, ORampSpec, sideReason } from '../sim/oramp';
@@ -510,10 +511,16 @@ export class Hud {
           if (def.transit && m) {
             // 駅のまわりの線路（バス停は道路）の乗客数
             const N = g.n * g.n;
-            const l = def.transit === 'bus' ? 0 : ['rail', 'erail', 'mono', 'sub'].indexOf(def.transit) + 1;
+            const l = def.transit === 'bus' ? 0 : ['rail', 'erail', 'mono', 'sub', 'hsr'].indexOf(def.transit) + 1;
             let v = 0;
-            for (let yy = b.y - 1; yy <= b.y + b.h; yy++) for (let xx = b.x - 1; xx <= b.x + b.w; xx++) if (g.inb(xx, yy)) v = Math.max(v, m.riders[l * N + g.idx(xx, yy)]);
+            for (let yy = b.y - 1; yy <= b.y + b.h; yy++) for (let xx = b.x - 1; xx <= b.x + b.w; xx++) if (g.inb(xx, yy)) v = Math.max(v, m.riders[l * N + g.idx(xx, yy)] ?? 0);
             rows.push(['近くの乗客数', `${num(v)} 人/日`]);
+            const hs = this.stats?.hsr;
+            if (def.transit === 'hsr' && hs) {
+              rows.push(['高速鉄道の乗客', `${num(hs.riders)} 人/日（隣の都市から ${num(hs.visitors)} 人・観光客 ${num(hs.tourists)} 人）`]);
+              rows.push(['高速鉄道の収支', `運賃 ${yen(hs.income)}/月・維持費 ${yen(hs.expense)}/月`]);
+              if (!hs.edge) rows.push(['隣の都市', '<span class="neg">線路がマップの端までつながっていません</span>']);
+            }
           }
           if (b.note) rows.push(['状態', b.note]);
           if (def.service) this.facilityId = b.id;
@@ -554,13 +561,14 @@ export class Hud {
       rows.push(['制限速度', levels.map(([t]) => `${ROADS[t].speedKmh} km/h`).join(' ／ ')]);
       if (g.bstop[i]) rows.push(['バス停', m ? `あり（バスの乗客 ${num(m.riders[i])} 人/日）` : 'あり']);
       if (m && m.jctl[i]) rows.push(['交差点', CTL_NAMES[m.jctl[i]] + (g.ictl[i] === 0 ? '（自動）' : '')]);
-    } else if (g.rail[i] || g.erail[i] || g.mono[i]) {
-      const kinds = (['rail', 'erail', 'mono'] as const).filter((k) => g[k][i]);
-      title = kinds.map((k) => LINES[k].name).join(' ／ ');
-      if (m) for (const k of kinds) rows.push([`${LINES[k].name}の乗客`, `${num(m.riders[(['rail', 'erail', 'mono', 'sub'].indexOf(k) + 1) * g.n * g.n + i])} 人/日`]);
+    } else if (g.rail[i] || g.erail[i] || g.mono[i] || g.hsr[i]) {
+      const kinds = (['rail', 'erail', 'mono', 'hsr'] as const).filter((k) => g[k][i]);
+      title = kinds.map((k) => (k === 'hsr' ? `高速鉄道（${g.hsrf[i] & 1 ? '地上' : '高架'}）` : LINES[k].name)).join(' ／ ');
+      if (m) for (const k of kinds) rows.push([`${LINES[k].name}の乗客`, `${num(m.riders[(['rail', 'erail', 'mono', 'sub', 'hsr'].indexOf(k) + 1) * g.n * g.n + i] ?? 0)} 人/日`]);
+      if (g.hsr[i] && hsrBarrier(g, i)) rows.push(['防音壁', 'あり（住宅地のそば）']);
     }
     if (!bid && !g.road[i] && !g.up[i] && g.sub[i] && m) rows.push(['地下鉄の乗客', `${num(m.riders[4 * g.n * g.n + i])} 人/日`]);
-    if (bid || g.road[i] || g.up[i] || g.rail[i] || g.erail[i] || g.mono[i]) {
+    if (bid || g.road[i] || g.up[i] || g.rail[i] || g.erail[i] || g.mono[i] || g.hsr[i]) {
       // 上で処理済み
     } else if (g.isWater(c.x, c.y)) {
       title = '水域';

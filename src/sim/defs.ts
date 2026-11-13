@@ -159,8 +159,8 @@ export function maxFloorsFor(pop: number) {
 
 // ---- 公共施設 ----
 // ---- 公共交通の線路 ----
-export type LineKind = 'rail' | 'erail' | 'mono' | 'sub';
-export const LINE_KINDS: LineKind[] = ['rail', 'erail', 'mono', 'sub'];
+export type LineKind = 'rail' | 'erail' | 'mono' | 'sub' | 'hsr';
+export const LINE_KINDS: LineKind[] = ['rail', 'erail', 'mono', 'sub', 'hsr'];
 export interface LineDef {
   kind: LineKind;
   name: string;
@@ -175,7 +175,13 @@ export const LINES: Record<LineKind, LineDef> = {
   erail: { kind: 'erail', name: '高架鉄道', speedKmh: 55, cost: 120, upkeep: 0.8, lift: 8, wait: 3.5 },
   mono: { kind: 'mono', name: 'モノレール', speedKmh: 75, cost: 160, upkeep: 1.0, lift: 11, wait: 3 },
   sub: { kind: 'sub', name: '地下鉄', speedKmh: 55, cost: 200, upkeep: 1.2, lift: -9, wait: 3 },
+  // 高速鉄道：線路は高架鉄道の約3倍。速さは駅の停車も含めた平均（最高 300km/h）。地上の線路の費用は HSR_GROUND_COST
+  hsr: { kind: 'hsr', name: '高速鉄道', speedKmh: 200, cost: 360, upkeep: 2.4, lift: 18, wait: 7 },
 };
+// 高速鉄道（hsr.ts も見る）
+export const HSR_GROUND_COST = 240; // 地上の線路（1マス）
+export const HSR_THROUGH_COST = 100000; // 線路の途中に置いた駅（中間駅）の建設費。端に置いたターミナル駅は CIVIC.hsr_station.cost
+export const HSR_FARE = 6; // 1日の乗客1人あたりの、月の運賃収入（ふつうの鉄道の FARE の6倍）
 export const BUS_WAIT = 5; // バスの平均の待ち時間（分）
 export const BUS_STOP_COST = 150;
 export const BUS_STOP_UPKEEP = 15;
@@ -198,7 +204,7 @@ export const SERVICE_DEPT: Record<ServiceKind, Dept> = {
 export const GARBAGE_PER_RES = 0.9;
 export const GARBAGE_PER_JOB = 0.6;
 
-export type CivicId = 'coal' | 'gas' | 'oil' | 'nuclear' | 'nuclear_in' | 'nuclear_sea' | 'wind' | 'solar' | 'pump' | 'tower' | 'water_plant' | 'desal' | 'incinerator_l' | 'seaport_l' | 'park_s' | 'park_l' | 'plaza' | 'playground' | 'greenway' | 'sports' | 'garden' | 'cpark_a' | 'cpark_b' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station'
+export type CivicId = 'coal' | 'gas' | 'oil' | 'nuclear' | 'nuclear_in' | 'nuclear_sea' | 'wind' | 'solar' | 'pump' | 'tower' | 'water_plant' | 'desal' | 'incinerator_l' | 'seaport_l' | 'park_s' | 'park_l' | 'plaza' | 'playground' | 'greenway' | 'sports' | 'garden' | 'cpark_a' | 'cpark_b' | 'busstop' | 'station' | 'el_station' | 'mono_station' | 'sub_station' | 'hsr_station' | 'hsr_plaza'
   | 'ferry_p' | 'ferry_c' | 'seaport' | 'airport_s' | 'airport_l' | 'airport_1' | 'airport_2' | 'airport_3' | 'freight_st'
   | 'police_s' | 'police_l' | 'fire_s' | 'fire_l' | 'clinic' | 'hospital' | 'school_e' | 'school_h' | 'college' | 'library'
   | 'landfill' | 'incinerator' | 'recycling' | 'cemetery' | 'crematorium'
@@ -265,6 +271,14 @@ export const CIVIC: Record<CivicId, CivicDef> = {
   el_station: { id: 'el_station', name: '鉄道の駅（高架）', w: 2, h: 2, cost: 4000, upkeep: 70, transit: 'erail', desc: '高架鉄道の線路と道路の両方に接するように置く' },
   mono_station: { id: 'mono_station', name: 'モノレールの駅', w: 2, h: 2, cost: 5000, upkeep: 80, transit: 'mono', desc: 'モノレールの線路と道路の両方に接するように置く' },
   sub_station: { id: 'sub_station', name: '地下鉄の駅', w: 1, h: 1, cost: 3500, upkeep: 70, transit: 'sub', desc: '地下鉄の線路の上か隣に、道路に接するように置く' },
+  hsr_station: {
+    id: 'hsr_station', name: '高速鉄道の駅', w: 14, h: 4, rotate: true, cost: 300000, upkeep: 1500, transit: 'hsr',
+    desc: '高速鉄道のまっすぐな線路の上に、道路に接するように置く。線路の端ならターミナル駅（§300,000。列車が折り返す）、途中なら中間駅（§100,000。止まる列車と通過する列車がある）。ほかの路線の駅を隣に置くと、連絡通路で乗り換えられる',
+  },
+  hsr_plaza: {
+    id: 'hsr_plaza', name: '駅前広場・バスターミナル', w: 10, h: 4, rotate: true, cost: 30000, upkeep: 250, park: 0.15,
+    desc: '高速鉄道の駅の隣に置く（どちらの側でもよい）。広場、タクシー乗り場、バス乗り場。駅へバスで来られるようになり、駅のまわりの地価が上がる',
+  },
   ferry_p: { id: 'ferry_p', name: '旅客フェリー乗り場', w: 2, h: 2, cost: 3000, upkeep: 60, ferry: 'passenger', waterfront: true, desc: '水辺に、道路に接するように置く。同じ水域の乗り場どうしが航路で結ばれる' },
   ferry_c: { id: 'ferry_c', name: 'カーフェリー乗り場', w: 3, h: 3, cost: 6000, upkeep: 110, ferry: 'car', waterfront: true, desc: '車ごと乗れるフェリー。水域がマップの端まで続いていれば、隣の都市へも行ける' },
   seaport_l: { id: 'seaport_l', name: 'コンテナターミナル（大）', w: 12, h: 16, rotate: true, cost: 90000, upkeep: 900, seaport: true, portScale: 3, waterfront: true, pollution: 10, desc: '大きなガントリークレーンが並ぶコンテナ港。工業、とくに倉庫業の需要が大きく上がり、まわりに大きな倉庫が建つ。水域がマップの端まで続いている必要がある' },

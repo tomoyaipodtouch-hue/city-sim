@@ -16,7 +16,7 @@ export interface Turnback {
 }
 
 // 列車の長さから、分岐器の位置を決める（列車がすべて分岐器を渡り切ってから止まるように）
-export function turnbackZone(kind: LineKind): [number, number] {
+export function turnbackZone(kind: Exclude<LineKind, 'hsr'>): [number, number] {
   const S = TRAIN_SPEC[kind];
   const len = (S.cars - 1) * (S.L + S.gap) + S.L;
   const d1 = len + 8;
@@ -24,7 +24,7 @@ export function turnbackZone(kind: LineKind): [number, number] {
 }
 
 // 線路の行き止まりのうち、手前がまっすぐ十分に続いているもの（マップの端は、隣の都市へ出ていくので除く）
-export function findTurnbacks(g: Grid, kind: LineKind): Map<number, Turnback> {
+export function findTurnbacks(g: Grid, kind: Exclude<LineKind, 'hsr'>): Map<number, Turnback> {
   const n = g.n, mask = g[kind], out = new Map<number, Turnback>();
   const [d1, d0] = turnbackZone(kind);
   for (let i = 0; i < n * n; i++) {
