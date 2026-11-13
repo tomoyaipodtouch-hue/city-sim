@@ -185,8 +185,8 @@ export function buildAirportGeometry(L: AirportLayout, f: AirFrame, ctx: AirCtx)
     text(num, end + dir * 48, rc, 9, dir, 0.14, COL.white);
     // 平行な滑走路：着陸する向きから見て左（L）・右（R）
     if (L.runways.length > 1) text((dir > 0) === (rc < 0) ? 'L' : 'R', end + dir * 61, rc, 9, dir, 0.14, COL.white);
-    // 接地帯の標識（150m ごと）と、目標点の標識（滑走路 1,200m 以上は 300m、それより短いと 250m）
-    const len = rw.a1 - rw.a0, k = rwW / 30, aim = len >= 1200 ? 300 : 250;
+    // 接地帯の標識（150m ごと）と、目標点の標識（滑走路が短いので、接地点に合わせて縮めた位置。飛行機はこの標識の上で接地する）
+    const len = rw.a1 - rw.a0, k = rwW / 30, aim = rw.td - 40;
     for (const sd of [-1, 1]) {
       for (let z = 150; z < Math.min(len / 2, 600); z += 150) {
         if (Math.abs(z - aim) < 60) continue;

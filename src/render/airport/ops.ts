@@ -3,7 +3,7 @@
 // 駐機中の地上の車両（バス・給油車・荷物の車・トーイングカー）と歩いて乗り降りする人。
 // three.js には触らない。位置はすべて空港の敷地の座標（a, c, 高さ）。毎フレームの計算で新しい配列やオブジェクトを作らない。
 import { standDir, standPt, standTailBack, type AirportLayout, type StandDef } from '../../sim/airport';
-import { AC, ALL_LIVERIES, AcType, CARGO_LIVERY } from './aircraft';
+import { AC, ALL_LIVERIES, AcType, CARGO_LIVERY, FUSE_PROF, PERF } from './aircraft';
 import type { GseType } from './gse';
 
 // ---- 道すじ（折れ線の角を円弧で丸めたもの） ----
@@ -67,7 +67,8 @@ function seg(p: Path, i: number, out: Float32Array) {
 }
 
 // ---- 速さの変化（台形：v0 から加速して vmax、減速して v1） ----
-export interface Move { path: Path; v0: number; vm: number; v1: number; a1: number; dec: number; t1: number; t2: number; T: number; d1: number; d2: number; vp: number }
+// pw = 区切りの表（離陸滑走：加速度が段々に変わる）。[はじめの時刻, 道のり, 速さ, 加速度] × 区切りの数。null なら台形
+export interface Move { path: Path; v0: number; vm: number; v1: number; a1: number; dec: number; t1: number; t2: number; T: number; d1: number; d2: number; vp: number; pw: Float64Array | null }
 // 速さの変化：v0 から vmax まで（上げるときは acc、下げるときは dec）、一定の速さ、最後に v1 まで dec で下げる
 export function makeMove(path: Path, v0: number, vmax: number, v1: number, acc: number, dec: number): Move {
   const L = path.len;
@@ -84,12 +85,42 @@ export function makeMove(path: Path, v0: number, vmax: number, v1: number, acc: 
   const d2 = Math.max(0, L - d1 - d3);
   const a1 = vp >= v0 ? acc : -dec;
   const t1 = Math.abs(vp - v0) / Math.abs(a1), t2 = t1 + d2 / Math.max(0.1, vp), T = t2 + (vp > v1 ? (vp - v1) / dec : 0);
-  return { path, v0, vm: vmax, v1, a1, dec, t1, t2, T, d1, d2, vp };
+  return { path, v0, vm: vmax, v1, a1, dec, t1, t2, T, d1, d2, vp, pw: null };
+}
+// 加速度が段々に変わる速さの変化：v0 から、steps = [目標の速さ, 加速度, ...] の順に加速し、最後の速さで道の終わりまで
+export function makeProfile(path: Path, v0: number, steps: number[]): Move {
+  const pw: number[] = [];
+  let t = 0, s = 0, v = v0;
+  for (let i = 0; i + 1 < steps.length; i += 2) {
+    const vt = steps[i], a = steps[i + 1];
+    if (vt <= v || a <= 0) continue;
+    pw.push(t, s, v, a);
+    const dt = (vt - v) / a;
+    s += v * dt + 0.5 * a * dt * dt; t += dt; v = vt;
+  }
+  pw.push(t, s, v, 0);
+  // 道の終わりに着く時刻
+  const L = path.len;
+  let T = 0;
+  for (let i = 0; i < pw.length; i += 4) {
+    const sn = i + 4 < pw.length ? pw[i + 5] : Infinity;
+    if (L > sn) continue;
+    const [t0, s0, w, a] = [pw[i], pw[i + 1], pw[i + 2], pw[i + 3]];
+    T = t0 + (a > 0 ? (-w + Math.sqrt(w * w + 2 * a * (L - s0))) / a : (L - s0) / Math.max(0.1, w));
+    break;
+  }
+  return { path, v0, vm: v, v1: v, a1: 0, dec: 0, t1: 0, t2: 0, T, d1: 0, d2: 0, vp: v, pw: new Float64Array(pw) };
+}
+function pwIdx(pw: Float64Array, t: number) {
+  let i = 0;
+  while (i + 4 < pw.length && pw[i + 4] <= t) i += 4;
+  return i;
 }
 // 時刻 t の道のり
 export function moveS(m: Move, t: number): number {
   if (t <= 0) return 0;
   if (t >= m.T) return m.path.len;
+  if (m.pw) { const p = m.pw, i = pwIdx(p, t), u = t - p[i]; return Math.min(m.path.len, p[i + 1] + p[i + 2] * u + 0.5 * p[i + 3] * u * u); }
   if (t < m.t1) return m.v0 * t + 0.5 * m.a1 * t * t;
   if (t < m.t2) return m.d1 + m.vp * (t - m.t1);
   const u = t - m.t2;
@@ -97,6 +128,7 @@ export function moveS(m: Move, t: number): number {
 }
 export function moveV(m: Move, t: number): number {
   if (t <= 0) return m.v0;
+  if (m.pw) { const p = m.pw, i = pwIdx(p, Math.min(t, m.T)); return p[i + 2] + p[i + 3] * (Math.min(t, m.T) - p[i]); }
   if (t >= m.T) return m.v1;
   if (t < m.t1) return m.v0 + m.a1 * t;
   if (t < m.t2) return m.vp;
@@ -130,10 +162,37 @@ export interface Ac {
   lights: boolean; // 着陸灯をつけている
   moving: boolean;
   queue: number; // 出発機：前の出発機の後ろで待つ（大）。待つ場所までの辺の数（0 = 待たない）
+  tk: Takeoff | null; // 離陸の計画（離陸滑走のあいだ）
 }
+// 離陸の計画（機材と滑走路の向きごとに 1 つ）：tR = 引き起こしの時刻、tL・sL = 浮上の時刻と道のり、
+// R = 浮上したあとの引き起こしの円弧の半径、gam = 上昇の勾配、xs・ys = 円弧が終わる（勾配が一定になる）ところ、pc = 上昇中の機首の角度
+export interface Takeoff { move: Move; vr: number; tR: number; tL: number; sL: number; R: number; gam: number; xs: number; ys: number; pc: number }
 
-const V_APP = 66, V_TAXI = 11, V_ROT = 66;
-const TAKEOFF_ACC = 2.6, CLIMB = 0.15;
+const V_TAXI = 11;
+// 進入のはじめ（マップのはし）の速さ
+const V_FAR = 66;
+// 離着陸：引き起こしの速さ（毎秒の角度）、引き起こしてから浮くまでの時間（秒）、浮くときの機首の角度（約 9°）
+const ROT_RATE = 0.07, LOF_T = 2.0, ROT_PITCH = 0.155;
+// 滑走路の速さの縮め方：ゲームの滑走路は実際（2,200m ほど）より短いので、速さを √(長さ / 2,200m) 倍にする。
+// 加速度・減速度はそのままなので、滑走の距離は滑走路の長さに比例し、浮く位置（滑走路の何割か）は空港の大きさによらない
+export function speedScale(len: number) {
+  return Math.min(1, Math.sqrt(len / 2200));
+}
+// 滑走路へ入ったところ（取付誘導路の中心線から、機体の中心まで）。尾が滑走路の端を越えない、いちばん手前
+export function lineX(type: AcType) {
+  return Math.max(24, AC[type].len / 2 - 12);
+}
+// 機首を上げても胴体の後ろが地面（高さ h の主脚の下）にふれない、いちばん大きい角度
+export function clearPitch(type: AcType, h: number) {
+  const d = AC[type];
+  let best = 0.5;
+  for (const [zf, rf, dy] of FUSE_PROF) {
+    if (zf > -0.2) continue;
+    const yb = d.fy + dy * d.R - rf * d.R * 0.98 + h - 0.3, z = -zf * d.len;
+    best = Math.min(best, Math.atan2(yb, z));
+  }
+  return Math.max(0, best);
+}
 const BRIDGE_TIME = 7; // 搭乗橋がのびる・ちぢむ時間（秒）
 
 // 1 つの空港の運航。
@@ -266,19 +325,41 @@ export class AirOps {
     const inLen = (dir > 0 ? this.out.neg : this.out.pos) - Math.abs(thr);
     return this.pathOf(`appr${dir}`, () => [[thr - dir * inLen, r.c], [thr + dir * r.td, r.c]]);
   }
-  private takePath(dir: number) {
+  private takePath(dir: number, x: number) {
     const r = this.depRw(), start = r.links[this.endIdx(dir, true)];
     const outLen = (dir > 0 ? this.out.pos : this.out.neg) + Math.abs(start);
-    return this.pathOf(`take${dir}`, () => [[start + dir * 40, r.c], [start + dir * (40 + outLen), r.c]]);
+    return this.pathOf(`take${dir}.${x}`, () => [[start + dir * x, r.c], [start + dir * (x + outLen), r.c]]);
+  }
+  // 離陸：はじめは強く加速し、速くなると弱く（推力が落ち、抵抗がふえる）。vr で引き起こし、LOF_T 秒後に浮く。
+  // 浮いたあとも加速を続けて上昇の速さへ。高さは円弧（荷重倍数 1.12）で上昇の勾配につなぐ
+  private tks = new Map<string, Takeoff>();
+  takeoffPlan(type: AcType, dir: number): Takeoff {
+    const key = `${type}.${dir}`;
+    let K = this.tks.get(key);
+    if (K) return K;
+    const r = this.depRw(), P = PERF[type], k = speedScale(r.a1 - r.a0);
+    const vr = P.vr * k, a = P.acc, a2 = a * 0.72, vl = vr + a2 * LOF_T, v0 = 4;
+    const move = makeProfile(this.takePath(dir, lineX(type)), v0, [vr * 0.5, a, vl, a2, vr * 1.3, a * 0.45, vr * 2, a * 0.3]);
+    const tR = (vr * 0.5 - v0) / a + (vr * 0.5) / a2, tL = tR + LOF_T, sL = moveS(move, tL);
+    const R = (vl * vl) / (9.81 * 0.12), gam = P.climb, xs = gam * R;
+    K = { move, vr, tR, tL, sL, R, gam, xs, ys: (xs * xs) / (2 * R), pc: Math.min(0.26, Math.atan(gam) + 0.09) };
+    this.tks.set(key, K);
+    return K;
+  }
+  // 着陸：進入の速さと接地の速さ（フレアで少し落ちる）
+  landSpeed(type: AcType, touch: boolean) {
+    const r = this.arrRw(), va = PERF[type].vapp * speedScale(r.a1 - r.a0);
+    return touch ? va * 0.94 : va;
   }
   // 着陸機の出口：止まれる距離のある最初の高速脱出誘導路。使えなければ奥の端の取付誘導路
-  private chooseExit(dir: number): number {
-    const r = this.runway(), thr = dir > 0 ? r.a0 : r.a1, td = thr + dir * r.td;
+  private chooseExit(dir: number, type: AcType): number {
+    const r = this.runway(), thr = dir > 0 ? r.a0 : r.a1, td = thr + dir * r.td, v = this.landSpeed(type, true);
     let best = -1, bd = Infinity;
     r.exits.forEach((e, k) => {
       if (e.dir !== dir) return;
       const d = (e.a - td) * dir;
-      const need = (60 * 60 - e.speed * e.speed) / (2 * 3.0);
+      // 機材のふつうの減速度（少し余裕をみる）で、出口の速さまで落とせる
+      const need = (v * v - e.speed * e.speed) / (2 * PERF[type].brk * 0.95);
       if (d < need) return;
       if (d < bd) { bd = d; best = k; }
     });
@@ -344,7 +425,7 @@ export class AirOps {
       pts.push(q);
       return pts;
     });
-    const line = this.pathOf(`line${key}`, () => [q, J, [r.links[k], r.c], [r.links[k] + ac.dir * 40, r.c]], 18);
+    const line = this.pathOf(`line${key}`, () => [q, J, [r.links[k], r.c], [r.links[k] + ac.dir * lineX(ac.type), r.c]], 18);
     return { segs: [this.standSeg[ac.stand], ...extra, ...rt.edges], head: 1 + extra.length, nodes, push, out, line, q, key };
   }
 
@@ -548,7 +629,7 @@ export class AirOps {
     const ls: number[] = [];
     ALL_LIVERIES.forEach((l, i) => { if (!!l.cargo === cargo && l.fleet.includes(type)) ls.push(i); });
     const li = ls.length ? ls[Math.floor(this.rnd() * ls.length)] : ALL_LIVERIES.indexOf(CARGO_LIVERY);
-    const ac: Ac = { id: this.nextId++, type, livery: li, cargo, stand, dir: this.dir, phase: 'approach', move: null, t: 0, T: 0, exit: -1, plan: null, queue: 0, res: [], a: 0, c: 0, y: 0, ha: 0, hc: 1, pitch: 0, rev: false, lights: false, moving: false };
+    const ac: Ac = { id: this.nextId++, type, livery: li, cargo, stand, dir: this.dir, phase: 'approach', move: null, t: 0, T: 0, exit: -1, plan: null, queue: 0, res: [], a: 0, c: 0, y: 0, ha: 0, hc: 1, pitch: 0, rev: false, lights: false, moving: false, tk: null };
     this.standUsed[stand] = ac;
     return ac;
   }
@@ -629,20 +710,19 @@ export class AirOps {
         const st = this.freeStand(cargo);
         // 小・中：地上は着陸と出発を交互に。大：着陸機の予定の区間が空いていれば、出発と同時に
         const ok = this.L.parallel ? true : !this.departureActive() && !this.arrivalActive();
-        let plan: number[] | null = null;
+        let plan: number[] | null = null, ac: Ac | null = null;
         if (st >= 0 && ok && this.aircraft.length < sp.maxAircraft && !this.runwayBusy(true)) {
-          const probe = this.newAc(cargo, st);
-          probe.dir = this.dir;
-          probe.exit = this.chooseExit(this.dir);
-          plan = this.taxiIn(probe).segs;
-          if (this.L.parallel && (!this.free(plan, probe) || this.hitsPlans(plan, probe))) { this.standUsed[st] = null; plan = null; }
-          else this.standUsed[st] = null;
-        }
-        if (plan) {
-          const ac = this.newAc(cargo, st);
+          ac = this.newAc(cargo, st);
           ac.dir = this.dir;
+          ac.exit = this.chooseExit(this.dir, ac.type);
+          plan = this.taxiIn(ac).segs;
+          if (this.L.parallel && (!this.free(plan, ac) || this.hitsPlans(plan, ac))) { this.standUsed[st] = null; plan = null; }
+        }
+        if (plan && ac) {
           ac.plan = plan;
-          this.startMove(ac, makeMoveCached(this.appr(ac.dir), V_APP, V_APP, V_APP - 6), 'approach');
+          // 遠くでは速く飛び、最終進入で進入の速さまで落とす（接地の手前でフレアして少し落ちる）
+          const va = this.landSpeed(ac.type, false), vf = Math.max(va, V_FAR);
+          this.startMove(ac, makeMoveCached(this.appr(ac.dir), vf, vf, this.landSpeed(ac.type, true), 1, 1.2), 'approach');
           ac.lights = true;
           this.aircraft.push(ac);
           const b = this.busy(), base = 160 / Math.sqrt(sp.maxAircraft / 3);
@@ -679,12 +759,14 @@ export class AirOps {
     switch (ac.phase) {
       case 'approach':
         if (done) {
-          ac.exit = this.chooseExit(ac.dir);
+          ac.exit = this.chooseExit(ac.dir, ac.type);
           // 予定の区間（plan）は滑走路を出るまで残す（そのあいだ、出発機が先にとらない）
           const e = r.exits[ac.exit];
           const roll = this.rollPath(ac.dir, ac.exit);
-          const v0 = V_APP - 6;
-          this.startMove(ac, makeMoveCached(roll, v0, v0, e.speed, 1, Math.max(0.5, (v0 * v0 - e.speed * e.speed) / (2 * roll.len))), 'rollout');
+          // 接地 → 逆噴射・ブレーキ（機材の減速度）で接地の速さの 6 割まで落とし、出口の手前で出口の速さへ（滑走路の端は越えない）
+          const v0 = this.landSpeed(ac.type, true), vx = Math.min(v0, Math.max(e.speed, v0 * 0.6));
+          const dec = Math.max(PERF[ac.type].brk, ((v0 * v0 - e.speed * e.speed) / (2 * roll.len)) * 1.02);
+          this.startMove(ac, makeMoveCached(roll, v0, vx, e.speed, 1, dec), 'rollout');
         }
         break;
       case 'rollout':
@@ -811,7 +893,7 @@ export class AirOps {
         }
         break;
       case 'lineup':
-        if (done) { this.releaseAll(ac); this.startMove(ac, makeMoveCached(this.takePath(ac.dir), 4, 88, 88, TAKEOFF_ACC, 1), 'takeoff'); }
+        if (done) { this.releaseAll(ac); ac.tk = this.takeoffPlan(ac.type, ac.dir); this.startMove(ac, ac.tk.move, 'takeoff'); }
         break;
       case 'takeoff':
         if (done) ac.phase = 'gone';
@@ -842,17 +924,20 @@ export class AirOps {
       const d = m.path.len - s;
       ac.y = tg * (d - 40 + 40 * Math.exp(-d / 40));
       ac.pitch = 0.035 + 0.06 * Math.exp(-d / 60);
-    } else if (ac.phase === 'takeoff') {
-      const v = moveV(m, t), vr = AC[ac.type].wide ? V_ROT + 6 : V_ROT;
-      const slo = (vr * vr - 16) / (2 * TAKEOFF_ACC);
-      if (s > slo) {
-        const x = s - slo, R = 1500, xs = CLIMB * R;
-        ac.y = x < xs ? (x * x) / (2 * R) : (xs * xs) / (2 * R) + (x - xs) * CLIMB;
-        ac.pitch = Math.min(0.17, 0.05 + x / 600);
-      } else if (v > vr - 6) ac.pitch = ((v - (vr - 6)) / 6) * 0.08;
+    } else if (ac.phase === 'takeoff' && ac.tk) {
+      // vr で機首を上げはじめ（毎秒 4°）、約 9° で浮く。浮いたあとは円弧で上昇の勾配へ、機首は上昇の角度へ
+      const K = ac.tk, x = s - K.sL;
+      if (x > 0) ac.y = x < K.xs ? (x * x) / (2 * K.R) : K.ys + (x - K.xs) * K.gam;
+      if (t > K.tR) {
+        const tgt = x <= 0 ? ROT_PITCH : ROT_PITCH + (K.pc - ROT_PITCH) * Math.min(1, x / K.xs);
+        ac.pitch = Math.min((t - K.tR) * ROT_RATE, tgt);
+      }
     } else if (ac.phase === 'rollout') {
-      ac.pitch = Math.max(0, 0.02 - t * 0.01);
+      // 接地したら機首を下ろす（約 3.5 秒）
+      ac.pitch = 0.095 * Math.max(0, 1 - t / 3.5);
     }
+    // 胴体の後ろが地面にふれない
+    if (ac.pitch > 0) ac.pitch = Math.min(ac.pitch, clearPitch(ac.type, ac.y));
   }
 
   // 搭乗橋の扉の位置（スポットの飛行機、いなければスポットの目安の機材）。out = [a, c, 床の高さ]

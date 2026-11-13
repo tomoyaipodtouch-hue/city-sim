@@ -24,6 +24,29 @@ export const AC: Record<AcType, AcDims> = {
   b787: { len: 62.8, span: 60.1, R: 2.9, fy: 3.9, high: false, tTail: false, props: false, wide: true, door: [8.3, 5.0], jet: { rootLE: 6.8, rootTE: -7.0, tipC: 2.4, sweep: 0.55, ex: 9.8, er: 1.5, fin: 10.5, hs: 10.0, winglet: 0, gear: 4.8 } }, // 787-9（A330 級）
 };
 
+// 離着陸の性能（実機に近い値。m/s・m/s²）。vr = 引き起こし（ローテーション）の速さ、acc = 離陸滑走のはじめの加速度
+// （速くなると推力が落ち、空気の抵抗がふえるので小さくなる）、climb = 浮上したあとの上昇の勾配、vapp = 進入の速さ、brk = 接地したあとの減速度。
+// ゲームの滑走路は実際より短いので、速さは滑走路の長さに合わせて縮める（ops.ts の speedScale）。加速度・勾配はそのまま。
+// 引き起こしは滑走路の 43〜55%、浮くのは 52〜64%（軽い ATR・A220 が手前、重い 777・A350 が奥。奥の端まで 35% 以上残る）
+export interface AcPerf { vr: number; acc: number; climb: number; vapp: number; brk: number }
+export const PERF: Record<AcType, AcPerf> = {
+  atr: { vr: 55, acc: 2.3, climb: 0.12, vapp: 57, brk: 2.2 },
+  a220: { vr: 64, acc: 2.85, climb: 0.16, vapp: 65, brk: 2.4 },
+  e190: { vr: 64, acc: 2.8, climb: 0.15, vapp: 66, brk: 2.4 },
+  a320: { vr: 68, acc: 2.95, climb: 0.15, vapp: 68, brk: 2.4 },
+  b737: { vr: 71, acc: 3.05, climb: 0.14, vapp: 72, brk: 2.4 },
+  b787: { vr: 75, acc: 3.2, climb: 0.14, vapp: 74, brk: 2.6 },
+  b777: { vr: 79, acc: 3.5, climb: 0.13, vapp: 77, brk: 2.6 },
+  a350: { vr: 74, acc: 3.15, climb: 0.14, vapp: 72, brk: 2.6 },
+};
+
+// 胴体の形の表：[z（全長に対する割合）, 半径の割合, 中心の高さのずれ（R に対する割合）]。
+// ops.ts も使う（機首を上げたとき、胴体の後ろが地面にふれない角度）
+export const FUSE_PROF: readonly (readonly [number, number, number])[] = [
+  [0.5, 0.04, -0.25], [0.485, 0.38, -0.15], [0.465, 0.62, -0.08], [0.44, 0.82, -0.03], [0.405, 0.95, 0], [0.36, 1, 0],
+  [-0.24, 1, 0], [-0.3, 0.92, 0.12], [-0.37, 0.72, 0.32], [-0.44, 0.45, 0.5], [-0.5, 0.12, 0.62],
+];
+
 // 架空の航空会社（実在の会社は使わない）。白地に、尾翼と胴体の線の色を変える
 export interface Livery { name: string; tail: number; stripe: number; win: number; fleet: AcType[]; cargo?: boolean }
 export const LIVERIES: Livery[] = [
@@ -47,11 +70,7 @@ type V3 = [number, number, number];
 // 胴体：z に沿った輪を、半径と高さのずれの表で結ぶ（機首が +z）
 function fuselage(mb: MeshBuilder, d: AcDims, col: THREE.Color) {
   const L = d.len, R = d.R, seg = 12;
-  // [z（全長に対する割合）, 半径の割合, 中心の高さのずれ（R に対する割合）]
-  const prof: [number, number, number][] = [
-    [0.5, 0.04, -0.25], [0.485, 0.38, -0.15], [0.465, 0.62, -0.08], [0.44, 0.82, -0.03], [0.405, 0.95, 0], [0.36, 1, 0],
-    [-0.24, 1, 0], [-0.3, 0.92, 0.12], [-0.37, 0.72, 0.32], [-0.44, 0.45, 0.5], [-0.5, 0.12, 0.62],
-  ];
+  const prof = FUSE_PROF;
   const ring = (k: number): V3[] => {
     const [zf, rf, dy] = prof[k];
     const out: V3[] = [];

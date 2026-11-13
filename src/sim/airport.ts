@@ -172,7 +172,7 @@ export interface RunwayDef {
   side: 1 | -1; // 平行誘導路のある側（+1 = c の大きい側）
   junction: [number, number]; // 取付誘導路と平行誘導路の交わるノード（両端）
   exits: ExitDef[];
-  td: number; // 滑走路の端から接地点まで（m）
+  td: number; // 滑走路の端から接地点まで（m）。目標点の標識（長さ 45m）は td - 40 から。滑走路の長さの 18% ほど（実際の空港の割合）
 }
 export interface StandDef {
   a: number; // 駐機スポットの中心線（a）。dir があるときは機首が止まる位置の a
@@ -290,7 +290,7 @@ function layoutS(spec: AirportSpec): AirportLayout {
     const far = dir > 0 ? linkA : -linkA, k = dir > 0 ? 1 : 0;
     return { dir: dir as 1 | -1, a: far - dir * 30, pts: [[far - dir * 30, rc], [far, rc], [far, taxiC]], node: J[k], speed: 11, rapid: false };
   });
-  const runway: RunwayDef = { c: rc, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC, taxiC, side: 1, junction: J, exits, td: 120 };
+  const runway: RunwayDef = { c: rc, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC, taxiC, side: 1, junction: J, exits, td: 150 };
   const stands: StandDef[] = standAs.map((a, k) => ({ a, noseC: k === 3 ? 20 : 31, cargo: k === 3, wide: false, bridge: false, node: node(a, taxiC) }));
   return {
     spec, A, C,
@@ -365,7 +365,7 @@ function layoutM(spec: AirportSpec): AirportLayout {
     exits.push({ dir, a: ra - dir * 20, pts: [[ra - dir * 20, rc], [ra, rc], [rj, taxiC], [rj + dir * 25, taxiC]], node: node(rj + dir * 25, taxiC), speed: 22, rapid: true });
     exits.push({ dir, a: far - dir * 40, pts: [[far - dir * 40, rc], [far, rc], [far, taxiC]], node: J[k], speed: 11, rapid: false });
   }
-  const runway: RunwayDef = { c: rc, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC, taxiC, side: 1, junction: J, exits, td: 160 };
+  const runway: RunwayDef = { c: rc, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC, taxiC, side: 1, junction: J, exits, td: 220 };
   const stands: StandDef[] = stDefs.map((s) => ({
     a: s.a, noseC: s.cargo ? 38 : s.wide ? 62 : 58, cargo: !!s.cargo, wide: !!s.wide, bridge: !!s.bridge, node: node(s.a, s.cargo ? taxiC : laneC),
     rot: s.bridge ? [s.a + (s.wide ? 26 : 19), 63] : undefined,
@@ -442,8 +442,8 @@ function layoutL(spec: AirportSpec): AirportLayout {
     const far = dir > 0 ? linkA : -linkA, k = dir > 0 ? 1 : 0;
     return { dir: dir as 1 | -1, a: far - dir * 40, pts: [[far - dir * 40, rcS], [far, rcS], [far, txS]], node: JS[k], speed: 11, rapid: false };
   });
-  const rwN: RunwayDef = { c: rcN, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC: rcN + rwW / 2 + 4.5, taxiC: txN, side: 1, junction: JN, exits: exitsN, td: 180 };
-  const rwS: RunwayDef = { c: rcS, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC: rcS - rwW / 2 - 4.5, taxiC: txS, side: -1, junction: JS, exits: exitsS, td: 180 };
+  const rwN: RunwayDef = { c: rcN, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC: rcN + rwW / 2 + 4.5, taxiC: txN, side: 1, junction: JN, exits: exitsN, td: 250 };
+  const rwS: RunwayDef = { c: rcS, a0: -rwLen / 2, a1: rwLen / 2, width: rwW, links: [-linkA, linkA], holdC: rcS - rwW / 2 - 4.5, taxiC: txS, side: -1, junction: JS, exits: exitsS, td: 250 };
   const stands: StandDef[] = [];
   const st = (a: number, c: number, dir: [number, number], laneA: number | null, o: { wide?: boolean; bridge?: boolean; cargo?: boolean }) => {
     const s0: StandDef = { a, noseC: c, dir, cargo: !!o.cargo, wide: !!o.wide, bridge: !!o.bridge, node: laneA === null ? node(a, txS) : node(laneA, c) };
