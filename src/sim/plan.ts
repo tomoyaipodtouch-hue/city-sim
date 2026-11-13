@@ -3,7 +3,7 @@ import { Grid } from './grid';
 import { DX, DY, MAX_ROAD_GRADE, CELL, WATER_LEVEL, QUAY_LAND, dirOf, isDiag, opp } from './constants';
 import { checkHwRail, isElevHighway, HWR_MSG_STATION, HWR_MSG_PARALLEL_RAIL } from './hwrail';
 import { applyHsrLine, hsrGroundBlock, HsrLinePlan, HSRF_COVER, isHsrElevated, isHsrGround, planHsrLine, planHsrPlaza, planHsrStation, removeHsrAt, HSR_MSG_PARALLEL } from './hsr';
-import { applyRampTrack, isRampLow, planRampJoin, rampOf, rampTouchReason, RailRampPlan, RRAMP_CELL_COST, RAMP_MSG_ROAD, RAMP_MSG_STATION, RAMP_MSG_UP } from './railRamp';
+import { applyRampTrack, crossesRampCorner, RAMP_MSG_LINE, isRampLow, planRampJoin, rampOf, rampTouchReason, RailRampPlan, RRAMP_CELL_COST, RAMP_MSG_ROAD, RAMP_MSG_STATION, RAMP_MSG_UP } from './railRamp';
 import { ROADS, RoadType, ZoneType, ZONE_COST, POWER_LINE_COST, CIVIC, CivicId, BRIDGE_COST_MUL, MAX_BRIDGE, OVERPASS_LIFT, RAMP_COST, isHighway, isGroundHighway, isUrbanElevated, isUrbanGround, LINES, LineKind, BUS_STOP_COST, ESTOP_COST } from './defs';
 
 export interface LinePath {
@@ -419,6 +419,12 @@ function planLane(
       const c1 = y * n + x + DX[d], c2 = (y + DY[d]) * n + x;
       return localX(c1) && localX(c2) && !ROADS[g.road[c1]].wide && !ROADS[g.road[c2]].wide;
     };
+    // 斜めの坂の低い所を、マスの角で斜めに横切ることはできない
+    if (crossesRampCorner(g, cells[k], dirs[k]) === 'low') {
+      bad.add(cells[k]);
+      bad.add(cells[k + 1]);
+      why(levels[k] || levels[k + 1] ? RAMP_MSG_UP : RAMP_MSG_ROAD);
+    }
     if (isDiag(dirs[k]) && levels[k] === levels[k + 1] && crossesDiagonal(g, cells[k], dirs[k], levels[k]) && !xOk()) {
       bad.add(cells[k]);
       bad.add(cells[k + 1]);
@@ -1505,6 +1511,7 @@ export function planTransitLine(g: Grid, path: LinePath, kind: LineKind, ground 
     return { ok: false, kind, path, cost: 0, bad, reason: join.reason };
   }
   const ramps = join?.ramps ?? [];
+  const rampSteps0 = new Set(ramps.flatMap((r) => r.steps));
   const inRamp = new Set(ramps.flatMap((r) => r.cells));
   for (let k = 0; k < cells.length; k++) {
     const i = cells[k];
@@ -1565,6 +1572,7 @@ export function planTransitLine(g: Grid, path: LinePath, kind: LineKind, ground 
     if (!g.inb(ax, ay) || !g.inb(bx, by)) continue;
     const dd = dirOf(bx - ax, by - ay);
     if (mask[ay * n + ax] & (1 << dd)) { bad.add(i); why('斜めの線路どうしは交差できません'); }
+    else if (kind !== 'sub' && !rampSteps0.has(k) && crossesRampCorner(g, i, d)) { bad.add(i); why(RAMP_MSG_LINE); }
   }
   // 高架鉄道が高架の高速道路の下を通る所：引いたあとの grid（複製）で、高速道路に坂を作れるかを確かめる
   if (kind === 'erail' && bad.size === 0 && cells.length > 1 && cells.some((c) => {

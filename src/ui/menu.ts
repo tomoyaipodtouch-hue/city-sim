@@ -83,8 +83,11 @@ const road = (t: RoadType, icon: string, extra: Partial<ToolItem> = {}): ToolIte
   const r = ROADS[t], k = r.wide ? 2 : 1;
   return { tool: `road:${t}`, name: r.name, thumb: { k: 'icon', icon }, cost: r.cost * k, upkeep: r.upkeep * k, perCell: true, size: r.wide ? '幅2マス' : undefined, ...extra };
 };
+export const RAMP_HINT = '行き止まりから引くと坂でつながります';
 const line = (kind: LineKind, name: string, icon: string): ToolItem => ({
   tool: `line:${kind}`, name, thumb: { k: 'icon', icon }, cost: LINES[kind].cost, upkeep: LINES[kind].upkeep, perCell: true,
+  // 地上の鉄道と高架鉄道は、もう一方の線路の行き止まりから引くと坂でつながる（railRamp.ts）
+  ...(kind === 'rail' || kind === 'erail' ? { desc: RAMP_HINT } : {}),
 });
 
 // ゾーンの見本の建物：[種類, 密度, 階数, 幅, 奥行き]

@@ -6,7 +6,7 @@ import { CIVIC, CivicId, LINES, LineKind } from '../sim/defs';
 import type { Building } from '../sim/world';
 import { Buf, ROAD_LIFT } from './roadLayer';
 import { estopGroup } from '../sim/plan';
-import { allRamps, rampLineH, RAMP_LEN, RAMP_PORTAL } from '../sim/railRamp';
+import { allRamps, rampK, rampLineH, rampLen, rampPortal } from '../sim/railRamp';
 import { addBridgeStructures } from './bridgeStyles';
 import { findTurnbacks, Island, islandSpread, ISLAND_GAP } from './turnback';
 import { createInfraGlassMaterial, createInfraMaterial, GlassBuf, matColor, PbrBuf, RM } from './infraMaterial';
@@ -205,14 +205,18 @@ export class RailLayer {
       }
     };
 
-    // 地上の鉄道と高架鉄道を結ぶ坂：坂のマス → 坂の下の端（ax, az）と上る向き（ux, uz）
+    // 地上の鉄道と高架鉄道を結ぶ坂（縦横か 45° の斜め）：坂のマス → 坂の下の端（ax, az。斜めはマスの角）、
+    // 1 マスの一歩（sx, sz、m）、上る向きの単位ベクトル（ux, uz）、マスの数 L とつなぎ目 P
     const ramps = allRamps(g);
-    const rampFrame = new Map<number, { ax: number; az: number; ux: number; uz: number }>();
+    type RF = { ax: number; az: number; sx: number; sz: number; ux: number; uz: number; L: number; P: number };
+    const rampFrame = new Map<number, RF>();
     for (const r of ramps) {
-      const c0 = r.cells[0], ux = DX[r.dir], uz = DY[r.dir];
-      const F = { ax: ((c0 % n) + 0.5 - ux * 0.5) * CELL, az: (((c0 / n) | 0) + 0.5 - uz * 0.5) * CELL, ux, uz };
+      const c0 = r.cells[0], dx = DX[r.dir], dz = DY[r.dir], l = Math.hypot(dx, dz);
+      const F: RF = { ax: ((c0 % n) + 0.5 - dx * 0.5) * CELL, az: (((c0 / n) | 0) + 0.5 - dz * 0.5) * CELL, sx: dx * CELL, sz: dz * CELL, ux: dx / l, uz: dz / l, L: rampLen(r.dir), P: rampPortal(r.dir) };
       for (const c of r.cells) rampFrame.set(c, F);
     }
+    // 坂の中の位置（一歩 = 1。下の端 = 0）
+    const rampS = (F: RF, x: number, z: number) => ((x - F.ax) * F.sx + (z - F.az) * F.sz) / (F.sx * F.sx + F.sz * F.sz);
 
     for (const kind of ['rail', 'erail', 'mono', 'sub'] as const) {
       const mask = g[kind];
@@ -250,7 +254,7 @@ export class RailLayer {
         // 坂の低い所（地上の線路）：レールの高さを、つなぎ目で高架のレール（+0.36m）とそろうように少しずつ上げる
         if (kind === 'rail' && g.rramp[i]) {
           const F = rampFrame.get(i);
-          if (F) for (const pts of paths) for (const p of pts) p.h += RAIL_TOP_STEP * Math.max(0, Math.min(1, ((p.x - F.ax) * F.ux + (p.z - F.az) * F.uz) / (CELL * (RAMP_PORTAL + 0.5))));
+          if (F) for (const pts of paths) for (const p of pts) p.h += RAIL_TOP_STEP * Math.max(0, Math.min(1, rampS(F, p.x, p.z) / (F.P + 0.5)));
         }
         for (const pts of paths) {
           // 複線：上り線と下り線を、中心から左右に TRACK_GAP ずつずらして並べる
@@ -299,8 +303,9 @@ export class RailLayer {
               strip(B, pts, o - 0.72, 0.16, 0.36, COL.steel);
               strip(B, pts, o + 0.72, 0.16, 0.36, COL.steel);
             }
-            // ガラスの防音壁（駅のホームのところは開ける）
-            if (!stationCells.has(i)) {
+            // ガラスの防音壁（駅のホームのところは開ける）。坂のつなぎ目とその次のマスは、擁壁から立ち上がる防音壁（下の坂の描画）
+            const rampBarrier = g.rramp[i] !== 0 && rampK(g, i) <= rampPortal(g.rramp[i] >> 4) + 1;
+            if (!stationCells.has(i) && !rampBarrier) {
               sides(pts, 4.75, 0.6, 2.6, COL.barrierGlass, 0, G);
               sides(pts, 4.75, 2.6, 2.8, COL.barrierFrame);
               strip(B, pts, -4.75, 0.25, 2.8, COL.barrierFrame);
@@ -350,25 +355,35 @@ export class RailLayer {
     // 架線は高架の部分から続けて張る（線路と高架の部分の描き方は、上の線路のマスごとの描画）
     for (const r of ramps) {
       const F = rampFrame.get(r.cells[0])!;
+      const { L, P: RP } = F;
       const px = -F.uz, pz = F.ux, T = TRACK_GAP;
       const H = r.cells.map((c) => RailLayer.lineH(g, 'rail', c));
-      const before = (() => { const x = (r.cells[0] % n) - F.ux, y = ((r.cells[0] / n) | 0) - F.uz; return g.inb(x, y) && g.rail[g.idx(x, y)] ? g.idx(x, y) : -1; })();
+      const before = (() => { const x = (r.cells[0] % n) - DX[r.dir], y = ((r.cells[0] / n) | 0) - DY[r.dir]; return g.inb(x, y) && g.rail[g.idx(x, y)] ? g.idx(x, y) : -1; })();
+      const after = (() => { const c = r.cells[L - 1], x = (c % n) + DX[r.dir], y = ((c / n) | 0) + DY[r.dir]; return g.inb(x, y) && g.erail[g.idx(x, y)] ? g.idx(x, y) : -1; })();
       const h0 = before >= 0 ? (H[0] + RailLayer.lineH(g, 'rail', before)) / 2 : H[0] - (H[1] - H[0]) / 2;
-      // 坂の中の位置 s（マス、下の端 = 0）での線路の高さと地面の高さ
+      const h1 = after >= 0 ? (H[L - 1] + RailLayer.lineH(g, 'erail', after)) / 2 : H[L - 1] + (H[L - 1] - H[L - 2]) / 2;
+      // 坂の中の位置 s（一歩 = 1、下の端 = 0）での線路の高さ（マスごとの線路の描画と同じ折れ線）と地面の高さ
       const hAt = (s: number) => {
         if (s <= 0.5) return h0 + (H[0] - h0) * (s / 0.5);
-        const k = Math.min(RAMP_LEN - 2, Math.floor(s - 0.5)), u = s - 0.5 - k;
+        if (s >= L - 0.5) return H[L - 1] + (h1 - H[L - 1]) * ((s - (L - 0.5)) / 0.5);
+        const k = Math.min(L - 2, Math.floor(s - 0.5)), u = s - 0.5 - k;
         return H[k] + (H[k + 1] - H[k]) * u;
       };
       const gAt = (s: number) => {
-        const k = Math.max(0, Math.min(RAMP_LEN - 1, Math.floor(s))), c = r.cells[k];
+        const k = Math.max(0, Math.min(L - 1, Math.floor(s))), c = r.cells[k];
         return g.cellH(c % n, (c / n) | 0);
       };
-      const sTop = RAMP_PORTAL + 0.5;
-      const pts: P[] = [];
-      for (let s = 0; s <= sTop + 1e-6; s += 0.25) pts.push({ x: F.ax + F.ux * s * CELL, z: F.az + F.uz * s * CELL, h: hAt(s) });
-      const ss = pts.map((_, k) => k * 0.25);
+      const at = (s: number): P => ({ x: F.ax + F.sx * s, z: F.az + F.sz * s, h: hAt(s) });
+      const sample = (s0: number, s1: number) => {
+        const out: P[] = [], ss: number[] = [];
+        const m = Math.max(1, Math.round((s1 - s0) * 4));
+        for (let k = 0; k <= m; k++) { const t = s0 + ((s1 - s0) * k) / m; ss.push(t); out.push(at(t)); }
+        return { pts: out, ss };
+      };
+      const sTop = RP + 0.5;
+      const { pts, ss } = sample(0, sTop);
       // 擁壁の上端（はじめの 2 マスで地面から立ち上がる）
+      const PARA = 0.95;
       const top = (k: number) => pts[k].h + 0.9 * Math.min(1, ss[k] / 2) + 0.05;
       const bot = (k: number) => gAt(ss[k]) - 0.3;
       for (const sg of [-1, 1]) {
@@ -393,17 +408,32 @@ export class RailLayer {
         // 橋台の上の段（床版を受ける）
         obox(e.x, e.z, F.ux, F.uz, -0.6, 0.0, -WALL_OUT, WALL_OUT, e.h - 1.4, e.h - 0.02, COL.concrete);
       }
+      // 防音壁：つなぎ目で擁壁の上端（+0.95m）から始まり、1.5 マスでふつうの高さ（+2.8m）まで上がる
+      {
+        const s1 = Math.min(L, sTop + 1.5);
+        const B2 = sample(sTop, s1);
+        const tb = B2.ss.map((s) => { const u = Math.max(0, Math.min(1, (s - sTop) / 1.5)); return PARA + (2.8 - PARA) * u * u * (3 - 2 * u); });
+        for (const sg of [-1, 1]) for (let k = 0; k + 1 < B2.pts.length; k++) {
+          const a = B2.pts[k], b = B2.pts[k + 1], o = sg * 4.75;
+          const ax = a.x + px * o, az = a.z + pz * o, bx = b.x + px * o, bz = b.z + pz * o;
+          G.wall(ax, az, a.h + 0.6, a.h + tb[k] - 0.2, bx, bz, b.h + 0.6, b.h + tb[k + 1] - 0.2, COL.barrierGlass);
+          B.wall(ax, az, a.h + tb[k] - 0.2, a.h + tb[k], bx, bz, b.h + tb[k + 1] - 0.2, b.h + tb[k + 1], COL.barrierFrame);
+          const q = [[a, -0.125, tb[k]], [a, 0.125, tb[k]], [b, 0.125, tb[k + 1]], [b, -0.125, tb[k + 1]]].map(([p, dd, y]) => B.v((p as P).x + px * (o + (dd as number)), (p as P).h + (y as number), (p as P).z + pz * (o + (dd as number)), COL.barrierFrame));
+          B.tri(q[0], q[1], q[2]);
+          B.tri(q[0], q[2], q[3]);
+        }
+      }
       // 架線：高架の部分から続けて、坂の下の端まで
       for (const o of [-T, T]) strip(B, pts, o, 0.07, 6.0, COL.wire);
-      // 架線柱（擁壁の上に、2 マスおき。坂の下の端にも 1 本）
-      for (let k = 0; k <= RAMP_PORTAL; k++) {
+      // 架線柱（擁壁の上に、2 マスおき。坂の下の端にも 1 本）。縦横は高架の部分と同じ並び、斜めは坂の中の番号で
+      for (let k = 0; k <= RP; k++) {
         const c = r.cells[k], x = c % n, y = (c / n) | 0;
-        if (k > 0 && (x + y) % 2 !== 0) continue;
-        const s = k + 0.5, cx = F.ax + F.ux * s * CELL, cz = F.az + F.uz * s * CELL, ch = hAt(s);
+        if (k > 0 && ((r.dir & 1 ? k : x + y) % 2 !== 0)) continue;
+        const s = k + 0.5, p0 = at(s), ch = p0.h;
         const t0 = ch + 0.9 * Math.min(1, s / 2), tp = ch + 6.6, ph = (WALL_IN + WALL_OUT) / 2;
-        for (const sg of [-1, 1]) obox(cx, cz, F.ux, F.uz, -0.18, 0.18, sg * ph - 0.18, sg * ph + 0.18, t0, tp, COL.pole);
-        obox(cx, cz, F.ux, F.uz, -0.14, 0.14, -ph - 0.15, ph + 0.15, tp - 0.35, tp, COL.pole);
-        for (const o of [-T, T]) obox(cx, cz, F.ux, F.uz, -0.05, 0.05, o - 0.05, o + 0.05, ch + 6.0, tp - 0.35, COL.wire);
+        for (const sg of [-1, 1]) obox(p0.x, p0.z, F.ux, F.uz, -0.18, 0.18, sg * ph - 0.18, sg * ph + 0.18, t0, tp, COL.pole);
+        obox(p0.x, p0.z, F.ux, F.uz, -0.14, 0.14, -ph - 0.15, ph + 0.15, tp - 0.35, tp, COL.pole);
+        for (const o of [-T, T]) obox(p0.x, p0.z, F.ux, F.uz, -0.05, 0.05, o - 0.05, o + 0.05, ch + 6.0, tp - 0.35, COL.wire);
       }
     }
 

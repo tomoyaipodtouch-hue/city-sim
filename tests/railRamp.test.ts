@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { World } from '../src/sim/world';
 import { RoadType } from '../src/sim/defs';
 import { normRect, planBulldoze, planLine, planTransitLine } from '../src/sim/plan';
-import { assignTrips, buildJunctions, buildRoadGraph, LAYER, Origin } from '../src/sim/traffic';
+import { assignTrips, buildJunctions, buildRoadGraph, buildTransitModel, LAYER, Origin } from '../src/sim/traffic';
 import {
-  allRamps, isRampHigh, isRampLow, rampK, rampLift, rampLineH, RAMP_LEN, RAMP_MSG_ROAD, RAMP_MSG_SHORT, RAMP_MSG_STATION, RAMP_PORTAL,
+  allRamps, isRampHigh, isRampLow, rampK, rampLen, rampLift, rampLineH, rampPortal, RAMP_LEN, RAMP_MSG_ROAD, RAMP_MSG_SHORT, RAMP_MSG_STATION, RAMP_PORTAL,
 } from '../src/sim/railRamp';
 import { erailDeckH, HWR_CLEAR } from '../src/sim/hwrail';
 
@@ -44,7 +44,7 @@ function walkService(w: World, start: number, startKind: 'rail' | 'erail') {
       const x = (c % n) + [1, 1, 0, -1, -1, -1, 0, 1][d], y = ((c / n) | 0) + [0, 1, 1, 1, 0, -1, -1, -1][d];
       if (g.inb(x, y)) st.push(L * N + y * n + x);
     }
-    if (g.rramp[c] && rampK(g, c) === RAMP_PORTAL) st.push((1 - L) * N + c);
+    if (g.rramp[c] && rampK(g, c) === rampPortal(g.rramp[c] >> 4)) st.push((1 - L) * N + c);
   }
   return seen;
 }
@@ -295,5 +295,130 @@ describe('rail ⇔ elevated rail ramp: elevated highways', () => {
     expect(g.upH[c]).toBeLessThan(w2.g.upH[c]);
     // 低い所（盛土の上）には高架の道路を通せない
     expect(fail(w, { t: 'road', x0: 33, y0: 10, x1: 33, y1: 70, road: RoadType.UrbanHighway })).toMatch(/坂/);
+  });
+});
+
+// ---------------- 斜め（45°）の坂 ----------------
+describe('diagonal (45°) ramps', () => {
+  const DXs = [1, 1, 0, -1, -1, -1, 0, 1], DYs = [0, 1, 1, 1, 0, -1, -1, -1];
+  // 向き D（1 = 南東、7 = 北東）に、地上 20 歩 → 高架 24 歩の線。up = 地上を先に引いて高架を足す、そうでなければ高架を先に引いて地上を足す
+  function diagLine(D: number, up: boolean) {
+    const w = flat();
+    const x0 = 10, y0 = D === 1 ? 10 : 85;
+    const P = (k: number) => [x0 + DXs[D] * k, y0 + DYs[D] * k] as const;
+    const [ax, ay] = P(0), [jx, jy] = P(20), [bx, by] = P(44);
+    if (up) {
+      ok(w, line('rail', ax, ay, jx, jy));
+      ok(w, line('erail', jx, jy, bx, by));
+    } else {
+      ok(w, line('erail', bx, by, jx, jy));
+      ok(w, line('rail', jx, jy, ax, ay));
+    }
+    return { w, P, idx: (k: number) => w.g.idx(P(k)[0], P(k)[1]) };
+  }
+  for (const D of [1, 7])
+    for (const up of [true, false])
+      it(`dir ${D === 1 ? 'SE' : 'NE'}, ${up ? 'ground extended by elevated' : 'elevated extended by ground'}: ramp, heights, one service, passengers`, () => {
+        const { w, idx } = diagLine(D, up);
+        const g = w.g, N = g.n * g.n;
+        const L = rampLen(D), RP = rampPortal(D);
+        expect(L).toBe(8);
+        expect(RP).toBe(5);
+        // 勾配は縦横の坂とほぼ同じ
+        const axisGrade = 7.9 / (RAMP_LEN * 16), diagGrade = 7.9 / (L * 16 * Math.SQRT2);
+        expect(Math.abs(diagGrade - axisGrade) / axisGrade).toBeLessThan(0.1);
+        const ramps = allRamps(g);
+        expect(ramps.length).toBe(1);
+        expect(ramps[0].dir).toBe(D);
+        // 上りのとき坂は 20 歩目から、下りのとき 20 歩目が坂のいちばん上（地上は 13..20 歩目）
+        const k0 = up ? 20 : 20 - (L - 1);
+        expect(ramps[0].cells).toEqual(Array.from({ length: L }, (_, k) => idx(k0 + k)));
+        const bit = (d: number) => 1 << d, back = (D + 4) & 7;
+        expect(g.rail[idx(k0 + RP)]).toBe(bit(back));
+        expect(g.erail[idx(k0 + RP)]).toBe(bit(D));
+        expect(g.rail[idx(k0 + RP + 1)]).toBe(0);
+        expect(g.erail[idx(k0)]).toBe(0);
+        const hs = ramps[0].cells.map((c) => rampLineH(g, c));
+        for (let k = 1; k < L; k++) expect(hs[k] - hs[k - 1]).toBeCloseTo(hs[1] - hs[0], 5);
+        expect(rampLift(L - 1, L)).toBeGreaterThan(7);
+        expect(isRampLow(g, idx(k0 + RP - 1)) && !isRampHigh(g, idx(k0 + RP - 1))).toBe(true);
+        expect(isRampHigh(g, idx(k0 + RP + 1)) && !isRampLow(g, idx(k0 + RP + 1))).toBe(true);
+        // 1本の列車が、地上の端から高架の端まで
+        const svc = walkService(w, idx(0), 'rail');
+        expect(svc.has(N + idx(44))).toBe(true);
+        // 乗客：地上の線の端の駅から、高架の線の端の駅へ、乗り換えなしで（駅は道路のマスと線路のマスを結ぶだけの最小の形）
+        ok(w, { t: 'road', x0: 60, y0: 48, x1: 70, y1: 48, road: RoadType.Road });
+        ok(w, { t: 'road', x0: 80, y0: 48, x1: 90, y1: 48, road: RoadType.Road });
+        const r1 = g.idx(62, 48), r2 = g.idx(88, 48);
+        const tm = buildTransitModel(g, [{ kind: 'rail', roadCells: [r1], lineCells: [idx(1)] }, { kind: 'erail', roadCells: [r2], lineCells: [idx(43)] }]);
+        const J = buildJunctions(g, new Float32Array(2 * N));
+        const cong = new Float32Array(2 * N).fill(1);
+        const origin: Origin = { cell: r1, trips: 30, carPenalty: 999, buildings: [{ id: 9, trips: 30 }] };
+        const r = assignTrips(g, [origin], new Map([[r2, [{ id: 1, free: 30 }]]]), cong, J, () => 0.5, { externalCap: 0, maxMinutes: 120, weight: 1 }, tm, buildRoadGraph(g, cong, J));
+        expect(r.filled.get(1)).toBe(30);
+        expect(r.volume[LAYER.rail * N + idx(k0 + 2)]).toBeGreaterThan(0);
+        expect(r.volume[LAYER.erail * N + idx(k0 + L - 1)]).toBeGreaterThan(0);
+        for (let k = 2; k < 43; k++) expect(r.volume[LAYER.walk * N + idx(k)]).toBe(0);
+        // 保存と読み込み
+        const w2 = World.load(w.serialize());
+        expect([...w2.g.rramp]).toEqual([...g.rramp]);
+        expect(allRamps(w2.g)[0].cells).toEqual(ramps[0].cells);
+        // 取り壊し：低い所を地上で → 坂全体がなくなる。前後の線路は残る
+        const [lx, ly] = [idx(k0 + 1) % g.n, (idx(k0 + 1) / g.n) | 0];
+        const pg = planBulldoze(g, normRect(lx, ly, lx, ly, g.n), (id) => w.buildings.get(id), 'ground');
+        expect(pg.transit.length).toBe(L);
+        expect(planBulldoze(g, normRect(lx, ly, lx, ly, g.n), (id) => w.buildings.get(id), 'up').transit.length).toBe(0);
+        ok(w, { t: 'bulldoze', x0: lx, y0: ly, x1: lx, y1: ly, layer: 'ground' });
+        expect(allRamps(g).length).toBe(0);
+        expect(g.rail[idx(k0 - 1)]).toBe(bit(back));
+        expect(g.erail[idx(k0 + L)]).toBe(bit(D));
+        // 高い所を高架で取り壊しても同じ
+        const { w: w3, idx: i3 } = diagLine(D, up);
+        const [hx, hy] = [i3(k0 + L - 2) % w3.g.n, (i3(k0 + L - 2) / w3.g.n) | 0];
+        expect(planBulldoze(w3.g, normRect(hx, hy, hx, hy, w3.g.n), (id) => w3.buildings.get(id), 'ground').transit.length).toBe(0);
+        ok(w3, { t: 'bulldoze', x0: hx, y0: hy, x1: hx, y1: hy, layer: 'up' });
+        expect(allRamps(w3.g).length).toBe(0);
+      });
+
+  it('refuses short or bent diagonal runs, and roads crossing the low part (in a cell or at a corner)', () => {
+    const w = flat();
+    ok(w, line('rail', 10, 10, 30, 30));
+    expect(fail(w, line('erail', 30, 30, 35, 35))).toBe(RAMP_MSG_SHORT);
+    // すぐ曲がる：南東へ 3 歩のあと東へ
+    ok(w, line('erail', 50, 30, 60, 30)); // つながらない別の線（関係ない）
+    expect(fail(w, line('erail', 30, 30, 48, 33))).toBe(RAMP_MSG_SHORT);
+    // 低い所のマスに道路（縦の道路が x = 32 を通る）
+    const w2 = flat();
+    ok(w2, line('rail', 10, 10, 30, 30));
+    ok(w2, { t: 'road', x0: 32, y0: 20, x1: 32, y1: 45, road: RoadType.Road });
+    expect(fail(w2, line('erail', 30, 30, 50, 50))).toBe(RAMP_MSG_ROAD);
+    // 低い所を、マスの角で斜めに横切る道路（北東向き）
+    const w3 = flat();
+    ok(w3, line('rail', 10, 10, 30, 30));
+    ok(w3, { t: 'road', x0: 31, y0: 34, x1: 37, y1: 28, road: RoadType.Road });
+    expect(fail(w3, line('erail', 30, 30, 50, 50))).toBe(RAMP_MSG_ROAD);
+  });
+
+  it('roads cross under the high part (straight or diagonally at a corner), not the low part; elevated highways clear the deck', () => {
+    const w = flat();
+    ok(w, line('rail', 10, 10, 30, 30));
+    ok(w, line('erail', 30, 30, 50, 50));
+    const g = w.g;
+    // 低い所：マスの角で斜めに横切る道路も、マスを通る道路も断る
+    expect(fail(w, { t: 'road', x0: 31, y0: 34, x1: 37, y1: 28, road: RoadType.Road })).toBe(RAMP_MSG_ROAD);
+    expect(fail(w, { t: 'road', x0: 32, y0: 20, x1: 32, y1: 45, road: RoadType.Road })).toBe(RAMP_MSG_ROAD);
+    // 高い所（30 + 6 歩目から）：斜めの道路がマスの角でくぐる、縦の道路がマスを通ってくぐる
+    ok(w, { t: 'road', x0: 34, y0: 39, x1: 40, y1: 33, road: RoadType.Road });
+    ok(w, { t: 'road', x0: 37, y0: 20, x1: 37, y1: 30, road: RoadType.Road });
+    ok(w, { t: 'road', x0: 37, y0: 30, x1: 37, y1: 45, road: RoadType.Road });
+    expect(allRamps(g).length).toBe(1);
+    // 高架の高速道路：高い所の上を越える（床版より HWR_CLEAR 以上）
+    const w2 = flat();
+    ok(w2, line('rail', 10, 10, 30, 30));
+    ok(w2, line('erail', 30, 30, 50, 50));
+    ok(w2, { t: 'road', x0: 37, y0: 5, x1: 37, y1: 80, road: RoadType.UrbanHighway });
+    const c = w2.g.idx(37, 37);
+    expect(w2.g.upH[c] - erailDeckH(w2.g, c)).toBeGreaterThanOrEqual(HWR_CLEAR - 1e-6);
+    expect(fail(w2, { t: 'road', x0: 33, y0: 5, x1: 33, y1: 80, road: RoadType.UrbanHighway })).toMatch(/坂/);
   });
 });

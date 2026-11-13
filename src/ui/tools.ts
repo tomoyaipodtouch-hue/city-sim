@@ -226,7 +226,7 @@ export class ToolController {
       const cv = new Set(cover);
       pv.setTiles(g, [...path.cells, ...cover], (i) => (plan.bad.has(i) ? 0xe5534b : cv.has(i) ? 0xffeec2 : 0xffd27a));
       pv.setPath(g, path.cells);
-      if (path.cells.length < 2) return { text: 'ドラッグして線路を引く', bad: false };
+      if (path.cells.length < 2) return { text: kind === 'rail' || kind === 'erail' ? 'ドラッグして線路を引く（行き止まりから引くと坂でつながります）' : 'ドラッグして線路を引く', bad: false };
       return plan.ok ? { text: `${yen(plan.cost)}${plan.ramps?.length ? '（坂でつなぎます）' : ''}`, bad: false } : { text: plan.reason || '引けません', bad: true };
     }
     if (t === 'pline' && d.line) {
