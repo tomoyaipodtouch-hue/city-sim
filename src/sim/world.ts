@@ -14,6 +14,7 @@ import {
 import { CELL } from './constants';
 import type { BulldozeLayer } from './plan';
 import { applyJct, JctForm, planJct } from './jct';
+import { pruneBrokenRamps } from './railRamp';
 import { erailStationCells, HWR_MSG_STATION, isElevHighway, levelHighwaysOverRail, stationUnder } from './hwrail';
 import { ADVISORS, Advice, computeRating, Loan, LOAN_AMOUNTS, loanRate, makeAdvice, MAX_LOANS, newLoan, ordinanceCost, ordinanceEffects, OrdinanceEffects, OrdinanceId, ORDINANCES, payLoan, rewardUnlocked, REWARD_REQ } from './governance';
 import { defaultServiceState, facilityEffect, makeServiceMaps, ServiceMaps, ServiceState, updateServices } from './services';
@@ -150,6 +151,7 @@ export interface SaveData {
   sub?: Uint8Array;
   hsr?: Uint8Array; // 高速鉄道（古い保存データにはない）
   hsrf?: Uint8Array;
+  rramp?: Uint8Array; // 地上の鉄道と高架鉄道を結ぶ坂（古い保存データにはない）
   bstop?: Uint8Array;
   ictl?: Uint8Array;
   isplit?: Uint8Array;
@@ -712,7 +714,7 @@ export class World {
       }
       case 'transit': {
         const path = planLine(g, c.x0, c.y0, c.x1, c.y1);
-        const plan = planTransitLine(g, path, c.kind, !!c.ground);
+        const plan = planTransitLine(g, path, c.kind, !!c.ground, [...this.buildings.values()]);
         if (!plan.ok) return { ok: false, msg: plan.reason || '線路を引けません' };
         if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
         applyTransitLine(g, plan);
@@ -863,6 +865,7 @@ export class World {
     this.syncAirports();
     regradeApproaches(this.g);
     pruneORamps(this.g); // 本線や下の道路がなくなった重ねランプは取り除く
+    pruneBrokenRamps(this.g); // 一部が取り壊された、地上の鉄道と高架鉄道を結ぶ坂は、全体を取り除く
     levelHighwaysOverRail(this.g); // 高架鉄道をまたぐ高架の高速道路を、線路の上まで持ち上げる
     // 線路がなくなった駅のホームは消す
     for (let i = 0; i < this.g.estn.length; i++) if (this.g.estn[i] && !this.g.erail[i]) this.g.estn[i] = 0;

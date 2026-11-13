@@ -6,6 +6,7 @@ import { CIVIC, CivicId, LINES, LineKind } from '../sim/defs';
 import type { Building } from '../sim/world';
 import { Buf, ROAD_LIFT } from './roadLayer';
 import { estopGroup } from '../sim/plan';
+import { allRamps, rampLineH, RAMP_LEN, RAMP_PORTAL } from '../sim/railRamp';
 import { addBridgeStructures } from './bridgeStyles';
 import { findTurnbacks, Island, islandSpread, ISLAND_GAP } from './turnback';
 import { createInfraGlassMaterial, createInfraMaterial, GlassBuf, matColor, PbrBuf, RM } from './infraMaterial';
@@ -26,6 +27,7 @@ const COL = {
   pole: matColor(0x9aa1a7, RM.steel),
   wire: matColor(0x2c2f33, RM.wire),
   stop: matColor(0xd9a400, RM.plastic), // 車止め
+  retain: matColor(0xbab6ad, RM.concrete), // 坂の擁壁
 };
 
 interface P {
@@ -38,6 +40,10 @@ const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 // 複線の、中心から片側の線路までの距離（m）
 export const TRACK_GAP = 2.1;
+// 地上の鉄道と高架鉄道を結ぶ坂
+const RAIL_TOP_STEP = 0.06; // 高架のレールの上面（+0.36m）と地上のレールの上面（+0.3m）の差
+const WALL_IN = 4.6; // 擁壁の内側の面（線路の中心から、m）
+const WALL_OUT = 5.0; // 擁壁の外側の面
 
 export class RailLayer {
   group = new THREE.Group();
@@ -69,6 +75,8 @@ export class RailLayer {
   // 線路の高さ（マスの中心）
   static lineH(g: Grid, kind: LineKind, i: number) {
     const n = g.n;
+    // 地上の鉄道と高架鉄道を結ぶ坂（どちらの線路でも同じ高さ）
+    if (g.rramp[i] && (kind === 'rail' || kind === 'erail')) return rampLineH(g, i);
     const ground = Math.max(g.cellH(i % n, (i / n) | 0), WATER_LEVEL);
     if (kind === 'rail') return g.road[i] ? g.roadH(i) + ROAD_LIFT : ground + 0.1;
     // 高架（高架鉄道・モノレール）が水の上を渡るときは、両岸の高さを結んだ高さにする（川の上だけ低くならないように）
@@ -197,6 +205,15 @@ export class RailLayer {
       }
     };
 
+    // 地上の鉄道と高架鉄道を結ぶ坂：坂のマス → 坂の下の端（ax, az）と上る向き（ux, uz）
+    const ramps = allRamps(g);
+    const rampFrame = new Map<number, { ax: number; az: number; ux: number; uz: number }>();
+    for (const r of ramps) {
+      const c0 = r.cells[0], ux = DX[r.dir], uz = DY[r.dir];
+      const F = { ax: ((c0 % n) + 0.5 - ux * 0.5) * CELL, az: (((c0 / n) | 0) + 0.5 - uz * 0.5) * CELL, ux, uz };
+      for (const c of r.cells) rampFrame.set(c, F);
+    }
+
     for (const kind of ['rail', 'erail', 'mono', 'sub'] as const) {
       const mask = g[kind];
       for (let i = 0; i < N; i++) {
@@ -230,6 +247,11 @@ export class RailLayer {
           paths.push(pts);
         } else for (const a of arms) paths.push([{ x: cx, z: cz, h: ch }, { x: a.ex, z: a.ez, h: a.eh }]);
         const ground = g.cellH(x, y);
+        // 坂の低い所（地上の線路）：レールの高さを、つなぎ目で高架のレール（+0.36m）とそろうように少しずつ上げる
+        if (kind === 'rail' && g.rramp[i]) {
+          const F = rampFrame.get(i);
+          if (F) for (const pts of paths) for (const p of pts) p.h += RAIL_TOP_STEP * Math.max(0, Math.min(1, ((p.x - F.ax) * F.ux + (p.z - F.az) * F.uz) / (CELL * (RAMP_PORTAL + 0.5))));
+        }
         for (const pts of paths) {
           // 複線：上り線と下り線を、中心から左右に TRACK_GAP ずつずらして並べる
           const T = TRACK_GAP;
@@ -324,6 +346,67 @@ export class RailLayer {
         }
       }
     }
+    // 坂の低い所：擁壁にはさまれた盛土（U字の溝）。擁壁は線路といっしょに上がり、つなぎ目で高架橋の橋台になる。
+    // 架線は高架の部分から続けて張る（線路と高架の部分の描き方は、上の線路のマスごとの描画）
+    for (const r of ramps) {
+      const F = rampFrame.get(r.cells[0])!;
+      const px = -F.uz, pz = F.ux, T = TRACK_GAP;
+      const H = r.cells.map((c) => RailLayer.lineH(g, 'rail', c));
+      const before = (() => { const x = (r.cells[0] % n) - F.ux, y = ((r.cells[0] / n) | 0) - F.uz; return g.inb(x, y) && g.rail[g.idx(x, y)] ? g.idx(x, y) : -1; })();
+      const h0 = before >= 0 ? (H[0] + RailLayer.lineH(g, 'rail', before)) / 2 : H[0] - (H[1] - H[0]) / 2;
+      // 坂の中の位置 s（マス、下の端 = 0）での線路の高さと地面の高さ
+      const hAt = (s: number) => {
+        if (s <= 0.5) return h0 + (H[0] - h0) * (s / 0.5);
+        const k = Math.min(RAMP_LEN - 2, Math.floor(s - 0.5)), u = s - 0.5 - k;
+        return H[k] + (H[k + 1] - H[k]) * u;
+      };
+      const gAt = (s: number) => {
+        const k = Math.max(0, Math.min(RAMP_LEN - 1, Math.floor(s))), c = r.cells[k];
+        return g.cellH(c % n, (c / n) | 0);
+      };
+      const sTop = RAMP_PORTAL + 0.5;
+      const pts: P[] = [];
+      for (let s = 0; s <= sTop + 1e-6; s += 0.25) pts.push({ x: F.ax + F.ux * s * CELL, z: F.az + F.uz * s * CELL, h: hAt(s) });
+      const ss = pts.map((_, k) => k * 0.25);
+      // 擁壁の上端（はじめの 2 マスで地面から立ち上がる）
+      const top = (k: number) => pts[k].h + 0.9 * Math.min(1, ss[k] / 2) + 0.05;
+      const bot = (k: number) => gAt(ss[k]) - 0.3;
+      for (const sg of [-1, 1]) {
+        for (let k = 0; k + 1 < pts.length; k++) {
+          const a = pts[k], b = pts[k + 1];
+          for (const o of [WALL_IN, WALL_OUT]) {
+            const oo = sg * o;
+            B.wall(a.x + px * oo, a.z + pz * oo, bot(k), top(k), b.x + px * oo, b.z + pz * oo, bot(k + 1), top(k + 1), COL.retain);
+          }
+          // 擁壁の上の面
+          const q = [[a, WALL_IN, top(k)], [a, WALL_OUT, top(k)], [b, WALL_OUT, top(k + 1)], [b, WALL_IN, top(k + 1)]].map(([p, o, y]) => B.v((p as P).x + px * sg * (o as number), y as number, (p as P).z + pz * sg * (o as number), COL.retain));
+          B.tri(q[0], q[1], q[2]);
+          B.tri(q[0], q[2], q[3]);
+        }
+      }
+      // 盛土の上の面（道床の下、擁壁まで）
+      strip(B, pts, 0, 2 * WALL_IN, -0.02, COL.ballast);
+      // つなぎ目：擁壁の端を閉じる面（高架橋の床版の下まで。橋台）
+      {
+        const e = pts[pts.length - 1], k = pts.length - 1;
+        B.wall(e.x - px * WALL_OUT, e.z - pz * WALL_OUT, bot(k), top(k), e.x + px * WALL_OUT, e.z + pz * WALL_OUT, bot(k), top(k), COL.retain);
+        // 橋台の上の段（床版を受ける）
+        obox(e.x, e.z, F.ux, F.uz, -0.6, 0.0, -WALL_OUT, WALL_OUT, e.h - 1.4, e.h - 0.02, COL.concrete);
+      }
+      // 架線：高架の部分から続けて、坂の下の端まで
+      for (const o of [-T, T]) strip(B, pts, o, 0.07, 6.0, COL.wire);
+      // 架線柱（擁壁の上に、2 マスおき。坂の下の端にも 1 本）
+      for (let k = 0; k <= RAMP_PORTAL; k++) {
+        const c = r.cells[k], x = c % n, y = (c / n) | 0;
+        if (k > 0 && (x + y) % 2 !== 0) continue;
+        const s = k + 0.5, cx = F.ax + F.ux * s * CELL, cz = F.az + F.uz * s * CELL, ch = hAt(s);
+        const t0 = ch + 0.9 * Math.min(1, s / 2), tp = ch + 6.6, ph = (WALL_IN + WALL_OUT) / 2;
+        for (const sg of [-1, 1]) obox(cx, cz, F.ux, F.uz, -0.18, 0.18, sg * ph - 0.18, sg * ph + 0.18, t0, tp, COL.pole);
+        obox(cx, cz, F.ux, F.uz, -0.14, 0.14, -ph - 0.15, ph + 0.15, tp - 0.35, tp, COL.pole);
+        for (const o of [-T, T]) obox(cx, cz, F.ux, F.uz, -0.05, 0.05, o - 0.05, o + 0.05, ch + 6.0, tp - 0.35, COL.wire);
+      }
+    }
+
     // 行き止まりの X 字の分岐器（シーサスクロッシング）と、車止め
     for (const kind of ['rail', 'erail', 'mono', 'sub'] as const) {
       for (const tb of findTurnbacks(g, kind).values()) {

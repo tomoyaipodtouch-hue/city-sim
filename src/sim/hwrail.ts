@@ -12,6 +12,7 @@
 import { Grid, ORAMP_LEN, ORAMP_ON, ORAMP_PARTNER } from './grid';
 import { CELL, DX, DY, WATER_LEVEL, dirOf, isDiag, opp } from './constants';
 import { LINES, ROADS, RoadType, isUrbanElevated } from './defs';
+import { rampLineH } from './railRamp';
 import { hsrDeckH, isHsrElevated, HSR_CLEAR, HSR_GIRDER } from './hsr';
 
 export const ERAIL_CATENARY = 6.6; // 鉄道の床版から架線柱の上端まで（railLayer の架線柱の門型）
@@ -50,6 +51,8 @@ const stepLen = (d: number) => (isDiag(d) ? CELL * Math.SQRT2 : CELL);
 // 高架鉄道の床版の高さ（マスの中心）。RailLayer.lineH(g, 'erail', i) と同じ
 export function erailDeckH(g: Grid, i: number): number {
   const n = g.n;
+  // 地上の鉄道と高架鉄道を結ぶ坂の高架の部分は、坂の高さ
+  if (g.rramp[i]) return rampLineH(g, i);
   const ground = Math.max(g.cellH(i % n, (i / n) | 0), WATER_LEVEL);
   if (g.isWater(i % n, (i / n) | 0)) {
     const mask = g.erail;

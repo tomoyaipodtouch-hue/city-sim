@@ -429,7 +429,7 @@ export class CityRenderer {
     const N = g.n * g.n;
     for (let i = 0; i < N; i++) {
       if (!(g.road[i] | g.up[i] | g.pline[i] | g.rail[i] | g.erail[i] | g.mono[i] | g.sub[i] | g.bstop[i])) continue;
-      mix(g.rail[i] | (g.erail[i] << 8) | (g.mono[i] << 16) | (g.sub[i] << 24)); mix(g.bstop[i]); mix(g.bstyle[i]); mix(g.estn[i]); mix(g.pstyle[i]);
+      mix(g.rail[i] | (g.erail[i] << 8) | (g.mono[i] << 16) | (g.sub[i] << 24)); mix(g.bstop[i]); mix(g.bstyle[i]); mix(g.estn[i]); mix(g.pstyle[i]); mix(g.rramp[i]);
       mix(i); mix(g.road[i] | (g.ictl[i] << 8) | (g.iflags[i] << 16)); mix(g.conn[i]); mix(g.oramp[i]); mix(g.up[i]); mix(g.conn1[i]); mix(g.pline[i]); mix(Math.round(g.upH[i] * 4)); mix(Math.round(g.deck[i] * 4)); mix(Math.round(g.lift[i] * 4));
     }
     if (this.roads.jctl.length) for (let i = 0; i < N; i++) if (this.roads.jctl[i]) { mix(i); mix(this.roads.jctl[i]); }

@@ -2,6 +2,7 @@
 // SC4 と同じく、出発地から目的地まで所要時間が最短の経路を探し、道路ごとの交通量を集計する。
 // 住人は建物単位、さらに出発する道路マス単位にまとめて計算する。
 // 経路探索のノードは「階層 × マス」（地上と上空）。最後の番号は「隣の都市」。
+import { isRampPortal } from './railRamp';
 import { Grid, Ctl, JF } from './grid';
 import { CELL, DX, DY, isDiag } from './constants';
 import { orampLength, ORAMP_SPEED } from './oramp';
@@ -675,6 +676,9 @@ export function assignTrips(
         if (nx < 0 || ny < 0 || nx >= n || ny >= n) continue;
         relax(layer * N + ny * n + nx, t + lineMin[layer] * (d & 1 ? 1.414 : 1), u, d, 0);
       }
+      // 地上の鉄道と高架鉄道を結ぶ坂のつなぎ目：同じ列車のまま、もう一方の線路へ（乗り換えなし、待ち時間なし。railRamp.ts）
+      if (g.rramp[cell] && (layer === LAYER.rail || layer === LAYER.erail) && isRampPortal(g, cell) && g.rail[cell] && g.erail[cell])
+        relax((layer === LAYER.rail ? LAYER.erail : LAYER.rail) * N + cell, t + 0.01, u, -1, 0); // 0 分にすると Float32 の丸めで経路が輪になる
       const exits = T.lineToWalk.get(u);
       if (exits) for (const wn of exits) relax(wn, t + 0.5, u, -1, t + 0.5);
       // 乗り換え（連絡通路）

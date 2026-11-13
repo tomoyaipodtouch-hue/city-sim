@@ -7,6 +7,7 @@ import { CELL, DX, DY, opp } from '../sim/constants';
 import { CIVIC, CivicId, isHighway, JCT_RAMP_SPEED, LINES, LineKind, ROADS, RoadType, ZoneType } from '../sim/defs';
 import type { Building } from '../sim/world';
 import { RailLayer, TRACK_GAP } from './railLayer';
+import { isRampPortal } from '../sim/railRamp';
 import { isJctRamp, isUrbanHighway, TRUCK_PCE, urbanTurnOk } from '../sim/traffic';
 import { ROAD_LIFT, SIG_STOP, avenueMedianDir, drawWidth } from './roadLayer';
 import { findTurnbacks, Turnback, Island, islandSpread, ISLAND_GAP } from './turnback';
@@ -238,6 +239,8 @@ export class CarLayer {
   private cong: Float32Array | null = null;
   private mtx = new THREE.Matrix4();
   private q = new THREE.Quaternion();
+  private qp = new THREE.Quaternion(); // 列車の車体の前後の傾き
+  private ax = new THREE.Vector3(1, 0, 0);
   private eu = new THREE.Euler(0, 0, 0, 'YXZ');
   private v = new THREE.Vector3();
   private s = new THREE.Vector3(1, 1, 1);
@@ -844,13 +847,15 @@ export class CarLayer {
     for (const f of this.fleets) for (const c of f.cars) c.nx = c.rp = c.ex = undefined;
     const N = g.n * g.n;
     const walkable = (v: number) => v < N && g.road[v] !== 0 && !isHighway(g.road[v]) && g.road[v] !== RoadType.Ramp;
-    const exists = (f: Fleet, v: number) => (f.track === 'road' ? g.nodeType(v) !== 0 : f.track === 'bus' ? v < N && g.road[v] !== 0 : f.track === 'walk' ? walkable(v) : g[f.track][v] !== 0);
+    // 坂でつながった地上の鉄道（高架鉄道の列車が走る。ノード ≥ N）
+    this.linkRampLines(g);
+    const exists = (f: Fleet, v: number) => (f.track === 'road' ? g.nodeType(v) !== 0 : f.track === 'bus' ? v < N && g.road[v] !== 0 : f.track === 'walk' ? walkable(v) : v < N ? g[f.track][v] !== 0 : f.track === 'erail' && v < 2 * N && this.linkedRail[v - N] === 1 && g.rail[v - N] !== 0);
     // count：台数を決める交通量（なければ vol と同じ）。vol は出てくる場所の重み
     const build = (f: Fleet, vol: Float32Array, scale: number, count?: Float32Array) => {
       const nodes: number[] = [], w: number[] = [];
       let total = 0, ctotal = 0;
       if (count) for (let v = 0; v < count.length; v++) if (count[v] >= 1 && exists(f, v)) ctotal += count[v];
-      const len = f.track === 'road' ? 2 * N : N;
+      const len = f.track === 'road' ? 2 * N : Math.min(vol.length, f.track === 'erail' ? 2 * N : N);
       for (let v = 0; v < len; v++) {
         if (vol[v] < 1 || !exists(f, v)) continue;
         total += vol[v];
@@ -931,7 +936,15 @@ export class CarLayer {
       this.bus.target = Math.min(this.bus.target, Math.max(1, Math.ceil(stops * 1.5)));
       // 高架鉄道（i = 1）は本数を 4 割に（4両編成）
       this.lineFleets.forEach((f, i) => {
-        build(f, riders.subarray((i + 1) * N, (i + 2) * N), (0.0012 / f.carsPer) * (i === 1 ? 0.4 : 1));
+        let vol = riders.subarray((i + 1) * N, (i + 2) * N);
+        // 高架鉄道の列車は、坂でつながった地上の鉄道へも乗り入れる（地上の鉄道の乗客も数える）
+        if (f.track === 'erail' && this.linkedAny) {
+          const v2 = new Float32Array(2 * N);
+          v2.set(vol);
+          for (let c = 0; c < N; c++) if (this.linkedRail[c]) v2[N + c] = riders[N + c];
+          vol = v2;
+        }
+        build(f, vol, (0.0012 / f.carsPer) * (i === 1 ? 0.4 : 1));
         this.splitLines(g, f);
       });
     }
@@ -939,13 +952,14 @@ export class CarLayer {
 
   // 線路をつながりごとの路線に分け、乗る人が少ない路線にも列車が走るように路線ごとの本数を決める
   private splitLines(g: Grid, f: Fleet) {
-    const n = g.n, N = n * n, mask = g[f.track as LineKind];
-    const comp = f.comp && f.comp.length === N ? f.comp.fill(-1) : (f.comp = new Int32Array(N).fill(-1));
-    const lines: { cells: number[]; riders: number }[] = [];
+    const n = g.n, N = n * n, M = 2 * N;
+    const comp = f.comp && f.comp.length === M ? f.comp.fill(-1) : (f.comp = new Int32Array(M).fill(-1));
+    const lines: { cells: number[]; riders: number; ramp: boolean }[] = [];
     const stack: number[] = [];
-    for (let s = 0; s < N; s++) {
-      if (!mask[s] || comp[s] >= 0) continue;
-      const id = lines.length, L = { cells: [] as number[], riders: 0 };
+    for (let s = 0; s < M; s++) {
+      if (!this.lineMaskAt(f, s) || comp[s] >= 0) continue;
+      if (s >= N && f.track !== 'erail') break;
+      const id = lines.length, L = { cells: [] as number[], riders: 0, ramp: false };
       lines.push(L);
       comp[s] = id;
       stack.push(s);
@@ -953,17 +967,19 @@ export class CarLayer {
         const c = stack.pop()!;
         L.cells.push(c);
         L.riders += f.vol[c] || 0;
-        const x = c % n, y = (c / n) | 0, m = mask[c];
+        // 坂でつながった線路：地上の鉄道の列車は走らない（高架鉄道の列車が乗り入れる）
+        if (c < N && f.track === 'rail' && this.linkedRail[c]) L.ramp = true;
+        const m = this.lineDirs(f, c);
         for (let d = 0; d < 8; d++) {
-          if (!(m & (1 << d)) || !g.inb(x + DX[d], y + DY[d])) continue;
-          const j = (y + DY[d]) * n + x + DX[d];
-          if (mask[j] && comp[j] < 0) { comp[j] = id; stack.push(j); }
+          if (!(m & (1 << d))) continue;
+          const j = this.lineStep(f, c, d);
+          if (j >= 0 && comp[j] < 0) { comp[j] = id; stack.push(j); }
         }
       }
     }
     // 駅のある路線だけに走らせる
     const st = this.stations.get(f.track);
-    const big = lines.filter((L) => L.cells.length >= 4 && !!st && L.cells.some((c) => st.has(c)));
+    const big = lines.filter((L) => !L.ramp && L.cells.length >= 4 && !!st && L.cells.some((c) => st.has(c)));
     const sumR = big.reduce((a, L) => a + L.riders, 0) || 1;
     // 本数は乗る人の割合で分け、どの路線にも長さに応じて最低 1〜4 本は走らせる
     // 線路の長さで走れる本数には限りがある（多すぎると前の列車に詰まる）。高架鉄道（長さ 55.6m）でおよそ 8 マスに 1 本
@@ -1002,7 +1018,59 @@ export class CarLayer {
     if (f.track === 'bus') return g.roadH(node) + ROAD_LIFT;
     if (f.track === 'walk') return g.roadH(node) + ROAD_LIFT + 0.18;
     if (f.track === 'sub') return g.cellH(node % g.n, (node / g.n) | 0) + 0.8;
-    return RailLayer.lineH(g, f.track, node) + (f.track === 'mono' ? 0.1 : 0.35);
+    const N = g.n * g.n;
+    return RailLayer.lineH(g, node >= N ? 'rail' : f.track, node % N) + (f.track === 'mono' ? 0.1 : 0.35);
+  }
+
+  // ---- 地上の鉄道と高架鉄道を結ぶ坂（railRamp.ts）----
+  // 高架鉄道の列車は、坂のつなぎ目から地上の鉄道の線路へも走る。そのときのノードは N + マス（地上の鉄道）。
+  // 坂でつながった地上の鉄道（linkedRail）には、地上の鉄道の列車は出さない（1つの路線を高架鉄道の列車が通しで走る）
+  private linkedRail = new Uint8Array(0);
+  private linkedAny = false;
+  private linkRampLines(g: Grid) {
+    const n = g.n, N = n * n;
+    const L = this.linkedRail.length === N ? this.linkedRail.fill(0) : (this.linkedRail = new Uint8Array(N));
+    const st: number[] = [];
+    for (let i = 0; i < N; i++) if (g.rramp[i] && g.rail[i] && g.erail[i] && isRampPortal(g, i)) { L[i] = 1; st.push(i); }
+    this.linkedAny = st.length > 0;
+    while (st.length) {
+      const c = st.pop()!, x = c % n, y = (c / n) | 0;
+      for (let d = 0; d < 8; d++) {
+        if (!(g.rail[c] & (1 << d)) || !g.inb(x + DX[d], y + DY[d])) continue;
+        const j = (y + DY[d]) * n + x + DX[d];
+        if (g.rail[j] && !L[j]) { L[j] = 1; st.push(j); }
+      }
+    }
+  }
+  // 列車のノードの線路のつながり（8方向のビット）。坂のつなぎ目では、もう一方の線路のつながりも
+  private lineDirs(f: Fleet, node: number) {
+    const g = this.grid!, N = g.n * g.n;
+    if (node >= N) {
+      const c = node - N;
+      return g.rail[c] | (isRampPortal(g, c) ? g.erail[c] : 0);
+    }
+    const m = g[f.track as LineKind][node];
+    return f.track === 'erail' && g.rramp[node] && isRampPortal(g, node) && this.linkedRail[node] ? m | g.rail[node] : m;
+  }
+  // ノードから向き d へ進んだ先のノード（なければ -1）。坂のつなぎ目では、その向きの線路の層へ移る
+  private lineStep(f: Fleet, node: number, d: number) {
+    const g = this.grid!, n = g.n, N = n * n;
+    const lv = node >= N ? 1 : 0, c = node - lv * N;
+    const x = (c % n) + DX[d], y = ((c / n) | 0) + DY[d];
+    if (!g.inb(x, y)) return -1;
+    const j = y * n + x, bit = 1 << d;
+    const own = lv ? g.rail[c] : g[f.track as LineKind][c];
+    if (own & bit) return lv * N + j;
+    if (f.track === 'erail' && isRampPortal(g, c)) {
+      if (lv === 0 && g.rail[c] & bit && this.linkedRail[c]) return N + j;
+      if (lv === 1 && g.erail[c] & bit) return j;
+    }
+    return -1;
+  }
+  private lineMaskAt(f: Fleet, node: number) {
+    const g = this.grid!, N = g.n * g.n;
+    if (node < N) return g[f.track as LineKind][node];
+    return f.track === 'erail' && this.linkedRail[node - N] ? g.rail[node - N] : 0;
   }
 
   private spawn(f: Fleet): Car | null {
@@ -1055,21 +1123,21 @@ export class CarLayer {
 
   // 列車は、出てきたときから後ろの車両が線路の上に並ぶように、通ってきたマスをさかのぼって作っておく
   private seedHistory(f: Fleet, c: Car) {
-    const g = this.grid!, n = g.n;
-    const mask = g[f.track as LineKind];
     let cur: Cell = c;
     for (let k = 0; k < 7; k++) {
-      const x = cur.from % n, y = (cur.from / n) | 0;
-      let back = -1;
+      let back = -1, j = -1;
       // まっすぐ後ろを優先し、なければ進む向き以外のつながっている向き
       const prefer = (cur.din + 4) & 7;
+      const m = this.lineDirs(f, cur.from);
       for (const d of [prefer, ...[0, 1, 2, 3, 4, 5, 6, 7].filter((q) => q !== prefer)]) {
-        if (d === cur.d || !(mask[cur.from] & (1 << d)) || !g.inb(x + DX[d], y + DY[d])) continue;
+        if (d === cur.d || !(m & (1 << d))) continue;
+        const v = this.lineStep(f, cur.from, d);
+        if (v < 0) continue;
         back = d;
+        j = v;
         break;
       }
       if (back < 0) break;
-      const j = (y + DY[back]) * n + x + DX[back];
       const dirIn = (back + 4) & 7;
       const prev: Cell = { from: j, to: cur.from, din: dirIn, d: dirIn, hA: this.trackH(f, j) };
       cur.din = dirIn;
@@ -1151,9 +1219,12 @@ export class CarLayer {
         if (g.road[j] && !isHighway(g.road[j]) && g.road[j] !== RoadType.Ramp) add(j, d);
       }
     } else {
-      const m = g[f.track][node], n = g.n;
-      const x = node % n, y = (node / n) | 0;
-      for (let d = 0; d < 8; d++) if (m & (1 << d) && g.inb(x + DX[d], y + DY[d])) add((y + DY[d]) * n + x + DX[d], d);
+      const m = this.lineDirs(f, node);
+      for (let d = 0; d < 8; d++) {
+        if (!(m & (1 << d))) continue;
+        const v = this.lineStep(f, node, d);
+        if (v >= 0) add(v, d);
+      }
     }
     if (!opts.length)
       for (const [v, d, w] of sharp) {
@@ -1267,7 +1338,11 @@ export class CarLayer {
   setTurnbacks(g: Grid) {
     // 道路が変わったので、大通りの分離帯の向きも調べ直す
     this.scanAvenues(g);
+    this.linkRampLines(g);
     for (const k of ['rail', 'erail', 'mono', 'sub'] as const) this.turnbacks.set(k, findTurnbacks(g, k));
+    // 高架鉄道の列車は、坂でつながった地上の鉄道の行き止まりでも折り返す（ノード = N + マス）
+    const N = g.n * g.n, er = this.turnbacks.get('erail')!;
+    for (const [c, tb] of this.turnbacks.get('rail')!) er.set(N + c, tb);
     for (const f of this.lineFleets) for (const c of f.cars) c.tbKey = -1;
   }
   // 列車の進む先（まっすぐ 16 マスまで）にある折り返し
@@ -1277,24 +1352,24 @@ export class CarLayer {
     c.tb = null;
     const tbs = this.turnbacks.get(f.track);
     if (!tbs || !tbs.size) return null;
-    const g = this.grid!, n = g.n, mask = g[f.track as LineKind];
-    let x = c.to % n, y = (c.to / n) | 0;
+    const g = this.grid!, n = g.n, N = n * n;
+    let i = c.to;
     const d = c.d;
     for (let k = 0; k < 16; k++) {
-      const i = y * n + x, tb = tbs.get(i);
+      const tb = tbs.get(i);
       if (tb && tb.ux * DX[d] + tb.uz * DY[d] > 0.5) {
         c.tb = tb;
         // 空いているホームを選ぶ（ふだんは渡った先、そこがふさがっていればそのまま入る）。分岐器に着くまでは選び直す
-        const cx = ((c.to % n) + 0.5) * CELL, cz = (((c.to / n) | 0) + 0.5) * CELL;
+        const tc = c.to % N, cx = ((tc % n) + 0.5) * CELL, cz = (((tc / n) | 0) + 0.5) * CELL;
         if (c.tbFor !== tb || (tb.ex - cx) * tb.ux + (tb.ez - cz) * tb.uz > tb.d0 + CELL) {
           c.tbFor = tb;
           c.tbSide = this.freeSide(f, c, tb) ?? 0;
         }
         return tb;
       }
-      if (!(mask[i] & (1 << d))) break;
-      x += DX[d]; y += DY[d];
-      if (!g.inb(x, y)) break;
+      if (!(this.lineDirs(f, i) & (1 << d))) break;
+      i = this.lineStep(f, i, d);
+      if (i < 0) break;
     }
     // 折り返しへ向かっていたが、分かれ道でそれた
     if (c.tbFor && !c.revPending) { c.tbFor = null; c.tbSide = undefined; }
@@ -1302,7 +1377,7 @@ export class CarLayer {
   }
   // 先頭の台車から、折り返しの止まる点までの道のり（まっすぐな区間として）
   private headDist(o: Car, tb: Turnback) {
-    const n = this.grid!.n, ox = ((o.from % n) + 0.5) * CELL, oz = (((o.from / n) | 0) + 0.5) * CELL;
+    const n = this.grid!.n, of = o.from % (n * n), ox = ((of % n) + 0.5) * CELL, oz = (((of / n) | 0) + 0.5) * CELL;
     return (tb.ex - ox) * tb.ux + (tb.ez - oz) * tb.uz - (o.t - 0.5) * Math.hypot(DX[o.d], DY[o.d]) * CELL;
   }
   // 終点の空いているホーム（0 = 渡った先、1 = そのまま）。先に着いた列車・出ていく途中の列車がいるホームは使わない。
@@ -1353,7 +1428,7 @@ export class CarLayer {
     const tb = o.tbFor;
     if (!tb || tb !== c.tbFor || o.tbSide === undefined || c.tbSide === undefined || o.tbSide === c.tbSide) return false;
     if (o.revPending || (o.stop ?? 0) > 0) return true;
-    const n = this.grid!.n, ox = ((o.from % n) + 0.5) * CELL, oz = (((o.from / n) | 0) + 0.5) * CELL;
+    const n = this.grid!.n, of = o.from % (n * n), ox = ((of % n) + 0.5) * CELL, oz = (((of / n) | 0) + 0.5) * CELL;
     const step = Math.hypot(DX[o.d], DY[o.d]) * CELL;
     const head = (tb.ex - ox) * tb.ux + (tb.ez - oz) * tb.uz - (o.t - 0.5) * step;
     const tail = head + CarLayer.trainBack(f);
@@ -1370,8 +1445,8 @@ export class CarLayer {
   // 列車は同じ場所にとどまる（車両の並びが前後で入れ替わるだけ）。先頭は行き止まりのマスの入口（t = 1）で止まっている
   private reverseTrain(f: Fleet, c: Car) {
     const rev = (q: Cell): Cell => {
-      const n = this.grid!.n, x = (q.from % n) - DX[q.din], y = ((q.from / n) | 0) - DY[q.din];
-      const to = this.grid!.inb(x, y) ? y * n + x : q.from;
+      const back = this.lineStep(f, q.from, opp(q.din));
+      const to = back >= 0 ? back : q.from;
       // 入口の高さは、もとの出口の高さ
       return { from: q.from, to, din: opp(q.d), d: opp(q.din), hA: (this.trackH(f, q.from) + this.trackH(f, q.to)) / 2 };
     };
@@ -1456,6 +1531,12 @@ export class CarLayer {
     }
     // 線路の上だけの高架駅
     for (let i = 0; i < g.estn.length; i++) if (g.estn[i] && g.erail[i]) (this.stations.get('erail') ?? this.stations.set('erail', new Set()).get('erail')!).add(i);
+    // 高架鉄道の列車は、坂でつながった地上の鉄道の駅にも止まる（ノード = N + マス）
+    const rs = this.stations.get('rail');
+    if (rs) {
+      const N = g.n * g.n, es = this.stations.get('erail') ?? this.stations.set('erail', new Set()).get('erail')!;
+      for (const c of rs) es.add(N + c);
+    }
   }
   // 列車が占めているマス（進む向きで上り・下りの線路を分ける）
   private static occKey(cell: number, d: number) {
@@ -1796,7 +1877,8 @@ export class CarLayer {
             }
             // 前の列車との間隔：先の 2 マスに別の列車がいたら、マスの手前で待つ（長く詰まったら進む）
             const n = this.grid!.n;
-            const ahead2 = (() => { const x = (c.to % n) + DX[c.d], y = ((c.to / n) | 0) + DY[c.d]; return this.grid!.inb(x, y) ? y * n + x : -1; })();
+            void n;
+            const ahead2 = this.lineStep(f, c.to, c.d);
             const block = [c.to, ahead2].some((cell) => {
               if (cell < 0) return false;
               const o = occ!.get(CarLayer.occKey(cell, c.d));
@@ -2090,7 +2172,7 @@ export class CarLayer {
           }
           if (!nx) {
             // 列車は行き止まりで止まり、しばらくして向きを変える（マップの端なら隣の都市へ出ていく）
-            const g2 = this.grid!, ex = c.to % g2.n, ey = (c.to / g2.n) | 0;
+            const g2 = this.grid!, tc = c.to % (g2.n * g2.n), ex = tc % g2.n, ey = (tc / g2.n) | 0;
             const edge = ex === 0 || ey === 0 || ex === g2.n - 1 || ey === g2.n - 1;
             if (f.mid && !edge) {
               const tbE = this.turnbacks.get(f.track)?.get(c.to);
@@ -2241,7 +2323,7 @@ export class CarLayer {
           const nCar = f.carsPer, sp = f.spacing, half = f.halfLen * BOGIE;
           // 折り返しの手前の X 字の分岐器では、反対側の線路へ渡る
           const tb = this.endAhead(f, c);
-          const isl = f.track === 'erail' && this.islands.length ? this.islands : null;
+          const isl = f.track === 'erail' && this.islands.length && c.from < g.n * g.n ? this.islands : null;
           // 止まった点からの道のり dist が d0 から d1 へ進むあいだに、反対側の線路へ移る（-1 倍になる）
           const cross = (dist: number, d0: number, d1: number) => {
             const u = Math.max(0, Math.min(1, (d0 - dist) / (d0 - d1)));
@@ -2280,6 +2362,14 @@ export class CarLayer {
             this.v.set((fx + rx) / 2, (fh + rh) / 2, (fz + rz) / 2);
             if (!this.seen(this.v.x, this.v.y, this.v.z, f.halfLen + 4)) continue;
             this.q.setFromAxisAngle(this.up, ang);
+            // 坂（地上の鉄道と高架鉄道を結ぶ坂など）では、前後の台車の高さの差だけ車体を傾ける（車両の前は +z）
+            const dh = fh - rh;
+            if (Math.abs(dh) > 0.02) {
+              const run = Math.hypot(fx - rx, fz - rz) || 1;
+              const flipped = tail || (j > 0 && c.flip);
+              this.qp.setFromAxisAngle(this.ax, -Math.atan2(flipped ? -dh : dh, run));
+              this.q.multiply(this.qp);
+            }
             this.mtx.compose(this.v, this.q, this.s);
             if (j === 0 || tail) {
               if (hk < this.trainCap(f)) { f.mesh.setMatrixAt(hk, this.mtx); f.mesh.setColorAt(hk, f.colors[0]); hk++; }

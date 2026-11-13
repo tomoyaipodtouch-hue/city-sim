@@ -3,6 +3,7 @@ import { Grid } from './grid';
 import { DX, DY, MAX_ROAD_GRADE, CELL, WATER_LEVEL, QUAY_LAND, dirOf, isDiag, opp } from './constants';
 import { checkHwRail, isElevHighway, HWR_MSG_STATION, HWR_MSG_PARALLEL_RAIL } from './hwrail';
 import { applyHsrLine, hsrGroundBlock, HsrLinePlan, HSRF_COVER, isHsrElevated, isHsrGround, planHsrLine, planHsrPlaza, planHsrStation, removeHsrAt, HSR_MSG_PARALLEL } from './hsr';
+import { applyRampTrack, isRampLow, planRampJoin, rampOf, rampTouchReason, RailRampPlan, RRAMP_CELL_COST, RAMP_MSG_ROAD, RAMP_MSG_STATION, RAMP_MSG_UP } from './railRamp';
 import { ROADS, RoadType, ZoneType, ZONE_COST, POWER_LINE_COST, CIVIC, CivicId, BRIDGE_COST_MUL, MAX_BRIDGE, OVERPASS_LIFT, RAMP_COST, isHighway, isGroundHighway, isUrbanElevated, isUrbanGround, LINES, LineKind, BUS_STOP_COST, ESTOP_COST } from './defs';
 
 export interface LinePath {
@@ -399,7 +400,9 @@ function planLane(
     // 高速鉄道：地上の線路とは交差できない（踏切は作らない）。高架の線路の真下に沿って高架の道路は引けない
     if (L === 0 && hsrGroundBlock(g, i)) { bad.add(i); why('地上の高速鉄道とは交差できません（高速鉄道を高架にしてください）'); }
     if (L === 1 && isHsrElevated(g, i) && g.hsr[i] & ((1 << dirAt(k)) | (1 << opp(dirAt(k))) | (k > 0 ? (1 << dirs[k - 1]) | (1 << opp(dirs[k - 1])) : 0))) { bad.add(i); why('高速鉄道の高架の真下に沿っては引けません（交差だけできます）'); }
-    if (L === 0 && g.rail[i]) {
+    // 地上の鉄道と高架鉄道を結ぶ坂：低い所（盛土）は道路と交差できない。高い所（高架橋）の下は地上の道路を通せる
+    if (isRampLow(g, i)) { bad.add(i); why(L === 0 ? RAMP_MSG_ROAD : RAMP_MSG_UP); }
+    else if (L === 0 && g.rail[i]) {
       // 踏切：まっすぐな線路と直角に交わる場合だけ
       const ra = axisOf(g.rail[i]);
       const myAxis = axisOfDir(dirAt(k));
@@ -1233,6 +1236,15 @@ export function planBulldoze(
       } else if (ground && g.tree[i]) { trees.push(i); cost += 1; }
     }
   }
+  // 坂は一部だけ取り壊せないので、坂の線路をまとめて外す（地上を選べば低い所、高架を選べば高い所が当たる。railRamp.ts）
+  const rampSeen = new Set<number>();
+  for (const i of transit.slice()) {
+    if (!g.rramp[i] || rampSeen.has(i)) continue;
+    for (const c of rampOf(g, i)?.cells ?? []) {
+      rampSeen.add(c);
+      if (!transit.includes(c)) { transit.push(c); cost += 10; }
+    }
+  }
   for (const id of bset) {
     const b = bInfo(id);
     // 斜めの空港は外の四角より敷地が小さいので、敷地の広さ（長い辺 × 短い辺）で数える
@@ -1376,6 +1388,7 @@ function planPlopSized(g: Grid, id: CivicId, cx: number, cy: number, W: number, 
       const mask = g[def.transit];
       const near = def.transit === 'sub' ? [...around, ...cells] : around;
       if (!near.some((i) => mask[i])) reason = `${LINES[def.transit].name}の線路に接するように置いてください`;
+      else if ((def.transit === 'rail' || def.transit === 'erail') && near.some((i) => g.rramp[i])) reason = RAMP_MSG_STATION;
     }
   }
   const flatH = sum / cells.length;
@@ -1467,10 +1480,12 @@ export interface TransitPlan {
   bad: Set<number>;
   reason: string;
   hsr?: HsrLinePlan; // 高速鉄道
+  ramps?: RailRampPlan[]; // 地上の鉄道と高架鉄道を結ぶ坂（railRamp.ts）
 }
 
 // ground = 高速鉄道を地上に引く（ほかの線路では使わない）
-export function planTransitLine(g: Grid, path: LinePath, kind: LineKind, ground = false): TransitPlan {
+// stations = 駅の一覧（坂を駅のそばに作らないため。なくてもよい）
+export function planTransitLine(g: Grid, path: LinePath, kind: LineKind, ground = false, stations: { type: string; x: number; y: number; w: number; h: number }[] = []): TransitPlan {
   if (kind === 'hsr') {
     const h = planHsrLine(g, path, ground);
     return { ok: h.ok, kind, path, cost: h.cost, bad: h.bad, reason: h.reason, hsr: h };
@@ -1483,12 +1498,31 @@ export function planTransitLine(g: Grid, path: LinePath, kind: LineKind, ground 
   const mask = g[kind];
   let cost = 0;
   const { cells, dirs } = path;
+  // 地上の線路の端から高架鉄道を引く（またはその逆）と、つなぎ目が坂になる
+  const join = kind === 'rail' || kind === 'erail' ? planRampJoin(g, path, kind, stations) : null;
+  if (join && !join.ramps.length) {
+    for (const c of join.bad) bad.add(c);
+    return { ok: false, kind, path, cost: 0, bad, reason: join.reason };
+  }
+  const ramps = join?.ramps ?? [];
+  const inRamp = new Set(ramps.flatMap((r) => r.cells));
   for (let k = 0; k < cells.length; k++) {
     const i = cells[k];
     const x = i % n, y = (i / n) | 0;
     const d = dirs[Math.min(k, dirs.length - 1)] ?? 0;
     const len = k > 0 && isDiag(dirs[k - 1]) ? 1.41 : 1;
+    if (inRamp.has(i)) {
+      // 坂のマス（planRampJoin が調べた）
+      if (!g.rramp[i]) cost += RRAMP_CELL_COST;
+      continue;
+    }
     if (!mask[i]) cost += def.cost * len;
+    // すでにある坂には、坂の端から外へまっすぐ続ける線路だけつなげる
+    if (g.rramp[i] && kind !== 'sub') {
+      const ds = [...(k < dirs.length ? [dirs[k]] : []), ...(k > 0 ? [opp(dirs[k - 1])] : [])];
+      const r = rampTouchReason(g, kind, i, ds);
+      if (r) { bad.add(i); why(r); continue; }
+    }
     if (kind === 'sub') continue;
     if (g.bldg[i]) { bad.add(i); why('建物があります。先に取り壊してください'); }
     // 高速鉄道：地上の線路・カーブとは交差できない。高架の線路の真下・真上に沿っては引けない
@@ -1539,12 +1573,12 @@ export function planTransitLine(g: Grid, path: LinePath, kind: LineKind, ground 
     return false;
   })) {
     const sim = g.clone();
-    applyTransitLine(sim, { ok: true, kind, path, cost: 0, bad, reason: '' });
+    applyTransitLine(sim, { ok: true, kind, path, cost: 0, bad, reason: '', ramps });
     const r = checkHwRail(sim, new Set(cells));
     for (const c of r.bad) bad.add(c);
     if (!r.ok) why(r.reason);
   }
-  return { ok: bad.size === 0 && cells.length > 1, kind, path, cost: Math.round(cost), bad, reason };
+  return { ok: bad.size === 0 && cells.length > 1, kind, path, cost: Math.round(cost), bad, reason, ...(ramps.length ? { ramps } : {}) };
 }
 
 export function applyTransitLine(g: Grid, p: TransitPlan) {
@@ -1554,7 +1588,10 @@ export function applyTransitLine(g: Grid, p: TransitPlan) {
   }
   const mask = g[p.kind];
   const { cells, dirs } = p.path;
+  const rampSteps = new Set((p.ramps ?? []).flatMap((r) => r.steps));
+  for (const r of p.ramps ?? []) applyRampTrack(g, r.cells, r.dir);
   for (let k = 0; k < dirs.length; k++) {
+    if (rampSteps.has(k)) continue;
     mask[cells[k]] |= 1 << dirs[k];
     mask[cells[k + 1]] |= 1 << opp(dirs[k]);
   }
@@ -2899,6 +2936,7 @@ export function planEStop(g: Grid, x: number, y: number): EStopPlan {
       // 同じ線路の上で、ほかの駅と重なったり、すぐ続いたりはできない（隣の線路に並べるのはよい）
       const ends = [cells[0], cells[cells.length - 1]].flatMap((c, k) => { const cx = (c % n) + DX[d] * (k ? 1 : -1), cy = ((c / n) | 0) + DY[d] * (k ? 1 : -1); return g.inb(cx, cy) ? [g.idx(cx, cy)] : []; });
       if (cells.some((c) => g.estn[c]) || ends.some((c) => g.estn[c] !== 0)) return fail('同じ線路の上に、すでに駅があります', cells);
+      if (cells.some((c) => g.rramp[c])) return fail(RAMP_MSG_STATION, cells);
       if ([...cells, ...ends].some((c) => isElevHighway(g.up[c]))) return fail('高架の高速道路の下には駅を置けません', cells);
       if (!estopRoads(g, cells).length) return fail('ホームの下か横に、一般の道路が必要です（歩いて出入りするため）', cells);
       return { ok: true, cells, remove: false, reason: '', cost: ESTOP_COST };

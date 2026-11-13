@@ -4,6 +4,7 @@ import { Grid } from '../sim/grid';
 import { CELL, DX, DY, opp } from '../sim/constants';
 import type { LineKind } from '../sim/defs';
 import { TRAIN_SPEC } from './vehicles';
+import { isRampPortal } from '../sim/railRamp';
 
 export interface Turnback {
   end: number; // 行き止まりのマス
@@ -30,6 +31,8 @@ export function findTurnbacks(g: Grid, kind: Exclude<LineKind, 'hsr'>): Map<numb
   for (let i = 0; i < n * n; i++) {
     const m = mask[i];
     if (!m || m & (m - 1)) continue; // つながりが 1 つだけ
+    // 地上の鉄道と高架鉄道を結ぶ坂のつなぎ目は、行き止まりではない（列車はもう一方の線路へそのまま進む）
+    if ((kind === 'rail' || kind === 'erail') && isRampPortal(g, i)) continue;
     const x = i % n, y = (i / n) | 0;
     if (x === 0 || y === 0 || x === n - 1 || y === n - 1) continue;
     const e = 31 - Math.clz32(m); // 行き止まりから線路の方向
