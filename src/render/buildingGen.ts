@@ -1,5 +1,6 @@
 // 建物の自動生成（アメリカの都市風）
 import * as THREE from 'three';
+import { hsrPlaza, hsrStation } from './hsrStationGen';
 import { MAT } from './textures';
 import { MeshBuilder, PAT } from './builder';
 import { Rng } from '../sim/rng';
@@ -253,6 +254,8 @@ export function generateBuilding(mb: MeshBuilder, b: Building, f: LotFrame, tree
     case 'el_station': station(mb, f, 8); break;
     case 'mono_station': station(mb, f, 11); break;
     case 'sub_station': subwayEntrance(mb, f); break;
+    case 'hsr_station': hsrStation(mb, f, b.hsr, tf); break;
+    case 'hsr_plaza': hsrPlaza(mb, f, rng, tf); break;
     case 'ferry_p': ferryTerminal(mb, f, false); break;
     case 'ferry_c': ferryTerminal(mb, f, true); break;
     case 'seaport': seaport(mb, f, rng); break;

@@ -26,6 +26,7 @@ import { findIslands } from './turnback';
 import { pondUniforms } from './parkPond';
 import { updateGardenLights } from './gardenLight';
 import { AirportLayer, isAirfield } from './airport/layer';
+import { HsrLayer } from './hsrLayer';
 
 export interface Quality {
   shadows: boolean;
@@ -55,6 +56,7 @@ export class CityRenderer {
   quays = new QuayLayer(); // 埋め立て地の岸壁
   outskirts = new OutskirtsLayer(); // 町はずれの田園（畑、生け垣、農家、農道、風車）
   cars = new CarLayer();
+  hsr = new HsrLayer(); // 高速鉄道の線路と列車
   preview = new PreviewLayer();
   sun: THREE.DirectionalLight;
   // まわりからのやわらかい光は、空から作る環境マップ（env）が受け持つ。hemi はシーンに入れない（互換のために残す）
@@ -115,7 +117,7 @@ export class CityRenderer {
     this.sun.shadow.bias = -0.0002;
     this.sun.shadow.normalBias = 0.3;
     this.scene.add(this.sun, this.sun.target);
-    this.scene.add(this.roads.group, this.roadBridges.mesh, this.rails.group, this.props.group, this.buildings.group, this.airports.group, this.quays.group, this.outskirts.group, this.trees.group, this.cars.group, this.preview.mesh, this.preview.line);
+    this.scene.add(this.roads.group, this.roadBridges.mesh, this.rails.group, this.props.group, this.buildings.group, this.airports.group, this.quays.group, this.outskirts.group, this.trees.group, this.cars.group, this.hsr.group, this.preview.mesh, this.preview.line);
     this.resize();
     window.addEventListener('resize', () => this.resize());
     requestAnimationFrame(this.loop);
@@ -216,6 +218,8 @@ export class CityRenderer {
       else this.jctlPending = m.jctl;
     } else this.jctlPending = null;
     if (this.grid) this.cars.setData(this.grid, m.traffic, m.congestion, m.freight, m.riders, m.garbage, m.garbageLeft);
+    // 高速鉄道の列車の本数と両数は、乗客の数で決まる
+    if (this.grid && this.hsrKey !== 0) this.hsr.trains.rebuild(this.grid, this.buildingList, m.riders);
     this.kick();
   }
 
@@ -366,6 +370,11 @@ export class CityRenderer {
       if (this.airports.update(g, this.buildingList)) this.dirty.trees = true;
       if (v !== this.airports.version) this.lights.setBeacons(this.buildings.allBeacons().concat(this.airports.beacons()));
     }
+    // 高速鉄道：線路・駅・まわりの住宅地（防音壁）・地形が変わったときだけ作り直す
+    if (heights || this.dirty.grid || this.dirty.buildings) {
+      const k = this.hsrKeyOf(g);
+      if (k !== this.hsrKey) { this.hsrKey = k; this.hsr.rebuild(g, this.buildingList, this.maps?.riders); }
+    }
     // 町はずれの田園：マスが変わったとき、変わった区画だけ作り直す
     if (heights || this.dirty.grid) if (this.outskirts.rebuild(g, heights)) this.dirty.trees = true;
     // 大通りの中央分離帯のケヤキは、道路の層が分離帯の形から決めた位置に植える
@@ -380,6 +389,27 @@ export class CityRenderer {
   }
 
   private lastRoadKey = -1;
+  private hsrKey = 0;
+  // 高速鉄道の形を決めるもの：線路と印、駅の床版、線路のまわりの住宅のゾーン（防音壁）と地面の高さ
+  private hsrKeyOf(g: Grid) {
+    let h = 2166136261, any = false;
+    const mix = (v: number) => { h = Math.imul(h ^ v, 16777619); };
+    const n = g.n, N = n * n;
+    for (let i = 0; i < N; i++) {
+      if (!g.hsr[i] && !g.hsrf[i]) continue;
+      any = true;
+      mix(i); mix(g.hsr[i] | (g.hsrf[i] << 8));
+      if (!g.hsr[i]) continue;
+      const x = i % n, y = (i / n) | 0;
+      mix(Math.round(g.vh(x, y) * 8));
+      let r = 0;
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) if (g.inb(x + dx, y + dy) && g.zone[g.idx(x + dx, y + dy)] === 1) r |= 1 << ((dy + 2) * 5 + dx + 2);
+      mix(r);
+      if (g.road[i] || g.up[i] || g.rail[i] || g.erail[i] || g.mono[i]) mix(7);
+    }
+    for (const b of this.buildingList) if (b.type === 'hsr_station' && b.hsr) { mix(b.id); mix(Math.round(b.hsr.deck * 8)); }
+    return any ? h | 1 : 0;
+  }
   private vMark = new Uint8Array(0);
   private lastQuayKey = -1;
   private lastStationSig = '';
@@ -453,6 +483,13 @@ export class CityRenderer {
       for (let k = 0; k < n; k++) this.cars.update(mdt / n);
     }
     this.cars.group.visible = carsMoving;
+    // 高速鉄道の列車は大きいので、少し遠くからも見せる
+    if (this.hsrKey !== 0) {
+      this.rig.camera.updateMatrixWorld();
+      this.hsr.trains.group.visible = this.quality.cars && this.rig.dist < 2600;
+      this.hsr.trains.update(mdt, this.hsr.trains.group.visible ? this.rig.camera : null);
+      if (this.hsr.trains.group.visible && mdt > 0) this.kick();
+    }
     this.props.update(mdt);
     this.airports.tick(mdt, this.timeOfDay);
     this.outskirts.update(dt);

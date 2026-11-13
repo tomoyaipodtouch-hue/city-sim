@@ -185,76 +185,75 @@ export class HsrOps {
   // 道のり s での、列車 t の線路の横の位置（m、右が +。進む向きは道のりが増える向き）
   laneOffset(t: OpsTrain, s: number) {
     const r = this.routes[t.route];
-    const base = t.dir * HSR_TRACK;
-    let o = base;
-    for (const [i, side] of [[t.next, t.platN], [t.last, t.platL]] as const) {
-      if (i < 0) continue;
-      const st = r.stops[i];
-      const w = stationWeight(st, s);
-      if (w > 0) o = o + (side * HSR_PLAT - o) * w;
+    let o = t.dir * HSR_TRACK;
+    if (t.next >= 0) {
+      const w = stationWeight(r.stops[t.next], s);
+      if (w > 0) o += (t.platN * HSR_PLAT - o) * w;
+    }
+    if (t.last >= 0) {
+      const w = stationWeight(r.stops[t.last], s);
+      if (w > 0) o += (t.platL * HSR_PLAT - o) * w;
     }
     return o;
   }
 
+  // 1 コマ進める（配列や関数を作らない）
   step(dt: number) {
     if (dt <= 0) return;
-    // 同じ路線・同じ向きの列車を、進む順に並べて、前の列車に近づきすぎないようにする
-    const byRoute = new Map<number, OpsTrain[]>();
-    for (const t of this.trains) {
-      const k = t.route * 2 + (t.dir > 0 ? 0 : 1);
-      (byRoute.get(k) ?? byRoute.set(k, []).get(k)!).push(t);
-    }
-    for (const list of byRoute.values()) list.sort((a, b) => (b.s - a.s) * b.dir);
-    for (const list of byRoute.values()) {
-      for (let k = 0; k < list.length; k++) {
-        const t = list[k];
-        const r = this.routes[t.route], P = r.poly;
-        if (t.dwell > 0) {
-          t.dwell -= dt;
-          if (t.dwell <= 0) this.depart(t);
-          continue;
+    const T = this.trains;
+    let gone = false;
+    for (let k = 0; k < T.length; k++) {
+      const t = T[k];
+      if (t.gone) continue;
+      const r = this.routes[t.route], P = r.poly;
+      if (t.dwell > 0) {
+        t.dwell -= dt;
+        if (t.dwell <= 0) this.depart(t);
+        continue;
+      }
+      // 止まる所までの距離
+      let limit = Infinity;
+      if (t.next >= 0) limit = (this.stopPoint(t, r.stops[t.next]) - t.s) * t.dir;
+      // 前の列車（同じ路線・同じ向きで、いちばん近い前の列車）。通過する列車は、中間駅のホームに止まっている列車を追い越せる
+      let lead: OpsTrain | null = null, ld = Infinity;
+      for (let j = 0; j < T.length; j++) {
+        const o = T[j];
+        if (o === t || o.gone || o.route !== t.route || o.dir !== t.dir) continue;
+        const d = (o.s - t.s) * t.dir;
+        if (d <= 0 || d >= ld) continue;
+        if (t.express && o.dwell > 0 && o.last >= 0 && !r.stops[o.last].term) continue;
+        lead = o;
+        ld = d;
+      }
+      if (lead) limit = Math.min(limit, ld - trainLen(lead.cars) - GAP);
+      // 減速して止まれる速さ
+      const vStop = limit === Infinity ? HSR_VMAX : Math.sqrt(Math.max(0, 2 * HSR_DEC * Math.max(0, limit)));
+      const vt = Math.min(HSR_VMAX, vStop);
+      t.v = t.v < vt ? Math.min(vt, t.v + HSR_ACC * dt) : Math.max(vt, t.v - HSR_DEC * 1.5 * dt);
+      let adv = t.v * dt;
+      if (limit !== Infinity) adv = Math.min(adv, Math.max(0, limit));
+      t.s += adv * t.dir;
+      // 駅に着いた
+      if (t.next >= 0 && limit - adv < 0.5 && t.v < 3) {
+        const st = r.stops[t.next];
+        if (Math.abs(this.stopPoint(t, st) - t.s) < 1) {
+          t.v = 0;
+          t.last = t.next;
+          t.platL = t.platN;
+          t.turned = st.term;
+          t.dwell = st.term ? HSR_TURN_DWELL : HSR_DWELL;
+          t.next = -1;
         }
-        // 止まる所までの距離
-        let limit = Infinity;
-        if (t.next >= 0) limit = (this.stopPoint(t, r.stops[t.next]) - t.s) * t.dir;
-        // 前の列車（通過する列車は、駅のホームに止まっている列車を追い越せる）
-        for (let j = k - 1; j >= 0; j--) {
-          const o = list[j];
-          if (t.express && o.dwell > 0 && o.last >= 0 && !r.stops[o.last].term) continue;
-          if (o.dir !== t.dir) continue;
-          const gap = (o.s - t.s) * t.dir - trainLen(o.cars) - GAP;
-          limit = Math.min(limit, gap);
-          break;
-        }
-        // 減速して止まれる速さ
-        const vStop = limit === Infinity ? HSR_VMAX : Math.sqrt(Math.max(0, 2 * HSR_DEC * Math.max(0, limit)));
-        const vt = Math.min(HSR_VMAX, vStop);
-        t.v = t.v < vt ? Math.min(vt, t.v + HSR_ACC * dt) : Math.max(vt, t.v - HSR_DEC * 1.5 * dt);
-        let adv = t.v * dt;
-        if (limit !== Infinity) adv = Math.min(adv, Math.max(0, limit));
-        t.s += adv * t.dir;
-        // 駅に着いた
-        if (t.next >= 0 && limit - adv < 0.5 && t.v < 3) {
-          const st = r.stops[t.next];
-          if (Math.abs(this.stopPoint(t, st) - t.s) < 1) {
-            t.v = 0;
-            t.last = t.next;
-            t.platL = t.platN;
-            t.turned = st.term;
-            t.dwell = st.term ? HSR_TURN_DWELL : HSR_DWELL;
-            t.next = -1;
-          }
-        }
-        // マップの端から出ていった
-        if (t.s < -OFF - trainLen(t.cars) || t.s > P.len + OFF + trainLen(t.cars)) {
-          if (r.loop) t.s = t.dir > 0 ? t.s - P.len : t.s + P.len;
-          else t.gone = true;
-        }
+      }
+      // マップの端から出ていった
+      if (t.s < -OFF - trainLen(t.cars) || t.s > P.len + OFF + trainLen(t.cars)) {
+        if (r.loop) t.s = t.dir > 0 ? t.s - P.len : t.s + P.len;
+        else { t.gone = true; gone = true; }
       }
     }
     // 出ていった列車の代わりを出す（出す場所がふさがっていれば、少しあとで）
     this.refill -= dt;
-    if (this.refill <= 0 || this.trains.some((t) => t.gone)) { this.refill = 4; this.fill(); }
+    if (this.refill <= 0 || gone) { this.refill = 4; this.fill(); }
   }
   private refill = 4;
 

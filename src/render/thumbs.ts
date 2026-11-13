@@ -192,6 +192,15 @@ function context(mb: MeshBuilder, id: string, W: number, D: number) {
       platform(y - 1);
       return { n: 11, s: 0 };
     }
+    case 'hsr_station': {
+      // 高架橋の上の線路（駅の中は 4 本）と、駅の外の橋脚
+      const y = 18, tz = -8, X0 = -W / 2 - 18, X1 = W / 2 + 18;
+      mb.box(X0, y - 2.4, tz - 6.4, X1, y, tz + 6.4, conc, 0, concS);
+      mb.box(-W / 2, y - 1, tz - 11.4, W / 2, y, tz + 11.4, conc, 0, concS);
+      for (const o of [-7.5, -2.5, 2.5, 7.5]) for (const dz of [-0.75, 0.75]) mb.box(Math.abs(o) > 5 ? -W / 2 : X0, y, tz + o + dz - 0.08, Math.abs(o) > 5 ? W / 2 : X1, y + 0.36, tz + o + dz + 0.08, steel);
+      for (const x of [X0 + 4, X1 - 4]) mb.box(x - 1, 0, tz - 1.7, x + 1, y - 2.4, tz + 1.7, conc);
+      return { n: 0, s: 0 };
+    }
     case 'busstop':
       // 前の道路（白い線と、バス停の印）
       mb.ground(-W / 2 - 4, D / 2, W / 2 + 4, D / 2 + 7, 0.1, asph);

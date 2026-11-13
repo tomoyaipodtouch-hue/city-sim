@@ -158,6 +158,7 @@ export class BuildingLayer {
       const lv: number[] = []; // 建物ごとの港への近さの段階
       for (const b of bs) {
         key += `${b.id}.${b.state}.${b.face};`;
+        if (b.hsr) key += `s${Math.round(b.hsr.deck * 8)};`;
         const cp = camp.get(b.id);
         const p = cp ? cp.port : plv.get(b.id) ?? 0;
         lv.push(p);
@@ -306,6 +307,7 @@ export class BuildingLayer {
     let k = `${b.type}.${b.state}.${b.face}.${b.x}.${b.y}.${b.w}.${b.h}.${b.floors}.${b.den}.${b.seed}.${b.civic ? 1 : 0}.p${lv}`;
     if (cp) k += `.j${cp.seed}.${cp.den}.${cp.port}.${cp.L ? 1 : 0}${cp.R ? 1 : 0}${cp.lead ? 1 : 0}.${cb ?? 0}`;
     if (b.type === 'cemetery') k += `.g${cemeteryStage(b)}`;
+    if (b.hsr) k += `.hsr${b.hsr.row}.${Math.round(b.hsr.deck * 8)}.${b.hsr.ground ? 1 : 0}`;
     let h = 0;
     for (let y = b.y; y <= b.y + b.h; y++) for (let x = b.x; x <= b.x + b.w; x++) h = Math.imul(h ^ Math.round(g.vh(x, y) * 64), 16777619);
     k += `.h${h}`;

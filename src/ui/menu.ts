@@ -1,6 +1,6 @@
 // 左のツールのメニュー（グループ → 見出し → 項目）。絵（サムネイル）の作り方と、費用・維持費・大きさもここで決める。
 // DOM や three.js には触らない（テストから読める）
-import { BUS_STOP_COST, CIVIC, CivicId, DENSITY_NAMES, ESTOP_COST, ESTOP_UPKEEP, LINES, LineKind, POWER_LINE_COST, POWER_LINE_UPKEEP, RAMP_COST, ROADS, RoadType, ZONE_COST, ZONE_NAMES } from '../sim/defs';
+import { BUS_STOP_COST, CIVIC, CivicId, DENSITY_NAMES, ESTOP_COST, ESTOP_UPKEEP, HSR_GROUND_COST, HSR_THROUGH_COST, LINES, LineKind, POWER_LINE_COST, POWER_LINE_UPKEEP, RAMP_COST, ROADS, RoadType, ZONE_COST, ZONE_NAMES } from '../sim/defs';
 import type { GrowKind } from '../sim/defs';
 import { TERRAIN_STEP, RECLAIM_COST, TREE_COST, ESTOP_LEN } from '../sim/plan';
 import { REWARD_REQ } from '../sim/governance';
@@ -220,6 +220,14 @@ export const TOOL_GROUPS: ToolGroup[] = [
       },
       { title: 'モノレール', items: [line('mono', 'モノレールの線路', 'mono'), civ('mono_station')] },
       { title: '地下鉄', items: [line('sub', '地下鉄の線路', 'sub'), civ('sub_station')] },
+      {
+        title: '高速鉄道', items: [
+          { ...line('hsr', '高速鉄道の線路（高架）', 'hsr'), hint: '45°ずつ大きく曲がる', desc: '高速鉄道の専用の線路（高架橋・架線・住宅地のそばは防音壁）。縦横・斜めに引き、曲がる所は大きなカーブになる。マップの端まで引くと、ほかの都市から乗客が来る' },
+          { tool: 'line:hsr:g', name: '高速鉄道の線路（地上）', thumb: { k: 'icon', icon: 'hsr_g' }, cost: HSR_GROUND_COST, upkeep: LINES.hsr.upkeep, perCell: true, hint: '街の外だけ', desc: '盛土の上の高速鉄道の線路。道路とは交差できないので、街の外に引く' },
+          civ('hsr_station', undefined, { hint: `中間駅 ${yen(HSR_THROUGH_COST)}・線路の上` }),
+          civ('hsr_plaza', undefined, { hint: '駅の隣' }),
+        ],
+      },
       { title: 'フェリー・港', items: [civ('ferry_p'), civ('ferry_c'), civ('seaport'), civ('seaport_l')] },
       // 以前の空港（airport_s・airport_l）はメニューから外した（保存データの空港はそのまま動く）
       { title: '空港', items: [civ('airport_1', undefined, { thumb: { k: 'airport', size: 1 }, hint: '斜め・海上も可' }), civ('airport_2', undefined, { thumb: { k: 'airport', size: 2 }, hint: '斜め・海上も可' }), civ('airport_3', undefined, { thumb: { k: 'airport', size: 3 }, hint: '斜め・海上も可' })] },
