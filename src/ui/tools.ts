@@ -9,7 +9,8 @@ import type { Command } from '../sim/world';
 import type { GameClient } from '../game';
 import type { CityRenderer } from '../render/renderer';
 import { sfx } from '../sound';
-import { airportGateCells, planAirport } from '../sim/airport';
+import { AIRPORT_SPECS, airportGateCells, airportLayout, makeFrame, planAirport } from '../sim/airport';
+import { forecourtPlan } from '../sim/forecourt';
 
 // 空港の向き（8 方向。陸側（ターミナル）が向く方角）の名前
 const DIR_NAMES = ['東', '南東', '南', '南西', '西', '北西', '北', '北東'];
@@ -86,6 +87,7 @@ export class ToolController {
   // 空港を置く向き（8 方向。0 = 陸側が東、2 = 南、奇数は斜め）
   airRot = 2;
   private gateKey = ''; // 門のマスを作った空港の一覧
+  private fcPv: { key: string; cells: Set<number> } = { key: '', cells: new Set() }; // 置くときのプレビュー：ターミナル前の道路のマス
   isAirportTool() {
     return this.tool.startsWith('plop:') && !!CIVIC[this.tool.split(':')[1] as CivicId]?.airfield;
   }
@@ -343,10 +345,18 @@ export class ToolController {
       };
       mark(plan.ports.gate, 0x1f7ae0, 0x8fd0ff);
       mark(plan.ports.svc, 0xe08a1f, 0xf5c98a);
-      pv.setTiles(g, [...plan.cells, ...st, ...gate.keys()], (i) => (plan.bad.has(i) ? 0xe5534b : gate.has(i) ? gate.get(i)! : st.has(i) ? 0xc45cff : fill.has(i) ? 0xc9a26b : plan.ok ? 0x5cc46a : 0x9fb7a0));
+      // ターミナル前の道路になるマス（灰色）：置いた空港が、都市高速と同じ道路のマスを敷く
+      const fkey = `${id},${plan.x},${plan.y},${plan.rot},${g.n}`;
+      if (this.fcPv.key !== fkey) {
+        const size = CIVIC[id].airfield!;
+        const fp = plan.ports.gate ? forecourtPlan(g.n, makeFrame(AIRPORT_SPECS[size], plan.rot, plan.cx, plan.cz), airportLayout(size), plan.cells, (i) => lot.has(i), plan.ports.gate, 0) : null;
+        this.fcPv = { key: fkey, cells: new Set(fp?.ok ? fp.cells : []) };
+      }
+      const fcc = this.fcPv.cells;
+      pv.setTiles(g, [...plan.cells, ...st, ...gate.keys()], (i) => (plan.bad.has(i) ? 0xe5534b : gate.has(i) ? gate.get(i)! : st.has(i) ? 0xc45cff : fill.has(i) ? 0xc9a26b : fcc.has(i) ? (plan.ok ? 0x6f7a80 : 0x8a948f) : plan.ok ? 0x5cc46a : 0x9fb7a0));
       pv.setPath(g, []);
       const extra = plan.fill.length ? `（埋め立て ${plan.fill.length} マス・岸壁 ${plan.quay.length} マス）` : '';
-      return plan.ok ? { text: `${CIVIC[id].name}　${yen(plan.cost)}${extra}　青＝正門（都市高速・道路を水色の向きから引いて青のマスで終わらせる）、橙＝通用門、紫＝駅の線路`, bad: false } : { text: plan.reason, bad: true };
+      return plan.ok ? { text: `${CIVIC[id].name}　${yen(plan.cost)}${extra}　青＝正門（都市高速・道路を水色の向きから引いて青のマスで終わらせると、そのままターミナル前の道路〈灰色〉に続く）、橙＝通用門、紫＝駅の線路`, bad: false } : { text: plan.reason, bad: true };
     }
     if (t.startsWith('plop:')) {
       const id = t.split(':')[1] as CivicId;

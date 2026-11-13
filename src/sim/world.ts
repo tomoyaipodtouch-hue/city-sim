@@ -2289,7 +2289,7 @@ export class World {
         const paxRail = ra && filledAll > 0 ? Math.round((ra.modes.transit * (filled / filledAll)) * wf) : 0;
         const income = open ? Math.round(pax * AIR_FEE_PAX + (flights + cargoFlights) * AIR_FEE_FLIGHT + trucks * AIR_FEE_FREIGHT) : 0;
         const A = airAcc.get(b.id)!;
-        b.air = { open, pax, paxRail: Math.min(pax, paxRail), flights, cargoFlights, freight, lines: [...info.lines.keys()], highway: hw, road: A.main?.kind === 'road', gate: A.main?.kind ?? null, svc: !!A.svc, legacy: !!b.airLegacy && !A.main, gateDir: A.ports.gate?.d, income };
+        b.air = { open, pax, paxRail: Math.min(pax, paxRail), flights, cargoFlights, freight, lines: [...info.lines.keys()], highway: hw, road: A.main?.kind === 'road', gate: A.main?.kind ?? null, svc: !!A.svc, legacy: !!b.airLegacy && !A.main, gateDir: A.ports.gate?.d, income, noFc: b.airGate === 3 && !b.airFc };
         b.note = !A.main && !A.svc && !info.lines.size ? '<span class="neg">正門に道路がつながっていません</span>' : !b.powered ? '<span class="neg">電力がないので運航していません</span>' : '運航中';
         if (open) this.airportBoost += spec.boost * (0.5 + 0.5 * Math.min(1, pax / spec.paxCap));
       }

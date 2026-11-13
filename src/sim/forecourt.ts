@@ -296,11 +296,19 @@ export function forecourtPlan(n: number, f: AirFrame, L: AirportLayout, cellsLot
       // 高さを変えるのは、坂の列（corr）の上のマスと、その前後の 1 マス。なければ鎖の真ん中
       const on = cells.map((i, k) => k > 0 && k < m - 1 && corr !== undefined && Math.abs(G.centre(i)[1] - corr) < 1);
       let k0 = on.indexOf(true) - 1, k1 = on.lastIndexOf(true) + 1;
-      const need = Math.ceil(Math.abs(h1 - h0) / FC_RISE);
-      if (k0 < 0 || k1 - k0 < need) { const mid = (m - 1) / 2; k0 = Math.max(0, Math.floor(mid - need / 2)); k1 = Math.min(m - 1, k0 + need); }
-      // k0 までは h0、k1 から先は h1、その間は一定の割合で（1 マスに FC_RISE m まで）
+      // 坂の長さ（m）：1 マス（16m）に FC_RISE m まで。斜めのマス（22.6m）は、そのぶん高さを変えられる
+      const stepLen = (k: number) => (isDiag(dirBetween(n, cells[k], cells[k + 1])) ? CELL * Math.SQRT2 : CELL);
+      const needLen = (Math.abs(h1 - h0) / FC_RISE) * CELL - 0.01;
+      const lenOf = (a: number, b: number) => { let t = 0; for (let k = a; k < b; k++) t += stepLen(k); return t; };
+      if (k0 < 0) { const mid = (m - 1) / 2; k0 = Math.max(0, Math.floor(mid - 2)); k1 = Math.min(m - 1, k0 + 4); }
+      // 坂の列が短いときは、前後のマスへ広げる（上下に重なるところの空きは、あとで確かめる）
+      for (let side = 0; lenOf(k0, k1) < needLen && (k0 > 0 || k1 < m - 1); side ^= 1) { if (side ? k1 < m - 1 : k0 === 0) k1++; else k0--; }
+      // k0 までは h0、k1 から先は h1、その間は道のりに比例して
+      const tot = Math.max(1, lenOf(k0, k1));
+      let acc = 0;
       for (let k = 0; k < m; k++) {
-        const u = Math.max(0, Math.min(1, (k - k0) / Math.max(1, k1 - k0)));
+        if (k > k0 && k <= k1) acc += stepLen(k - 1);
+        const u = k <= k0 ? 0 : k >= k1 ? 1 : acc / tot;
         h[k] = h0 + (h1 - h0) * u;
       }
     }
@@ -453,7 +461,7 @@ export function validateForecourt(G: LandGrid, P: FcPlan, lot: (i: number) => bo
           const d0 = dirBetween(n, p.cells[k - 1], i);
           if (d0 >= 0 && d >= 0 && turnAbs(d0, d) > 1) out.push({ cell: i, why: `${p.name}: 45° より急な曲がり` });
         }
-        if (Math.abs(p.h[k + 1] - p.h[k]) > FC_RISE + 0.01) out.push({ cell: i, why: `${p.name}: 坂が急すぎる` });
+        if (Math.abs(p.h[k + 1] - p.h[k]) > (FC_RISE * (d >= 0 && isDiag(d) ? Math.SQRT2 : 1)) + 0.01) out.push({ cell: i, why: `${p.name}: 坂が急すぎる` });
       }
     }
     // ランプの両端の曲がり（ランプの最初・最後の 1 歩も 45° まで。両端は本線のつながりで見る）

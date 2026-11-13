@@ -3,11 +3,11 @@
 import * as THREE from 'three';
 import { MeshBuilder } from '../builder';
 
-// car・car2・taxi・coach は陸側のループを走る車（自家用車 2 色・タクシー・リムジンバス）
-export type GseType = 'bus' | 'fuel' | 'tug' | 'tractor' | 'cart' | 'pax' | 'car' | 'car2' | 'taxi' | 'coach';
-export const GSE_TYPES: GseType[] = ['bus', 'fuel', 'tug', 'tractor', 'cart', 'pax', 'car', 'car2', 'taxi', 'coach'];
+// （ターミナル前の道路の車は、街の車の層の車が走る。タクシーとリムジンバスの乗り場の車は、空港の形に止まっている）
+export type GseType = 'bus' | 'fuel' | 'tug' | 'tractor' | 'cart' | 'pax';
+export const GSE_TYPES: GseType[] = ['bus', 'fuel', 'tug', 'tractor', 'cart', 'pax'];
 // 車両の長さ（m。荷物の台車の間隔などに使う）
-export const GSE_LEN: Record<GseType, number> = { bus: 13.5, fuel: 10, tug: 6.2, tractor: 3.0, cart: 3.2, pax: 0.4, car: 4.6, car2: 4.6, taxi: 4.7, coach: 12 };
+export const GSE_LEN: Record<GseType, number> = { bus: 13.5, fuel: 10, tug: 6.2, tractor: 3.0, cart: 3.2, pax: 0.4 };
 
 const C = (h: number) => new THREE.Color(h);
 const WHITE = C(0xf0f1f2), DARK = C(0x23262a), GLASS = C(0x24303c), TYRE = C(0x161616), YEL = C(0xf2c230), GREY = C(0x9aa0a6);
@@ -72,29 +72,6 @@ function build(mb: MeshBuilder, t: GseType) {
       mb.box(-w / 2 + 0.05, 0.55, -l / 2 + 0.1, w / 2 - 0.05, 1.7, l / 2 - 0.1, C(0x3c5a7a), 0, C(0x34506d));
       mb.box(-0.6, 0.85, -l / 2 + 0.2, 0.6, 1.45, l / 2 - 0.2, C(0x8a5a3a));
       wheels(mb, w, [-1.0, 1.0], 0.22);
-      break;
-    }
-    case 'car': case 'car2': case 'taxi': {
-      // 乗用車（セダン）。タクシーは屋根の行灯と、扉の帯
-      const w = 1.8, l = 4.6, body = t === 'car' ? C(0xe8e8e6) : t === 'car2' ? C(0x2a3a52) : C(0xf2c230);
-      mb.box(-w / 2, 0.3, -l / 2, w / 2, 0.95, l / 2, body);
-      mb.box(-w / 2 + 0.1, 0.95, -l / 2 + 1.0, w / 2 - 0.1, 1.45, l / 2 - 1.2, GLASS);
-      mb.box(-w / 2 + 0.15, 1.45, -l / 2 + 1.1, w / 2 - 0.15, 1.5, l / 2 - 1.3, body);
-      if (t === 'taxi') {
-        mb.box(-0.3, 1.5, -0.2, 0.3, 1.75, 0.2, WHITE);
-        mb.box(-w / 2 - 0.01, 0.55, -1.2, w / 2 + 0.01, 0.7, 1.2, C(0x2a2a2a));
-      }
-      wheels(mb, w, [-l / 2 + 0.9, l / 2 - 0.9], 0.32);
-      break;
-    }
-    case 'coach': {
-      // 空港リムジンバス（高床。白に青と金の帯）
-      const w = 2.5, l = 12, h = 3.5;
-      mb.box(-w / 2, 0.4, -l / 2, w / 2, h, l / 2, WHITE, 0, C(0xd8dadc));
-      mb.box(-w / 2 - 0.01, 1.6, -l / 2 + 0.3, w / 2 + 0.01, 3.0, l / 2 - 0.4, GLASS);
-      mb.box(-w / 2 - 0.02, 0.8, -l / 2 + 0.2, w / 2 + 0.02, 1.3, l / 2 - 0.2, C(0x1f4f9a));
-      mb.box(-w / 2 - 0.02, 1.3, -l / 2 + 0.2, w / 2 + 0.02, 1.42, l / 2 - 0.2, C(0xc9a24a));
-      wheels(mb, w, [-l / 2 + 2.2, l / 2 - 2.6], 0.5);
       break;
     }
     case 'pax': {

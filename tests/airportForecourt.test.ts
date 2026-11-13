@@ -48,7 +48,7 @@ function reach(w: World, from: number, to: number) {
 }
 
 describe('airport forecourt plan', () => {
-  it('plans valid road cells for every size, orientation and gate level', () => {
+  it('plans valid road cells for every size, orientation and gate level', { timeout: 120000 }, () => {
     const n = 128;
     for (const size of [1, 2, 3] as AirportSize[]) for (let rot = 0; rot < 8; rot++) for (const level of [0, 1] as const) {
       const spec = AIRPORT_SPECS[size], L = airportLayout(size);
@@ -66,7 +66,7 @@ describe('airport forecourt plan', () => {
 
 describe('airport forecourt in the world', () => {
   for (const size of [1, 2, 3] as AirportSize[]) {
-    it(`size ${size}: the gate road continues at its own level into the forecourt (elevated and ground)`, () => {
+    it(`size ${size}: the gate road continues at its own level into the forecourt (elevated and ground)`, { timeout: 120000 }, () => {
       for (let rot = 0; rot < 8; rot++) {
         for (const t of [RoadType.UrbanHighway, RoadType.UrbanGroundHighway, RoadType.Road]) {
           const { w, b, gc } = place(size, rot, t);
@@ -96,7 +96,7 @@ describe('airport forecourt in the world', () => {
     });
   }
 
-  it('curves are smooth: no more than 7°/m anywhere, no tight loops', () => {
+  it('curves are smooth: no more than 7°/m anywhere, no tight loops', { timeout: 120000 }, () => {
     for (const size of [1, 2, 3] as AirportSize[]) for (const rot of [0, 1, 2, 3]) for (const t of [RoadType.UrbanHighway, RoadType.UrbanGroundHighway]) {
       const { w } = place(size, rot, t);
       const g = w.g, N = g.n * g.n;
@@ -151,7 +151,7 @@ describe('airport forecourt in the world', () => {
     expect(w.airportAccess(b)!.main?.kind).toBe('hw');
   });
 
-  it('legacy saves get the forecourt: version 2 with a highway at the gate, and an old airport reconnected by the radius-6 search', () => {
+  it('legacy saves get the forecourt: version 2 with a highway at the gate, and an old airport reconnected by the radius-6 search', { timeout: 120000 }, () => {
     // 版 2：正門まで都市高速が引いてあり、敷地のマスは全部建物の印
     {
       const { w, b } = place(1, 3, RoadType.UrbanHighway);

@@ -1,6 +1,6 @@
 # Airport forecourt v3: design note for implementation
 
-Status: design only; nothing in this note is implemented yet. The current forecourt (committed in a0a5e0a) is described under "Current state" below.
+Status: implemented (src/sim/forecourt.ts, world.ts, render/airport/geometry.ts, carLayer curb stops). See docs/airport-requirements.md section 4 for the as-built behaviour; sections below are the original design. The current forecourt (committed in a0a5e0a) is described under "Current state" below.
 Audience: a fresh agent implementing the forecourt for 空港（小・中・大）.
 See also docs/airport-requirements.md (section 4 アクセス). That section describes the current loop and must be updated when this lands.
 

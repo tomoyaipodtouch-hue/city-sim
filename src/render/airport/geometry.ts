@@ -681,6 +681,18 @@ function carpark(mb: MeshBuilder, r: LRect, h: number, rng: Rng) {
       mb.box(a - 0.78, y + 0.75, c - 1.2, a + 0.78, y + 1.25, c + 1.0, C(0x2a3440));
     }
   }
+  // 床の縁の外装（横長のアルミのパネル。夜は天井の照明で、すき間が明るい）
+  for (let k = 1; k <= lv; k++) {
+    const y = k * fh;
+    for (const c of [r.c0 - 0.35, r.c1 + 0.35]) mb.box(r.a0 - 0.3, y - fh + 1.15, c - 0.08, r.a1 + 0.3, y - fh + 1.35, c + 0.08, C(0xe9e6df));
+    mb.box(r.a0 + 0.5, y - 0.5, r.c0 + 0.5, r.a1 - 0.5, y - 0.35, r.c1 - 0.5, C(0xf3e7c8), PAT.lit);
+  }
+  // らせんのスロープ（端の丸い塔）
+  {
+    const ca = r.a0 + r.a1 > 0 ? r.a1 + 7 : r.a0 - 7, cc = (r.c0 + r.c1) / 2, rr = 6.5;
+    mb.cylinder(ca, cc, 0, h + 0.8, rr, 16, COL.carpark, C(0x8e8c88));
+    for (let k = 1; k <= lv; k++) mb.cylinder(ca, cc, k * fh - 0.3, k * fh + 0.9, rr + 0.15, 16, C(0xe9e6df));
+  }
   // 階段とエレベーターの塔（ガラス）
   mb.box(r.a1 - 6, 0, r.c1 - 6, r.a1, h + 3, r.c1, COL.glass, PAT.terminal, COL.concrete);
   // 屋上の照明
@@ -729,8 +741,10 @@ function station(mb: MeshBuilder, r: LRect, h: number, L: AirportLayout, lines: 
     const by = byOf(py + h);
     if (over) {
       // 駅舎：道路の上の高い所のガラスの箱。ホームへは階段の塔
-      mb.box(-16, by - 0.8, fi!.cR - 5, 16, by + 4.2, pc0 + 2, COL.glass, PAT.terminal, COL.concrete, true);
-      mb.box(10, 0, pc0 + 0.2, 16, by, pc0 + 3.4, COL.glass, PAT.terminal, COL.concrete);
+      mb.box(-12, by - 0.6, fi!.cR - 5, 12, by + 3.8, pc0 + 2, COL.glass, PAT.terminal, COL.concrete, true);
+      mb.matOverride = MAT.siding; mb.box(-12.6, by + 3.8, fi!.cR - 5.6, 12.6, by + 4.3, pc0 + 2.6, COL.wood, PAT.lit); mb.matOverride = null;
+      for (const a of [-11, 11]) mb.box(a - 0.5, 0, pc0 + 0.6, a + 0.5, by - 0.6, pc0 + 1.6, COL.steel);
+      mb.box(8, 0, pc0 + 0.2, 12, by, pc0 + 3.0, COL.glass, PAT.terminal, COL.concrete);
       bridge(by, fi!.cR - 5);
       mb.box(-12, by + 2.6, fi!.cR - 5.06, 12, by + 3.6, fi!.cR - 4.96, C(0x2a6fb5), PAT.glow);
     } else {
@@ -777,7 +791,8 @@ function station(mb: MeshBuilder, r: LRect, h: number, L: AirportLayout, lines: 
   const by = byOf(py);
   if (over) {
     // 駅舎：ホームの階から道路の上へ張り出すガラスの箱
-    mb.box(-14, py - 1.2, fi!.cR - 5, 14, by + 3.6, pc0 + 2, COL.glass, PAT.terminal, COL.steel, true);
+    mb.box(-12, by - 0.6, fi!.cR - 5, 12, by + 3.6, pc0 + 2, COL.glass, PAT.terminal, COL.steel, true);
+    mb.matOverride = MAT.siding; mb.box(-12.6, by + 3.6, fi!.cR - 5.6, 12.6, by + 4.1, pc0 + 2.6, COL.wood, PAT.lit); mb.matOverride = null;
     bridge(by, fi!.cR - 5);
   } else {
     // 駅舎（ガラスの箱、エスカレーターとエレベーター）：地面からホームの階まで
@@ -923,11 +938,11 @@ function forecourtFeatures(mb: MeshBuilder, L: AirportLayout, fc: FcCtx, fi: FcI
   // 2 層が重なるところの橋脚：門形（歩道の柱と、分離帯の柱を、高架の下の梁でつなぐ）。24m ごと
   if (fi.stack) {
     const [s0, s1] = fi.stack;
-    const cIn = cK - 1.4, cOut = cF + 5.8, top = H + ROAD_UP - 0.38 - 1.25;
+    const cIn = cK - 1.4, cOut = cF + 5.0, top = H + ROAD_UP - 0.38 - 1.25;
     mb.matOverride = MAT.concrete;
     for (let a = s1 - 12; a > s0 + 4; a -= 24) {
       for (const c of [cIn, cOut]) mb.box(a - 0.65, 0, c - 0.65, a + 0.65, top - 1.1, c + 0.65, C(0xb8b4ab));
-      mb.box(a - 0.8, top - 1.3, cIn - 0.9, a + 0.8, top, cOut + 0.9, C(0xb8b4ab), PAT.none, C(0xb8b4ab), true);
+      mb.box(a - 0.8, top - 1.3, cIn - 0.9, a + 0.8, top, cOut + 0.7, C(0xb8b4ab), PAT.none, C(0xb8b4ab), true);
     }
     mb.matOverride = null;
   }
@@ -1046,6 +1061,36 @@ function forecourtFeatures(mb: MeshBuilder, L: AirportLayout, fc: FcCtx, fi: FcI
       if (L.buildings.some((b) => !b.sub === (L.land.rot === 0) && a > b.r.a0 - 4 && a < b.r.a1 + 4 && c > b.r.c0 - 4 && c < b.r.c1 + 4)) continue;
       if (c < L.land.edge - 1.5 && clear(a, c, 9)) T.tree(a, c, 0.7, 0);
     }
+  }
+  // 門形の案内標識（緑・青の板に記号）：1 列目の始まりの先で、出発（高架）と到着（地上）の分かれ道の手前
+  {
+    const Fm = rows.find((r) => r.name === 'Fm'), Fo = rows.find((r) => r.name === 'Fo');
+    if (Fm && Fo && fc.plan.lines.D < cF) {
+      const aG = Math.max(Fm.a0, Fm.a1) - 10, y0 = Fm.lv ? H + ROAD_UP : ROAD_UP;
+      const c0 = cF - (Fm.lv ? 4.7 : 5.6), c1 = cF + (Fm.lv ? 4.7 : 5.6);
+      for (const c of [c0, c1]) mb.box(aG - 0.22, y0, c - 0.22, aG + 0.22, y0 + 7.2, c + 0.22, COL.steelDark);
+      mb.box(aG - 0.18, y0 + 6.7, c0, aG + 0.18, y0 + 7.0, c1, COL.steelDark);
+      // 右（縁石の側）の車線：もう一方の階へ分かれる。左：この階のまま
+      const panel = (c: number, dep: boolean) => {
+        mb.box(aG - 0.12, y0 + 5.2, c - 1.8, aG + 0.12, y0 + 7.4, c + 1.8, C(dep ? 0x1f4f9a : 0x1f6b45), PAT.glow);
+        const g = (x0: number, yy0: number, x1: number, yy1: number) => mb.box(aG + 0.13, y0 + yy0, c + x0, aG + 0.17, y0 + yy1, c + x1, COL.white);
+        const up = dep ? 1 : -1;
+        g(-0.9, 6.25 - up * 0.25, 0.9, 6.45 + up * 0.25); g(-0.15, 5.6, 0.15, 7.0); g(-0.5, 5.8, 0.5, 6.0);
+      };
+      panel(cF - 1.6, !Fm.lv);
+      panel(cF + 1.6, !!Fm.lv);
+    }
+  }
+  // 駐車場ビル（1 列目の外側にあるもの）から、出発の歩道への屋根つきの歩道橋（出発階 + 5.5m）
+  if (fi.dep) for (const bd of L.buildings) {
+    if (bd.kind !== 'carpark' || !bd.loop || bd.r.c0 < fi.cR) continue;
+    const a = Math.max(fi.dep[0] + 4, Math.min(fi.dep[1] - 4, (bd.r.a0 + bd.r.a1) / 2));
+    if (a < term.a0 - 4 || a > term.a1 + 4) continue;
+    const by = fi.yDeck + 5.5, c0 = cK - 4, c1 = bd.r.c0;
+    mb.box(a - 2.6, by, c0, a + 2.6, by + 3.0, c1, COL.glass, PAT.terminal, COL.steel);
+    mb.matOverride = MAT.siding; mb.box(a - 3.0, by + 3.0, c0 - 0.4, a + 3.0, by + 3.4, c1 + 0.4, COL.wood, PAT.lit); mb.matOverride = null;
+    mb.box(a - 4, fi.yDeck, fac + 0.5, a + 4, by + 3.0, cK - 1.2, COL.glass, PAT.terminal, COL.steel);
+    for (const c of [cF + 5.0, fi.cR + 5.2]) if (c < c1 - 1) mb.box(a - 0.5, 0, c - 0.5, a + 0.5, by, c + 0.5, COL.steel);
   }
   // 街灯（地上の歩道の縁）
   if (arr) for (let a = arr[0] + 10; a < arr[1]; a += 30) { T.light(a, fi.yGround + 3.6, fac + 0.5, LIGHT.street, 3); }
