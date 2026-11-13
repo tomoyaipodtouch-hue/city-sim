@@ -1570,8 +1570,9 @@ export function planTransitLine(g: Grid, path: LinePath, kind: LineKind, ground 
         if (!ok) { bad.add(i); why('道路とは、まっすぐな場所で直角にしか交差できません（踏切）'); }
       }
     } else {
-      // 高架：上空の道路とは重ねられない。高架鉄道は、高架の高速道路の下を横切れる（高速道路を持ち上げる。hwrail.ts）
-      if (g.up[i] && !(kind === 'erail' && isElevHighway(g.up[i]))) { bad.add(i); why('高架の道路と重なっています'); }
+      // 高架：上空の道路とは重ねられない。高架鉄道は、高架の高速道路の下を横切れる（高速道路を持ち上げる。できなければ
+      // 高架鉄道を持ち上げて上を越える）。高架のランプ（ジャンクションのランプなど）は、高架鉄道を持ち上げて上を越える（hwrail.ts）
+      if (g.up[i] && !(kind === 'erail' && (isElevHighway(g.up[i]) || g.up[i] === RoadType.Ramp))) { bad.add(i); why('高架の道路と重なっています'); }
       else if (g.up[i]) {
         const din = k > 0 ? dirs[k - 1] : -1, dout = k < dirs.length ? dirs[k] : -1;
         const along = [din, dout].some((dd) => dd >= 0 && g.conn1[i] & ((1 << dd) | (1 << opp(dd))));
@@ -1594,10 +1595,15 @@ export function planTransitLine(g: Grid, path: LinePath, kind: LineKind, ground 
     if (mask[ay * n + ax] & (1 << dd)) { bad.add(i); why('斜めの線路どうしは交差できません'); }
     else if (kind !== 'sub' && !rampSteps0.has(k) && crossesRampCorner(g, i, d)) { bad.add(i); why(RAMP_MSG_LINE); }
   }
-  // 高架鉄道が高架の高速道路の下を通る所：引いたあとの grid（複製）で、高速道路に坂を作れるかを確かめる
+  // 高架鉄道が高架の高速道路と交差する所：引いたあとの grid（複製）で、高速道路に坂を作れるか（できなければ、高架鉄道を
+  // 持ち上げて越えられるか）を確かめる。持ち上げた高架鉄道につなぐ（分岐を作る）ときも
   if (kind === 'erail' && bad.size === 0 && cells.length > 1 && cells.some((c) => {
     const x = c % n, y = (c / n) | 0;
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (g.inb(x + dx, y + dy) && isElevHighway(g.up[g.idx(x + dx, y + dy)])) return true;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (!g.inb(x + dx, y + dy)) continue;
+      const j = g.idx(x + dx, y + dy);
+      if (g.up[j] || g.rlift[j] > 0) return true;
+    }
     return false;
   })) {
     const sim = g.clone();

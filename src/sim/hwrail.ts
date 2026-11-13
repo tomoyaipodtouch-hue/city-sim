@@ -14,11 +14,19 @@
 // 交差どうしが近く、坂を下りてまた上る間が短いときは、間を高い方の交差の高さで埋め、次の交差を越えてから下りる（間でへこまない）。
 //
 // 高さは、交差の前後のマスの upH だけで表す（保存データは今までの配列のまま）。上げるだけなので、何回くり返しても同じ結果になる
+//
+// 高速道路を持ち上げられない交差（坂の場所にランプ・ジャンクション・重ねランプ・高速道路の端があるなど）では、
+// かわりに高架鉄道を持ち上げて、高速道路の上を越える（railOver）。高速鉄道はこれまでどおり（高速道路が越えるだけ）。
+//   必要な床版の高さ ≥ 交差の所の高架の道路（ジャンクションのランプ・重ねランプも含め、線路の幅にかかるもの）のいちばん高い路面
+//                    + 車の高さ（5.0m）+ 余裕（0.5m）+ 鉄道の床版の厚さ（1.4m）
+//   坂は 6% まで。頂上と坂の下は、なめらかに勾配が変わる（縦曲線）
+//   坂の場所（持ち上げる線路）に駅のホーム・分岐・地上の線路との坂・線路の端・ほかの線路との交差があれば、作れない
+// 持ち上げる高さは grid.rlift（マスごと、保存する）。上げるだけなので、何回くり返しても同じ結果になる
 import { Grid, ORAMP_LEN, ORAMP_ON, ORAMP_PARTNER } from './grid';
 import { CELL, DX, DY, WATER_LEVEL, dirOf, isDiag, opp } from './constants';
 import { LINES, ROADS, RoadType, isUrbanElevated } from './defs';
 import { rampLineH } from './railRamp';
-import { hsrChains, hsrDeckH, hsrPoly, HSRF_STATION, HSR_CLEAR, HSR_GIRDER, HSR_HALF } from './hsr';
+import { hsrChains, hsrDeckH, hsrPoly, HSRF_COVER, HSRF_STATION, HSR_CLEAR, HSR_GIRDER, HSR_HALF } from './hsr';
 
 export const ERAIL_CATENARY = 6.6; // 鉄道の床版から架線柱の上端まで（railLayer の架線柱の門型）
 export const ERAIL_RAIL_TOP = 0.36; // 鉄道の床版からレールの上面まで
@@ -44,6 +52,22 @@ export const HWR_MSG_RAMP = '高速の坂を作る場所がありません（ラ
 export const HWR_MSG_END = '高速の坂を作る場所がありません（高速道路の端が近すぎます）';
 export const HWR_MSG_HSR_PARALLEL = '高速鉄道の線路に沿っては引けません（交差だけできます）';
 export const HWR_MSG_HSR_STATION = '高速鉄道の駅の近くは、高速道路で越えられません';
+// 高架鉄道を持ち上げて越えられないとき
+export const ERH_MSG_STATION = '高架鉄道の坂を作る場所がありません（駅が近すぎます）';
+export const ERH_MSG_BRANCH = '高架鉄道の坂を作る場所がありません（線路の分岐が近すぎます）';
+export const ERH_MSG_RAMP = '高架鉄道の坂を作る場所がありません（地上の線路との坂が近すぎます）';
+export const ERH_MSG_END = '高架鉄道の坂を作る場所がありません（線路の端が近すぎます）';
+export const ERH_MSG_LINE = '高架鉄道の坂を作る場所がありません（ほかの線路と交差しています）';
+
+// 高架鉄道を持ち上げて、高架の道路の上を越える
+export const RAIL_ENVELOPE = 5.0; // 高架の道路の路面から、車（大型車）と防音壁の上まで
+export const RAIL_DEPTH = 1.4; // 鉄道の床版の上面から桁の下面まで（railLayer の床版の側面）
+export const ERH_ABOVE = RAIL_ENVELOPE + HWR_MARGIN + RAIL_DEPTH; // 道路の路面から、必要な鉄道の床版まで（6.9m）
+export const ERH_GRADE = 0.06; // 鉄道の坂の勾配（6%）
+const RCREST = 3 * CELL; // 鉄道の頂上と坂の下の、勾配がなめらかに変わる長さ（m。半径 800m の縦曲線）
+const RSOFT = (ERH_GRADE * RCREST) / 2;
+const RAIL_STEPS = 40; // 交差から線路に沿って調べるマスの数
+const RAIL_DECK_HALF = 5.0; // 鉄道の線路の中心から床版の縁まで（m、少し余裕を入れて）
 
 // 線路の上を越える高架の高速道路の種類
 export const isElevHighway = (t: number) => isUrbanElevated(t) || t === RoadType.Highway;
@@ -61,6 +85,11 @@ const stepLen = (d: number) => (isDiag(d) ? CELL * Math.SQRT2 : CELL);
 
 // 高架鉄道の床版の高さ（マスの中心）。RailLayer.lineH(g, 'erail', i) と同じ
 export function erailDeckH(g: Grid, i: number): number {
+  return erailBaseH(g, i) + (g.rramp[i] ? 0 : g.rlift[i]);
+}
+
+// 高架鉄道の、持ち上げる前（rlift = 0）の床版の高さ
+export function erailBaseH(g: Grid, i: number): number {
   const n = g.n;
   // 地上の鉄道と高架鉄道を結ぶ坂の高架の部分は、坂の高さ
   if (g.rramp[i]) return rampLineH(g, i);
@@ -119,6 +148,7 @@ export interface HwRailCross {
   reason: string;
   bad: number[]; // 問題のあるマス
   target: Map<number, number>; // 上げるマス → 新しい upH
+  zone: number[]; // 高速道路を持ち上げる区間のマス（交差のマスと坂。もう上げてあるマスも）
 }
 
 // 上げてはいけない（坂にできない）マス：ランプの分かれ目、ジャンクションの近く、重ねランプの区間
@@ -276,6 +306,11 @@ function findCands(g: Grid, blocked: Set<number>): { erail: Cand[]; hsr: Cand[] 
   let deck: Map<number, HsrCell> | null = null;
   const anyHsr = g.hsr.some((v) => v !== 0);
   for (let c = 0; c < N; c++) {
+    // 高架のランプ（ジャンクションのランプなど）と高架鉄道の交差：ランプは持ち上げないので、いつも鉄道が上を越える
+    if (g.up[c] === RoadType.Ramp && g.erail[c]) {
+      const fails: [string, number[]][] = [[(g.erail[c] & g.conn1[c]) ? HWR_MSG_PARALLEL : HWR_MSG_RAMP, [c]]];
+      erail.push({ kind: 'erail', cells: [c], rail: [c], need: Infinity, fails, lo: Infinity, skew: false });
+    }
     if (!hwy(c)) continue;
     // マスを共有する交差
     if (g.erail[c]) erail.push(erailCand(g, [c], [c], plain));
@@ -312,7 +347,7 @@ interface Step { c: number; t: number; nat: number; end: boolean; plain: boolean
 
 // 交差 x の坂を、高速道路に沿って両側へ計画する。owners = 交差のマス → 交差（近くの交差と坂をつなげるため）
 function planRamps(g: Grid, x: Cand, plain: (c: number) => boolean, owners: Map<number, Cand[]>): HwRailCross {
-  const res: HwRailCross = { kind: x.kind, cells: x.cells, rail: x.rail, need: x.need, ok: true, reason: '', bad: [], target: new Map() };
+  const res: HwRailCross = { kind: x.kind, cells: x.cells, rail: x.rail, need: x.need, ok: true, reason: '', bad: [], target: new Map(), zone: [...x.cells] };
   const fail = (reason: string, bad: number[]) => {
     if (res.ok) res.reason = reason;
     res.ok = false;
@@ -373,6 +408,7 @@ function planRamps(g: Grid, x: Cand, plain: (c: number) => boolean, owners: Map<
       if (!p.plain) { if (need2) fail(HWR_MSG_RAMP, [p.c]); done = true; break; }
       if (need2) setT(p.c, want);
       else if (r < p.nat - SOFT) { done = true; break; }
+      res.zone.push(p.c);
     }
     // 高速道路の端（地上に降りる、行き止まり、ランプにつながる）：その手前を上げていればだめ
     if (!done && tail) {
@@ -420,29 +456,207 @@ export function hwRailCrossings(g: Grid): HwRailCross[] {
   return planAll(g).list;
 }
 
-// 交差の所の高速道路を、必要な高さまで上げる（坂を作れない交差はそのまま）。戻り値：上げられなかった交差
+// ---------------- 高架鉄道を持ち上げて、高架の道路の上を越える ----------------
+// 鉄道の坂の形（drop・reach・soft の鉄道版。勾配 6%、縦曲線の長さ RCREST）
+const rdrop = (t: number) => (t <= 0 ? 0 : t <= RCREST ? (ERH_GRADE * t * t) / (2 * RCREST) : ERH_GRADE * (t - RCREST / 2));
+const rsoft = (r: number, nat: number) => {
+  const D = r - nat;
+  const sp = D >= RSOFT ? D : D <= -RSOFT ? 0 : ((D + RSOFT) * (D + RSOFT)) / (4 * RSOFT);
+  return Math.max(r, Math.min(nat + sp, r + RSOFT / 4));
+};
+
+type Seg = [number, number, number, number]; // x0, z0, x1, z1（m）
+// マスの中心から、つながる向きの縁（斜めは角）までの線分
+function armSegs(g: Grid, c: number, mask: number): Seg[] {
+  const cx = ((c % g.n) + 0.5) * CELL, cz = (((c / g.n) | 0) + 0.5) * CELL;
+  const out: Seg[] = bits(mask).map((d) => [cx, cz, cx + (DX[d] * CELL) / 2, cz + (DY[d] * CELL) / 2]);
+  return out.length ? out : [[cx, cz, cx, cz]];
+}
+function ptSeg(px: number, pz: number, s: Seg) {
+  const dx = s[2] - s[0], dz = s[3] - s[1], l2 = dx * dx + dz * dz;
+  const t = l2 > 1e-9 ? Math.max(0, Math.min(1, ((px - s[0]) * dx + (pz - s[1]) * dz) / l2)) : 0;
+  return Math.hypot(px - s[0] - dx * t, pz - s[1] - dz * t);
+}
+function segDist(a: Seg, b: Seg) {
+  const cr = (ox: number, oz: number, ax: number, az: number, bx: number, bz: number) => (ax - ox) * (bz - oz) - (az - oz) * (bx - ox);
+  const d1 = cr(a[0], a[1], a[2], a[3], b[0], b[1]), d2 = cr(a[0], a[1], a[2], a[3], b[2], b[3]);
+  const d3 = cr(b[0], b[1], b[2], b[3], a[0], a[1]), d4 = cr(b[0], b[1], b[2], b[3], a[2], a[3]);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return 0;
+  return Math.min(ptSeg(a[0], a[1], b), ptSeg(a[2], a[3], b), ptSeg(b[0], b[1], a), ptSeg(b[2], b[3], a));
+}
+
+// 高架の道路の構造（マス → 路面の高さ、道すじ、中心から縁まで）。高架の道路（本線・ランプ・ジャンクションのランプ）と、
+// 重ねランプがかかるマス（本線の高さ）。skip = 高速道路が線路の上を越える区間のマス（そこは高速道路の方が上にある）
+interface Top { h: number; segs: Seg[]; half: number }
+function elevTops(g: Grid, skip: Set<number>): Map<number, Top> {
+  const n = g.n, N = n * n;
+  const out = new Map<number, Top>();
+  const put = (c: number, t: Top) => { const e = out.get(c); if (!e || e.h < t.h) out.set(c, e ? { ...t, half: Math.max(t.half, e.half) } : t); };
+  for (let c = 0; c < N; c++) {
+    if (!g.up[c] || skip.has(c)) continue;
+    put(c, { h: g.upH[c] + HW_ROAD_LIFT, segs: armSegs(g, c, g.conn1[c]), half: (ROADS[g.up[c]]?.width ?? 9) / 2 + 1.5 });
+  }
+  for (let c = 0; c < N; c++) {
+    const v = g.oramp[c];
+    if (!(v & ORAMP_ON) || skip.has(c)) continue;
+    const a = v & 7, h = g.upH[c] + HW_ROAD_LIFT;
+    for (let k = 0; k <= ORAMP_LEN; k++) {
+      const x = (c % n) + DX[a] * k, y = ((c / n) | 0) + DY[a] * k;
+      const cells: number[] = [];
+      if (g.inb(x, y)) cells.push(g.idx(x, y));
+      if (v & ORAMP_PARTNER) { const sx = x + DX[(a + 2) & 7], sy = y + DY[(a + 2) & 7]; if (g.inb(sx, sy)) cells.push(g.idx(sx, sy)); }
+      for (const j of cells) put(j, { h, segs: armSegs(g, j, 0), half: CELL / 2 });
+    }
+  }
+  return out;
+}
+
+// 線路のマス c の床版が、上を越えないといけない高さ（線路の幅にかかる高架の道路の路面 + ERH_ABOVE）。かからなければ -Infinity
+function railNeedAt(g: Grid, c: number, tops: Map<number, Top>) {
+  const rs = armSegs(g, c, g.erail[c]);
+  const x = c % g.n, y = (c / g.n) | 0;
+  let need = -Infinity;
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+    if (!g.inb(x + dx, y + dy)) continue;
+    const t = tops.get(g.idx(x + dx, y + dy));
+    if (!t || t.h + ERH_ABOVE <= need) continue;
+    const lim = RAIL_DECK_HALF + t.half;
+    if (rs.some((a) => t.segs.some((b) => segDist(a, b) < lim))) need = t.h + ERH_ABOVE;
+  }
+  return need;
+}
+
+// 持ち上げてはいけない線路のマス（理由）。なければ ''
+function railStop(g: Grid, c: number) {
+  if (g.estn[c] || g.erailStn.has(c)) return ERH_MSG_STATION;
+  if (g.rramp[c]) return ERH_MSG_RAMP;
+  if (g.mono[c] || g.hsr[c] || g.hsrf[c] & HSRF_COVER) return ERH_MSG_LINE;
+  return '';
+}
+
+interface RailOver { ok: boolean; reason: string; bad: number[]; target: Map<number, number> } // target：マス → 新しい rlift
+interface RCell { c: number; pos: number; stop: string }
+
+// 交差 x で、高架鉄道を持ち上げて高架の道路の上を越える計画
+function planRailOver(g: Grid, x: HwRailCross, tops: Map<number, Top>): RailOver {
+  const res: RailOver = { ok: true, reason: '', bad: [], target: new Map() };
+  const fail = (r: string, c: number) => { if (res.ok) res.reason = r; res.ok = false; if (!res.bad.includes(c)) res.bad.push(c); };
+  const s = x.rail[0];
+  const deg = (c: number) => bits(g.erail[c]).length;
+  if (deg(s) !== 2) { fail(deg(s) < 2 ? ERH_MSG_END : ERH_MSG_BRANCH, s); return res; }
+  // 交差から線路に沿った両側（pos = 交差からの距離、片側は負）
+  const sides: RCell[][] = [];
+  for (const [k, d0] of bits(g.erail[s]).entries()) {
+    const sign = k === 0 ? -1 : 1;
+    const side: RCell[] = [];
+    let cur = s, d = d0, pos = 0;
+    for (let step = 0; step < RAIL_STEPS; step++) {
+      const j = nbr(g, cur, d);
+      // マップの端（隣の都市へ同じ高さで続く）・行き止まり：その手前は上げられない
+      if (j < 0 || !(g.erail[j] & (1 << opp(d)))) { side.push({ c: cur, pos: sign * (pos + stepLen(d) / 2), stop: ERH_MSG_END }); break; }
+      pos += stepLen(d);
+      const dj = deg(j);
+      side.push({ c: j, pos: sign * pos, stop: dj < 2 ? ERH_MSG_END : dj > 2 ? ERH_MSG_BRANCH : railStop(g, j) });
+      if (dj !== 2) break;
+      d = bits(g.erail[j]).find((q) => q !== opp(d))!;
+      cur = j;
+    }
+    sides.push(side);
+  }
+  const center: RCell = { c: s, pos: 0, stop: railStop(g, s) };
+  // 高架の道路がかかる所（交差から続く間）：その高さを越える
+  const pts: { pos: number; need: number }[] = [];
+  const n0 = railNeedAt(g, s, tops);
+  if (n0 > -Infinity) pts.push({ pos: 0, need: n0 });
+  for (const side of sides) for (const p of side) {
+    const v = railNeedAt(g, p.c, tops);
+    if (v === -Infinity) break;
+    pts.push({ pos: p.pos, need: v });
+  }
+  if (!pts.length) return res;
+  const prof = (pos: number) => {
+    let h = -Infinity;
+    for (const q of pts) h = Math.max(h, q.need - rdrop(Math.max(0, Math.abs(pos - q.pos) - CELL / 2)));
+    return h;
+  };
+  const far = Math.max(...pts.map((q) => Math.abs(q.pos)));
+  const visit = (p: RCell) => {
+    const base = erailBaseH(g, p.c);
+    const r = prof(p.pos);
+    const want = rsoft(r, base) - base;
+    if (want > g.rlift[p.c] + 0.01) {
+      if (p.stop) fail(p.stop, p.c);
+      else res.target.set(p.c, want);
+    }
+    return r >= base - RSOFT || Math.abs(p.pos) <= far;
+  };
+  visit(center);
+  for (const side of sides) {
+    let going = true;
+    for (const p of side) if (!(going = visit(p))) break;
+    // 線路を最後まで調べても、まだ坂の途中
+    if (going && side.length >= RAIL_STEPS && side[side.length - 1].stop === '') fail(ERH_MSG_END, side[side.length - 1].c);
+  }
+  if (!res.ok) res.target.clear();
+  return res;
+}
+
+// 交差の所の高速道路を、必要な高さまで上げる。高速道路を上げられない高架鉄道の交差は、かわりに高架鉄道を上げる。
+// 戻り値：どちらもできなかった交差（reason と bad は、高架鉄道の交差なら鉄道を上げられない理由）。
+// 高速道路と鉄道の高さはおたがいに関わるので、変わらなくなるまでくり返す（上げるだけなので、もう一度呼んでも変わらない）
 export function levelHighwaysOverRail(g: Grid): HwRailCross[] {
-  const { list, raise } = planAll(g);
-  for (const [c, h] of raise) if (h > g.upH[c]) g.upH[c] = h;
-  return list.filter((x) => !x.ok);
+  let out: HwRailCross[] = [];
+  for (let iter = 0; iter < 8; iter++) {
+    const { list, raise } = planAll(g);
+    let changed = false;
+    for (const [c, h] of raise) if (h > g.upH[c]) { g.upH[c] = h; changed = true; }
+    out = [];
+    const falls = list.filter((x) => !x.ok && x.kind === 'erail' && x.reason !== HWR_MSG_PARALLEL);
+    for (const x of list) if (!x.ok && !falls.includes(x)) out.push(x);
+    if (falls.length) {
+      const skip = new Set<number>();
+      for (const x of list) if (x.ok) for (const c of x.zone) skip.add(c);
+      for (const x of falls) for (const c of x.cells) skip.delete(c);
+      const tops = elevTops(g, skip);
+      const lift = new Map<number, number>();
+      for (const x of falls) {
+        const r = planRailOver(g, x, tops);
+        // 駅の上を越える交差は、高速道路の理由（駅の上は通せない）のまま
+        if (!r.ok) { out.push({ ...x, reason: x.reason === HWR_MSG_STATION ? x.reason : r.reason, bad: [...new Set([...x.cells, ...r.bad])] }); continue; }
+        for (const [c, v] of r.target) lift.set(c, Math.max(lift.get(c) ?? 0, v));
+      }
+      for (const [c, v] of lift) if (v > g.rlift[c] + 1e-3) { g.rlift[c] = v; changed = true; }
+    }
+    if (!changed) break;
+  }
+  return out;
 }
 
 const crossKey = (x: HwRailCross) => `${x.kind}:${x.cells.join(',')}`;
 
-// 計画の確かめ：変更を加えた grid（複製）で、touch のマスに関わる交差がすべて坂を作れるか。
-// before（変更の前の grid）を渡すと、変更の前は問題のなかった交差が、変更のせいで坂を作れなくなる場合もだめにする
+// 計画の確かめ：変更を加えた grid（複製。高さをならすので書きかわる）で、touch のマスに関わる交差がすべて越えられるか
+// （高速道路が上を越えるか、高架鉄道が上を越える）。before（変更の前の grid。書きかえない）を渡すと、
+// 変更の前は問題のなかった交差が、変更のせいで越えられなくなる場合もだめにする
 export function checkHwRail(g: Grid, touch: Set<number>, before?: Grid): { ok: boolean; reason: string; bad: number[] } {
   const bad: number[] = [];
   let reason = '';
-  const xs = hwRailCrossings(g).filter((x) => !x.ok);
-  const old = before && xs.length ? new Set(hwRailCrossings(before).filter((x) => !x.ok).map(crossKey)) : null;
+  const xs = levelHighwaysOverRail(g);
+  const old = before && xs.length ? new Set(levelHighwaysOverRail(before.clone()).map(crossKey)) : null;
   for (const x of xs) {
-    const touched = x.cells.some((c) => touch.has(c)) || x.rail.some((c) => touch.has(c));
+    const touched = x.cells.some((c) => touch.has(c)) || x.rail.some((c) => touch.has(c)) || x.bad.some((c) => touch.has(c));
     if (!touched && !(old && !old.has(crossKey(x)))) continue;
     reason = reason || x.reason;
     bad.push(...x.bad);
   }
   return { ok: bad.length === 0, reason, bad };
+}
+
+// 高架鉄道を持ち上げた区間で、高架の道路（ランプ・重ねランプも）があるマス（その下に橋脚を立てない。railLayer）
+export function railOverCells(g: Grid): Set<number> {
+  const out = new Set<number>();
+  if (!g.rlift.some((v) => v > 0.01)) return out;
+  for (const c of elevTops(g, new Set()).keys()) if (g.erail[c] && g.rlift[c] > 0.01) out.add(c);
+  return out;
 }
 
 // 高架鉄道の、敷地のある駅のホームのマス（駅のまわりの線路）

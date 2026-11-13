@@ -10,7 +10,7 @@ import { CELL, DX, DY, WATER_LEVEL, opp } from './constants';
 
 // 同期・保存の対象になる配列の名前
 export const GRID_U8 = ['road', 'conn', 'flow', 'pline', 'zone', 'zden', 'tree', 'up', 'conn1', 'flow1', 'ictl', 'isplit', 'iflags', 'rail', 'erail', 'mono', 'sub', 'bstop', 'bstyle', 'estn', 'pstyle', 'quay', 'jct', 'oramp', 'aport', 'hsr', 'hsrf', 'rramp'] as const;
-export const GRID_F32 = ['deck', 'upH', 'lift'] as const;
+export const GRID_F32 = ['deck', 'upH', 'lift', 'rlift'] as const;
 export const GRID_I32 = ['bldg'] as const;
 export type GridU8Key = (typeof GRID_U8)[number];
 export type GridF32Key = (typeof GRID_F32)[number];
@@ -43,6 +43,9 @@ export class Grid {
   readonly n: number;
   // 空港の門のマス（保存しない。世界・画面がそれぞれ空港の一覧から作る）：道路の端をここへ引いたら、となりの行き止まりへ寄せない
   gateCells: Set<number> = new Set();
+  // 敷地のある高架駅（el_station）のホームの線路のマス（保存しない。世界・画面がそれぞれ建物の一覧から作る。複製にも引き継ぐ）。
+  // 高架鉄道を持ち上げる坂（hwrail.ts）を、駅のホームにかけないため
+  erailStn: Set<number> = new Set();
   heights: Float32Array; // 頂点の高さ（(n+1)^2）
   road: Uint8Array; // 地上の道路の種類
   conn: Uint8Array; // 地上の道路の接続（8方向のビット）
@@ -53,6 +56,7 @@ export class Grid {
   flow1: Uint8Array; // 上空で通行できる向き
   upH: Float32Array; // 上空の路面の高さ
   lift: Float32Array; // 立体交差の取り付け部分で、地上の道路を持ち上げる高さ
+  rlift: Float32Array; // 高架鉄道の線路を、ふつうの高さ（地面から 8m）より持ち上げる高さ（m）。高架の高速道路の上を越える所（hwrail.ts）
   ictl: Uint8Array; // 交差点の制御方式（Ctl）
   isplit: Uint8Array; // 信号の時間配分（東西方向の青の割合、0..100。50 = 半々）
   iflags: Uint8Array; // 交差点のフラグ（JF）
@@ -95,6 +99,7 @@ export class Grid {
     this.flow1 = new Uint8Array(c);
     this.upH = new Float32Array(c);
     this.lift = new Float32Array(c);
+    this.rlift = new Float32Array(c);
     this.ictl = new Uint8Array(c);
     this.bstyle = new Uint8Array(c);
     this.estn = new Uint8Array(c);
@@ -260,6 +265,7 @@ export class Grid {
     for (const k of GRID_U8) g[k].set(this[k]);
     for (const k of GRID_F32) g[k].set(this[k]);
     g.bldg.set(this.bldg);
+    g.erailStn = this.erailStn;
     return g;
   }
 }

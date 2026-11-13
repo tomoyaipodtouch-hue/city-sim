@@ -8,6 +8,7 @@ import { Buf, ROAD_LIFT } from './roadLayer';
 import { estopGroup } from '../sim/plan';
 import { allRamps, rampK, rampLineH, rampLen, rampPortal } from '../sim/railRamp';
 import { addBridgeStructures } from './bridgeStyles';
+import { railOverCells } from '../sim/hwrail';
 import { findTurnbacks, Island, islandSpread, ISLAND_GAP } from './turnback';
 import { createInfraGlassMaterial, createInfraMaterial, GlassBuf, matColor, PbrBuf, RM } from './infraMaterial';
 
@@ -79,12 +80,14 @@ export class RailLayer {
     if (g.rramp[i] && (kind === 'rail' || kind === 'erail')) return rampLineH(g, i);
     const ground = Math.max(g.cellH(i % n, (i / n) | 0), WATER_LEVEL);
     if (kind === 'rail') return g.road[i] ? g.roadH(i) + ROAD_LIFT : ground + 0.1;
+    // 高架鉄道を持ち上げて、高架の道路の上を越える所（hwrail.ts。rlift は坂のなめらかな形を、マスの中心で表したもの）
+    const extra = kind === 'erail' ? g.rlift[i] : 0;
     // 高架（高架鉄道・モノレール）が水の上を渡るときは、両岸の高さを結んだ高さにする（川の上だけ低くならないように）
     if (g.isWater(i % n, (i / n) | 0)) {
       const banks = RailLayer.banks(g, kind, i);
-      if (banks) return Math.max(ground, banks) + LINES[kind].lift;
+      if (banks) return Math.max(ground, banks) + LINES[kind].lift + extra;
     }
-    return ground + LINES[kind].lift;
+    return ground + LINES[kind].lift + extra;
   }
 
   // 水の上の線路から、線路に沿って両側の岸まで進み、岸の高さを距離で内分した値を返す（岸が見つからなければ null）
@@ -208,6 +211,8 @@ export class RailLayer {
     // 地上の鉄道と高架鉄道を結ぶ坂（縦横か 45° の斜め）：坂のマス → 坂の下の端（ax, az。斜めはマスの角）、
     // 1 マスの一歩（sx, sz、m）、上る向きの単位ベクトル（ux, uz）、マスの数 L とつなぎ目 P
     const ramps = allRamps(g);
+    // 持ち上げた高架鉄道の下に高架の道路があるマス：橋脚を立てない（前後のマスの橋脚で渡す）
+    const overRoad = railOverCells(g);
     type RF = { ax: number; az: number; sx: number; sz: number; ux: number; uz: number; L: number; P: number };
     const rampFrame = new Map<number, RF>();
     for (const r of ramps) {
@@ -329,7 +334,7 @@ export class RailLayer {
           if (d < 0) for (let k = 0; k < 8; k++) if (m & (1 << k)) { d = k & 3; break; }
           const len = Math.hypot(DX[d], DY[d]);
           const ux = DX[d] / len, uz = DY[d] / len;
-          if (ch - ground > 2 && !(g.bstyle[i] && g.isWater(x, y))) {
+          if (ch - ground > 2 && !(g.bstyle[i] && g.isWater(x, y)) && !overRoad.has(i)) {
             // ラーメン高架橋：左右2本の柱と横の梁。下が道路なら、柱は歩道の外側に
             const wide = g.road[i] !== 0;
             const co = wide || spc > 0 ? 6.9 + (ISLAND_GAP - TRACK_GAP) * spc : 3.3, bh = ch - 1.4;

@@ -6,8 +6,8 @@ import { CELL } from '../src/sim/constants';
 import { RailLayer } from '../src/render/railLayer';
 import { removeTransitAt } from '../src/sim/plan';
 import {
-  erailDeckH, HWR_CLEAR, HWR_GRADE, HWR_MSG_END, HWR_MSG_PARALLEL, HWR_MSG_PARALLEL_RAIL, HWR_MSG_RAMP, HWR_MSG_STATION,
-  ERAIL_CATENARY, ERAIL_RAIL_TOP, HW_STRUCT, HW_ROAD_LIFT, levelHighwaysOverRail,
+  erailDeckH, HWR_CLEAR, HWR_GRADE, HWR_MSG_PARALLEL, HWR_MSG_PARALLEL_RAIL, HWR_MSG_STATION,
+  ERAIL_CATENARY, ERAIL_RAIL_TOP, HW_STRUCT, HW_ROAD_LIFT, levelHighwaysOverRail, ERH_ABOVE, ERH_GRADE, ERH_MSG_STATION, ERH_MSG_END,
 } from '../src/sim/hwrail';
 
 type Line = [number, number, number, number];
@@ -172,34 +172,92 @@ describe('elevated highway over elevated rail', () => {
     expect(p.ok).toBe(false);
   });
 
-  it('refuses when a ramp is too close (both orders)', () => {
-    // 線路を後から：ランプが坂の範囲にある
+  // 高速道路を持ち上げられない（坂の場所にランプ・高速道路の端がある）ときは、高架鉄道を持ち上げて上を越える
+  const railRow = (w: World, y: number) => Array.from({ length: w.g.n }, (_, x) => w.g.idx(x, y)).filter((c) => w.g.erail[c]);
+  function checkRailOver(w: World, y: number, hwCells: number[], hwBefore: number[]) {
+    const g = w.g, row = railRow(w, y);
+    const h = row.map((c) => RailLayer.lineH(g, 'erail', c));
+    // 勾配は 6% まで。頂上と坂の下は、勾配が少しずつ変わる
+    for (let k = 0; k + 1 < h.length; k++) expect(Math.abs(h[k + 1] - h[k]) / CELL).toBeLessThanOrEqual(ERH_GRADE + 1e-6);
+    for (let k = 0; k + 2 < h.length; k++) expect(Math.abs(h[k + 2] - 2 * h[k + 1] + h[k]) / CELL).toBeLessThan(ERH_GRADE * 0.75);
+    // 交差の所：高速道路の路面 + 車の高さ + 余裕 + 床版の厚さの上
+    for (const c of row) if (g.up[c]) expect(erailDeckH(g, c) - (g.upH[c] + HW_ROAD_LIFT)).toBeGreaterThanOrEqual(ERH_ABOVE - 1e-6);
+    // 高速道路はそのまま、遠くの線路もそのまま
+    expect(hwCells.map((c) => g.upH[c])).toEqual(hwBefore);
+    expect(h[0]).toBeCloseTo(6 + 8, 5);
+    expect(h[h.length - 1]).toBeCloseTo(6 + 8, 5);
+    expect(Math.max(...h)).toBeGreaterThan(6 + 9 + HW_ROAD_LIFT + ERH_ABOVE - 0.01);
+    // もう一度ならしても変わらない
+    const lift = g.rlift.slice(), up = g.upH.slice();
+    expect(levelHighwaysOverRail(g)).toEqual([]);
+    expect(Array.from(g.rlift)).toEqual(Array.from(lift));
+    expect(Array.from(g.upH)).toEqual(Array.from(up));
+    // 保存して読みこんでも同じ
+    const w2 = World.load(w.serialize());
+    expect(Array.from(w2.g.rlift)).toEqual(Array.from(lift));
+  }
+
+  it('raises the rail when a ramp is too close for the highway (both orders)', () => {
+    // 線路を後から：ランプが高速道路の坂の範囲にある
     let w = mk();
     road(w, [24, 4, 24, 44], RoadType.UrbanHighway);
     expect(w.exec({ t: 'uramp', x: 25, y: 31 }).ok).toBe(true);
+    let hw = cellsOf(w, [24, 4, 24, 44]), before = hw.map((c) => w.g.upH[c]);
     let r = rail(w, [4, 26, 44, 26]);
-    expect(r.ok).toBe(false);
-    expect(r.msg).toBe(HWR_MSG_RAMP);
-    // 離れていればよい
-    r = rail(w, [4, 14, 44, 14]);
     expect(r.ok, r.msg).toBe(true);
-    checkProfile(w, cellsOf(w, [24, 4, 24, 44]), false);
+    checkRailOver(w, 26, hw, before);
     // 高速道路を後から：続きを引いて線路を越えると、坂がランプにかかる
     w = mk();
     road(w, [24, 30, 24, 44], RoadType.UrbanHighway);
     expect(w.exec({ t: 'uramp', x: 25, y: 34 }).ok).toBe(true);
     rail(w, [4, 26, 44, 26]);
     r = road(w, [24, 4, 24, 30], RoadType.UrbanHighway);
-    expect(r.ok).toBe(false);
-    expect(r.msg).toBe(HWR_MSG_RAMP);
+    expect(r.ok, r.msg).toBe(true);
+    hw = cellsOf(w, [24, 4, 24, 44]);
+    before = hw.map((c) => w.g.upH[c]);
+    checkRailOver(w, 26, hw, before);
   });
 
-  it('refuses when the highway ends too close to the rail', () => {
+  it('raises the rail when the highway ends too close to it', () => {
     const w = mk();
     rail(w, [4, 26, 44, 26]);
     const r = road(w, [24, 4, 24, 29], RoadType.UrbanHighway);
+    expect(r.ok, r.msg).toBe(true);
+    const hw = cellsOf(w, [24, 4, 24, 29]);
+    checkRailOver(w, 26, hw, hw.map((c) => w.g.upH[c]));
+  });
+
+  it('raises the rail over a JCT ramp drawn across it', () => {
+    const w = mk();
+    road(w, [24, 4, 24, 44], RoadType.UrbanHighway);
+    expect(w.exec({ t: 'uramp', x: 25, y: 31 }).ok).toBe(true);
+    // 高架のランプのマスを直接作る（ジャンクションのランプと同じ表し方）
+    const g = w.g;
+    const rc = g.idx(25, 26);
+    g.up[rc] = RoadType.Ramp; g.conn1[rc] = (1 << 2) | (1 << 6); g.upH[rc] = 6 + 12; g.jct[rc] = 2;
+    const r = rail(w, [4, 26, 44, 26]);
+    expect(r.ok, r.msg).toBe(true);
+    expect(erailDeckH(g, rc) - (6 + 12 + HW_ROAD_LIFT)).toBeGreaterThanOrEqual(ERH_ABOVE - 1e-6);
+  });
+
+  it('refuses when the rail cannot climb either (station or line end in the climb zone)', () => {
+    let w = mk();
+    road(w, [24, 4, 24, 44], RoadType.UrbanHighway);
+    expect(w.exec({ t: 'uramp', x: 25, y: 31 }).ok).toBe(true);
+    // 線路の端が近い
+    let r = rail(w, [18, 26, 44, 26]);
     expect(r.ok).toBe(false);
-    expect(r.msg).toBe(HWR_MSG_END);
+    expect(r.msg).toBe(ERH_MSG_END);
+    // 駅が近い
+    w = mk();
+    rail(w, [4, 26, 44, 26]);
+    road(w, [4, 27, 44, 27], RoadType.Road);
+    expect(w.exec({ t: 'estop', x: 30, y: 26 }).ok).toBe(true);
+    road(w, [24, 30, 24, 44], RoadType.UrbanHighway);
+    expect(w.exec({ t: 'uramp', x: 25, y: 34 }).ok).toBe(true);
+    r = road(w, [24, 4, 24, 30], RoadType.UrbanHighway);
+    expect(r.ok).toBe(false);
+    expect(r.msg).toBe(ERH_MSG_STATION);
   });
 
   it('stays valid after the rail is bulldozed, and levelling is idempotent', () => {

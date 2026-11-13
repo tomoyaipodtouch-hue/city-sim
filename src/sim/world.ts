@@ -15,7 +15,7 @@ import { CELL } from './constants';
 import type { BulldozeLayer } from './plan';
 import { applyJct, JctForm, planJct } from './jct';
 import { pruneBrokenRamps } from './railRamp';
-import { erailStationCells, HWR_MSG_STATION, isElevHighway, levelHighwaysOverRail, stationUnder } from './hwrail';
+import { checkHwRail, erailStationCells, HWR_MSG_STATION, isElevHighway, levelHighwaysOverRail, stationUnder } from './hwrail';
 import { ADVISORS, Advice, computeRating, Loan, LOAN_AMOUNTS, loanRate, makeAdvice, MAX_LOANS, newLoan, ordinanceCost, ordinanceEffects, OrdinanceEffects, OrdinanceId, ORDINANCES, payLoan, rewardUnlocked, REWARD_REQ } from './governance';
 import { defaultServiceState, facilityEffect, makeServiceMaps, ServiceMaps, ServiceState, updateServices } from './services';
 import { Ages, agesOf, FuneralState, taxFactor, updatePopulation, WORK_RATE, workersOf } from './population';
@@ -145,6 +145,7 @@ export interface SaveData {
   flow1?: Uint8Array;
   upH?: Float32Array;
   lift?: Float32Array;
+  rlift?: Float32Array; // 高架鉄道を持ち上げる高さ（古い保存データにはない = 0）
   rail?: Uint8Array;
   erail?: Uint8Array;
   mono?: Uint8Array;
@@ -175,6 +176,8 @@ export interface SaveData {
   rating?: number;
   ilInland?: number; // 内陸の倉庫業の需要（古い保存データにはない）
 }
+
+const RLIFT_MSG_STATION = '高速道路を越えるために持ち上げた高架鉄道の坂には、駅を置けません';
 
 export interface CmdResult {
   ok: boolean;
@@ -436,7 +439,8 @@ export class World {
     linkURampMiddles(g); // 以前の版で、ランプの横に後から引いた一般道がつながっていなかった
     levelViaductsOverWater(g); // 高架の高速道路は、川の上でも両岸の高さを保つ（以前の版は水の上で沈んでいた）
     levelAvenueDecks(g); // 大通りの橋は、2本の車線で1枚の床版（以前の版は車線ごとに高さが違った）
-    levelHighwaysOverRail(g); // 以前の版は、高架鉄道と交差する高架の高速道路が線路にめりこんでいた
+    w.refreshErailStn();
+    levelHighwaysOverRail(g); // 以前の版は、高架鉄道と交差する高架の高速道路が線路にめりこんでいた（越えられない所は、高架鉄道を持ち上げる）
     normalizeAvenueJunctions(g); // 大通りの交差点は1つの制御。ロータリーは信号にする
     w.migrateAirports(); // 以前の空港：まわりの都市高速・道路を正門へつなぎ直す
     w.recomputeAll();
@@ -513,6 +517,7 @@ export class World {
     switch (c.t) {
       case 'road': {
         this.refreshGateCells();
+        this.refreshErailStn();
         // 大通りは格子点（なぞった線が中心線）、それ以外はマスの座標
         const plan = planRoadCmd(g, c.road, c.x0, c.y0, c.x1, c.y1);
         if (!plan.ok) return { ok: false, msg: plan.reason || '道路を引けません' };
@@ -529,6 +534,8 @@ export class World {
         const plan = planURamp(g, c.x, c.y);
         if (!plan.ok) return { ok: false, msg: plan.reason };
         if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
+        const rg = this.railGuard((w) => applyURamp(w, plan));
+        if (rg) return { ok: false, msg: rg };
         applyURamp(g, plan);
         this.afterGridChange();
         return { ok: true, cost: plan.cost, msg: plan.road < 0 ? '真ん中のマスの外側に一般道をつないでください' : undefined };
@@ -536,6 +543,8 @@ export class World {
       case 'oramp': {
         const plan = planORamp(g, c.mode, c.x, c.y, c.fx, c.fy, c.median);
         if (!plan.ok) return { ok: false, msg: plan.reason };
+        const rg = this.railGuard((w) => applyORamp(w, plan));
+        if (rg) return { ok: false, msg: rg };
         if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
         applyORamp(g, plan);
         this.afterGridChange();
@@ -547,6 +556,8 @@ export class World {
         // まず写しで試して、費用を求める
         const r = editORampDir(g.clone(), c.T, c.a0 & 3, c.a & 7, c.want & 3);
         if (!r.ok) return { ok: false, msg: r.reason };
+        const rg = this.railGuard((w) => editORampDir(w, c.T, c.a0 & 3, c.a & 7, c.want & 3));
+        if (rg) return { ok: false, msg: rg };
         const cost = r.added * ORAMP_COST;
         if (!this.spend(cost)) return { ok: false, msg: '資金が足りません' };
         editORampDir(g, c.T, c.a0 & 3, c.a & 7, c.want & 3);
@@ -642,6 +653,8 @@ export class World {
         if (!plan.ok) return { ok: false, msg: plan.reason };
         if (c.id === 'el_station' && [...erailStationCells(g, [{ type: c.id, x: plan.x, y: plan.y, w: plan.w, h: plan.h }])].some((i) => isElevHighway(g.up[i])))
           return { ok: false, msg: '高架の高速道路の下には駅を置けません' };
+        if (c.id === 'el_station' && [...erailStationCells(g, [{ type: c.id, x: plan.x, y: plan.y, w: plan.w, h: plan.h }])].some((i) => g.rlift[i] > 0.01))
+          return { ok: false, msg: RLIFT_MSG_STATION };
         if (REWARD_REQ[c.id]) {
           if ([...this.buildings.values()].some((b) => b.type === c.id)) return { ok: false, msg: `${CIVIC[c.id].name}は1つしか建てられません` };
           // サンドボックスでは条件なしで建てられる
@@ -694,6 +707,7 @@ export class World {
           this.afterGridChange();
           return { ok: true, msg: '駅を外しました' };
         }
+        if (plan.cells.some((i) => g.rlift[i] > 0.01)) return { ok: false, msg: RLIFT_MSG_STATION };
         if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
         for (const i of plan.cells) g.estn[i] = 1;
         this.afterGridChange();
@@ -713,6 +727,7 @@ export class World {
         return { ok: true, cost: plan.cost };
       }
       case 'transit': {
+        this.refreshErailStn();
         const path = planLine(g, c.x0, c.y0, c.x1, c.y1);
         const plan = planTransitLine(g, path, c.kind, !!c.ground, [...this.buildings.values()]);
         if (!plan.ok) return { ok: false, msg: plan.reason || '線路を引けません' };
@@ -724,6 +739,8 @@ export class World {
       case 'clover': {
         const plan = planCloverleaf(g, c.x, c.y);
         if (!plan.ok) return { ok: false, msg: plan.reason };
+        const rg = this.railGuard((w) => applyCloverleaf(w, plan));
+        if (rg) return { ok: false, msg: rg };
         if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
         applyCloverleaf(g, plan);
         this.afterGridChange();
@@ -732,6 +749,8 @@ export class World {
       case 'jct': {
         const plan = planJct(g, c.form, c.x, c.y);
         if (!plan.ok) return { ok: false, msg: plan.reason };
+        const rg = this.railGuard((w) => applyJct(w, plan));
+        if (rg) return { ok: false, msg: rg };
         if (!this.spend(plan.cost)) return { ok: false, msg: '資金が足りません' };
         applyJct(g, plan);
         this.afterGridChange();
@@ -866,7 +885,10 @@ export class World {
     regradeApproaches(this.g);
     pruneORamps(this.g); // 本線や下の道路がなくなった重ねランプは取り除く
     pruneBrokenRamps(this.g); // 一部が取り壊された、地上の鉄道と高架鉄道を結ぶ坂は、全体を取り除く
-    levelHighwaysOverRail(this.g); // 高架鉄道をまたぐ高架の高速道路を、線路の上まで持ち上げる
+    // 取り壊した高架鉄道のマスは、持ち上げた高さも消す（引き直すと、ふつうの高さから）
+    for (let i = 0; i < this.g.rlift.length; i++) if (this.g.rlift[i] && !this.g.erail[i]) this.g.rlift[i] = 0;
+    this.refreshErailStn();
+    levelHighwaysOverRail(this.g); // 高架鉄道をまたぐ高架の高速道路を、線路の上まで持ち上げる（できない所は、高架鉄道を持ち上げる）
     // 線路がなくなった駅のホームは消す
     for (let i = 0; i < this.g.estn.length; i++) if (this.g.estn[i] && !this.g.erail[i]) this.g.estn[i] = 0;
     this.gridVersion++;
@@ -1258,6 +1280,21 @@ export class World {
         }
       }
     }
+  }
+
+  // 敷地のある高架駅のホームの線路のマス（高架鉄道を持ち上げる坂を、駅にかけないため。hwrail.ts）
+  refreshErailStn() {
+    this.g.erailStn = erailStationCells(this.g, this.buildings.values());
+  }
+
+  // ジャンクション・ランプなどを置いたせいで、高架の高速道路も高架鉄道も、交差の所で上を越えられなくなるなら、その理由（写しで試す）
+  private railGuard(apply: (w: Grid) => void): string {
+    if (!this.g.erail.some((v) => v !== 0)) return '';
+    this.refreshErailStn();
+    const sim = this.g.clone();
+    apply(sim);
+    const r = checkHwRail(sim, new Set(), this.g);
+    return r.ok ? '' : r.reason;
   }
 
   // 空港の門のマス（道路の端を門へ引いたとき、となりの行き止まりへ寄せない）

@@ -11,6 +11,7 @@ import type { CityRenderer } from '../render/renderer';
 import { sfx } from '../sound';
 import { AIRPORT_SPECS, airportGateCells, airportLayout, makeFrame, planAirport } from '../sim/airport';
 import { forecourtPlan } from '../sim/forecourt';
+import { erailStationCells } from '../sim/hwrail';
 
 // 空港の向き（8 方向。陸側（ターミナル）が向く方角）の名前
 const DIR_NAMES = ['東', '南東', '南', '南西', '西', '北西', '北', '北東'];
@@ -180,6 +181,7 @@ export class ToolController {
       for (const b of this.game.buildings.values()) { const af = b.civic ? CIVIC[b.type as CivicId]?.airfield : 0; if (af) list.push({ ...b, size: af }); }
       const gk = list.map((b) => `${b.id}.${b.x}.${b.y}.${b.face}`).join(',');
       if (gk !== this.gateKey) { g.gateCells = airportGateCells(g.n, list); this.gateKey = gk; }
+      g.erailStn = erailStationCells(g, this.game.buildings.values());
       const plan = planRoadCmd(g, type, lx0, ly0, lx1, ly1);
       // 大通りの横でつなぐ道路のマス（と、横に向いている大通りの行き止まりの端）も、つなぎ直すマスとして見せる
       const stemJ = (plan.stemJoins ?? []).flatMap((q) => [q[0], q[1]]);
@@ -220,6 +222,7 @@ export class ToolController {
     if (t.startsWith('line:') && d.line) {
       const kind = t.split(':')[1] as LineKind;
       const path = planLine(g, d.line[0], d.line[1], d.line[2], d.line[3]);
+      g.erailStn = erailStationCells(g, this.game.buildings.values());
       const plan = planTransitLine(g, path, kind, t.split(':')[2] === 'g', [...this.game.buildings.values()]);
       // 高速鉄道：カーブの内側にかかるマス（うすい色）も見せる
       const cover = plan.hsr?.cover ?? [];
