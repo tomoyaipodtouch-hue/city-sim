@@ -10,7 +10,7 @@
 // 描画（hsrLayer）・列車（hsrTrains）・カーブの内側のマス（recomputeHsrCover）は、どれも同じ hsrPoly で線の形を作る。
 import { Grid } from './grid';
 import { CELL, DX, DY, WATER_LEVEL, dirOf, opp, isDiag } from './constants';
-import { CIVIC, HSR_GROUND_COST, HSR_THROUGH_COST, LINES, RoadType, ZoneType, isHighway } from './defs';
+import { CIVIC, HSR_GROUND_COST, HSR_THROUGH_COST, LINES, RoadType, ZoneType, isHighway, isUrbanElevated } from './defs';
 import type { LinePath, PlopPlan } from './plan';
 
 export const HSRF_GROUND = 1;
@@ -219,11 +219,9 @@ export function planHsrLine(g: Grid, path: LinePath, ground: boolean): HsrLinePl
       }
       if ((g.erail[i] && along(g.erail[i])) || (g.mono[i] && along(g.mono[i])) || (g.up[i] && along(g.conn1[i]))) { bad.add(i); why(HSR_MSG_PARALLEL); }
     } else {
-      // 高架：ほかの高架の道路・線路とは交差だけ。下を通る高架の道路は、列車にぶつからない高さまで
-      if (g.up[i]) {
-        if (along(g.conn1[i])) { bad.add(i); why(HSR_MSG_PARALLEL); }
-        else if (g.upH[i] + 0.3 + HSR_CLEAR > hsrDeckH(g, i) - HSR_GIRDER) { bad.add(i); why('下の高架の道路が高すぎて交差できません'); }
-      }
+      // 高架：ほかの高架の道路・線路とは交差だけ。下を通る高架の道路が高すぎるときは、その高速道路を上に持ち上げる（hwrail.ts。planTransitLine が確かめる）
+      if (g.up[i] && along(g.conn1[i])) { bad.add(i); why(HSR_MSG_PARALLEL); }
+      else if (g.up[i] && !isUrbanElevated(g.up[i]) && g.up[i] !== RoadType.Highway && g.upH[i] + 0.3 + HSR_CLEAR > hsrDeckH(g, i) - HSR_GIRDER) { bad.add(i); why('下の高架の道路が高すぎて交差できません'); }
       if ((g.erail[i] && along(g.erail[i])) || (g.mono[i] && along(g.mono[i])) || (g.rail[i] && along(g.rail[i]))) { bad.add(i); why(HSR_MSG_PARALLEL); }
     }
   }

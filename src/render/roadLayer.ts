@@ -14,6 +14,7 @@ import { createMarkMaterial, createRoadSolidMaterial, createRoadSurfaceMaterial,
 import { Grid } from '../sim/grid';
 import { CELL, DX, DY, dirOf, isDiag, opp } from '../sim/constants';
 import { ROADS, RoadType, isHighway, isUrbanElevated } from '../sim/defs';
+import { HSRF_COVER } from '../sim/hsr';
 import type { TreeSpot } from './buildingGen';
 import { findJctChains, JChain, jAt, jHalf, JPt, JR_HALF, mainLocal, JMain } from './jctCurve';
 import { findORamps, orAt, orEdges, orGroundH, orHalf, orHwH, orO, OR_HALF, OR_LANE, ORPt } from './oramp';
@@ -2553,7 +2554,7 @@ export class RoadLayer {
       if (urSkip.has(node) || jNodes.has(node)) continue;
       S.owner = node;
       viaCur = level === 1 && isUrbanElevated(t);
-      pierOk = !(level === 1 && (g.road[i] || g.rail[i] || g.erail[i]));
+      pierOk = !(level === 1 && (g.road[i] || g.rail[i] || g.erail[i] || g.hsr[i] || g.hsrf[i] & HSRF_COVER));
       const x = i % n, y = (i / n) | 0;
       const cx = (x + 0.5) * CELL, cz = (y + 0.5) * CELL;
       const ch = g.nodeH(node) + ROAD_LIFT;
@@ -3822,26 +3823,33 @@ export class RoadLayer {
         pier(x, z, ux, uz, rings, COL.pier);
         footing(x, z, ux, uz, 1.4, 1.75, gnd);
       };
-      // 高架鉄道の線路の中心線から、点 (px, pz) までの距離（近くのマスだけ調べる）。高架鉄道をまたぐ所では、橋脚を線路から離して長い桁で渡す
+      // 高架鉄道の線路の中心線から、点 (px, pz) までの距離（近くのマスだけ調べる）。高架鉄道・高速鉄道をまたぐ所では、橋脚を線路から離して長い桁で渡す。
+      // 高速鉄道は幅が広いので、HSR_KEEP - RAIL_KEEP だけ近いとみなす。カーブの内側のマス（線路の通り道）にも立てない
       const railDist = (px: number, pz: number) => {
         let best = Infinity;
         const cx0 = Math.floor(px / CELL), cz0 = Math.floor(pz / CELL);
         for (let yy = cz0 - 1; yy <= cz0 + 1; yy++)
           for (let xx = cx0 - 1; xx <= cx0 + 1; xx++) {
             if (!g.inb(xx, yy)) continue;
-            const m = g.erail[yy * n + xx];
-            if (!m) continue;
             const ax = (xx + 0.5) * CELL, az = (yy + 0.5) * CELL;
-            for (let d = 0; d < 8; d++) {
-              if (!(m & (1 << d))) continue;
-              const bx = ax + DX[d] * CELL, bz = az + DY[d] * CELL;
-              const vx = bx - ax, vz = bz - az, t = Math.max(0, Math.min(1, ((px - ax) * vx + (pz - az) * vz) / (vx * vx + vz * vz)));
-              best = Math.min(best, Math.hypot(px - ax - vx * t, pz - az - vz * t));
+            for (const [m, off] of [[g.erail[yy * n + xx], 0], [g.hsr[yy * n + xx], HSR_KEEP - RAIL_KEEP]] as const) {
+              if (!m) continue;
+              for (let d = 0; d < 8; d++) {
+                if (!(m & (1 << d))) continue;
+                const bx = ax + DX[d] * CELL, bz = az + DY[d] * CELL;
+                const vx = bx - ax, vz = bz - az, t = Math.max(0, Math.min(1, ((px - ax) * vx + (pz - az) * vz) / (vx * vx + vz * vz)));
+                best = Math.min(best, Math.hypot(px - ax - vx * t, pz - az - vz * t) - off);
+              }
             }
           }
+        for (const ox of [-0.5, 0.5]) for (const oz of [-0.5, 0.5]) {
+          const xx = Math.floor((px + ox) / CELL), yy = Math.floor((pz + oz) / CELL);
+          if (g.inb(xx, yy) && g.hsrf[yy * n + xx] & HSRF_COVER) return 0;
+        }
         return best;
       };
       const RAIL_KEEP = 8.5; // 線路の中心から橋脚の中心まで（架線柱 5.35m + 橋脚の半径 + 余裕。高架鉄道の柱にも当たらない）
+      const HSR_KEEP = 11; // 高速鉄道の中心から橋脚の中心まで（盛土の裾 約 9m + 基礎の半径）
       // マス A と、向き d の隣 B の境：下を道路・線路が通るか
       const blocked = (A: number, d: number) => (g.road[A] !== 0 && (g.conn[A] & (1 << d)) !== 0) || (g.rail[A] & (1 << d)) !== 0 ||
         railDist(((A % n) + 0.5 + DX[d] / 2) * CELL, (((A / n) | 0) + 0.5 + DY[d] / 2) * CELL) < RAIL_KEEP;

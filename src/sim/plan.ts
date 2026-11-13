@@ -173,14 +173,18 @@ function checkRoadOverRail(g: Grid, plan: RoadPlan): RoadPlan {
   // 線路のマスか、斜めに線路が通る角の隣のマスがなければ、調べなくてよい
   const near = [...up].some((c) => {
     const x = c % n, y = (c / n) | 0;
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (g.inb(x + dx, y + dy) && g.erail[g.idx(x + dx, y + dy)]) return true;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (!g.inb(x + dx, y + dy)) continue;
+      const j = g.idx(x + dx, y + dy);
+      if (g.erail[j] || g.hsr[j] || g.hsrf[j] & HSRF_COVER) return true;
+    }
     return false;
   });
   if (!near) return plan;
   const sim = g.clone();
   applyRoad(sim, plan);
   linkUrbanEnds(sim);
-  const r = checkHwRail(sim, up);
+  const r = checkHwRail(sim, up, g);
   if (r.ok) return plan;
   const bad = new Set(plan.bad);
   for (const c of r.bad) bad.add(c);
@@ -1493,7 +1497,23 @@ export interface TransitPlan {
 // stations = 駅の一覧（坂を駅のそばに作らないため。なくてもよい）
 export function planTransitLine(g: Grid, path: LinePath, kind: LineKind, ground = false, stations: { type: string; x: number; y: number; w: number; h: number }[] = []): TransitPlan {
   if (kind === 'hsr') {
+    const n0 = g.n;
     const h = planHsrLine(g, path, ground);
+    // 高架の高速道路と交差する所：引いたあとの grid（複製）で、高速道路を持ち上げて越えられるかを確かめる（hwrail.ts）
+    if (h.ok && [...path.cells, ...h.cover].some((c) => {
+      const x = c % n0, y = (c / n0) | 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (g.inb(x + dx, y + dy) && isElevHighway(g.up[g.idx(x + dx, y + dy)])) return true;
+      return false;
+    })) {
+      const sim = g.clone();
+      applyHsrLine(sim, h);
+      const r = checkHwRail(sim, new Set([...path.cells, ...h.cover]), g);
+      if (!r.ok) {
+        const bad = new Set(h.bad);
+        for (const c of r.bad) bad.add(c);
+        return { ok: false, kind, path, cost: h.cost, bad, reason: r.reason, hsr: { ...h, ok: false, bad, reason: r.reason } };
+      }
+    }
     return { ok: h.ok, kind, path, cost: h.cost, bad: h.bad, reason: h.reason, hsr: h };
   }
   const def = LINES[kind];
@@ -1582,7 +1602,7 @@ export function planTransitLine(g: Grid, path: LinePath, kind: LineKind, ground 
   })) {
     const sim = g.clone();
     applyTransitLine(sim, { ok: true, kind, path, cost: 0, bad, reason: '', ramps });
-    const r = checkHwRail(sim, new Set(cells));
+    const r = checkHwRail(sim, new Set(cells), g);
     for (const c of r.bad) bad.add(c);
     if (!r.ok) why(r.reason);
   }

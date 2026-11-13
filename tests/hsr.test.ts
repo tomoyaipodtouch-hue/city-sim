@@ -6,12 +6,13 @@ import { CIVIC, HSR_FARE, HSR_THROUGH_COST, LINES, RoadType, ZoneType } from '..
 import { CELL } from '../src/sim/constants';
 import { planLine, planTransitLine, planBulldoze, normRect, planZone } from '../src/sim/plan';
 import {
+  hsrDeckH,
   HSRF_COVER, HSRF_GROUND, HSRF_STATION, HSR_MSG_SHARP, HSR_MSG_SHORT, HSR_T, hsrBarrier, hsrChains, hsrNoise, hsrPoly, hsrRoutes, planHsrStation,
 } from '../src/sim/hsr';
 import { HsrOps, HSR_DWELL, trainLen } from '../src/sim/hsrOps';
 import { HSR_NOISE_LV } from '../src/sim/world';
 import { assignTrips, buildJunctions, buildRoadGraph, LAYER, Origin } from '../src/sim/traffic';
-import { checkHwRail, HWR_MSG_HSR } from '../src/sim/hwrail';
+import { checkHwRail, HWH_CLEAR, levelHighwaysOverRail } from '../src/sim/hwrail';
 
 type Cmd = Parameters<World['exec']>[0];
 function flat(n = 96, h = 6) {
@@ -122,18 +123,33 @@ describe('HSR track drawing', () => {
     expect(fail(w, { t: 'road', x0: 20, y0: 5, x1: 20, y1: 15, road: RoadType.Road })).toMatch(/高速鉄道/);
   });
 
-  it('an elevated highway raised over elevated rail cannot be raised under the HSR viaduct', () => {
-    // 高架鉄道（y = 40）をまたぐ都市高速（x = 40）は、線路の前後で持ち上がる。そのすぐ横（y = 44）に高速鉄道の高架
+  it('an elevated highway raised over elevated rail climbs over a nearby HSR viaduct (both orders)', () => {
+    // 高架鉄道（y = 40）をまたぐ都市高速（x = 40）。そのすぐ横（y = 44）に高速鉄道の高架：高速道路は両方の上を越え、間でへこまない
+    const check = (w: ReturnType<typeof flat>) => {
+      const g = w.g;
+      const h = (y: number) => g.upH[g.idx(40, y)];
+      expect(h(44) - hsrDeckH(g, g.idx(40, 44))).toBeGreaterThanOrEqual(HWH_CLEAR - 1e-6);
+      for (let y = 40; y < 44; y++) expect(h(y + 1)).toBeGreaterThanOrEqual(h(y) - 1e-6);
+      expect(levelHighwaysOverRail(g)).toEqual([]);
+      const before = Array.from(g.upH);
+      levelHighwaysOverRail(g);
+      expect(Array.from(g.upH)).toEqual(before);
+    };
     const w = flat();
     ok(w, { t: 'transit', x0: 5, y0: 40, x1: 80, y1: 40, kind: 'erail' });
     ok(w, hsrLine(w, 5, 44, 80, 44));
-    expect(fail(w, { t: 'road', x0: 40, y0: 5, x1: 40, y1: 85, road: RoadType.UrbanHighway })).toBe(HWR_MSG_HSR);
-    // 逆の順：持ち上がった都市高速の上には高速鉄道を通せない。坂から離れた所なら通せる
+    ok(w, { t: 'road', x0: 40, y0: 5, x1: 40, y1: 85, road: RoadType.UrbanHighway });
+    check(w);
+    // 逆の順：持ち上がった都市高速の上にも高速鉄道を通せる（高速道路をさらに持ち上げる）
     const w2 = flat();
     ok(w2, { t: 'transit', x0: 5, y0: 40, x1: 80, y1: 40, kind: 'erail' });
     ok(w2, { t: 'road', x0: 40, y0: 5, x1: 40, y1: 85, road: RoadType.UrbanHighway });
-    expect(fail(w2, hsrLine(w2, 5, 44, 80, 44))).toMatch(/高すぎて/);
+    ok(w2, hsrLine(w2, 5, 44, 80, 44));
+    check(w2);
+    // 坂から離れた所では、高速道路は高速鉄道の高架の下をくぐる（そのままの高さ）
+    const h70 = w2.g.upH[w2.g.idx(40, 70)];
     ok(w2, hsrLine(w2, 5, 70, 80, 70));
+    expect(w2.g.upH[w2.g.idx(40, 70)]).toBe(h70);
     expect(checkHwRail(w2.g, new Set()).ok).toBe(true);
   });
 });
