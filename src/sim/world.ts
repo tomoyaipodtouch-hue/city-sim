@@ -21,6 +21,7 @@ import { defaultServiceState, facilityEffect, makeServiceMaps, ServiceMaps, Serv
 import { Ages, agesOf, FuneralState, taxFactor, updatePopulation, WORK_RATE, workersOf } from './population';
 import { AIRPORT_SPECS, AirStats, airportCells, airportLayout, airportPorts, airTimeWeight, AIR_BELLY_TONS, AIR_CARGO_TONS_PER_FLIGHT, AIR_FEE_FLIGHT, AIR_FEE_FREIGHT, AIR_FEE_PAX, AIR_FREIGHT_TONS, AIR_TRIP_OFFICE, AIR_TRIP_RES, airportGateCells, applyAirportGround, frameOf, gateLink, isUrbanHw, noiseAt, type AirPorts, type GateLink, planAirport, stationLines, cellLocal, lotToLand } from './airport';
 import { forecourtPlan, type FcPlan } from './forecourt';
+import { hsrTrainsPerDay } from './hsrOps';
 import { applyHsrStation, hsrNoise, hsrReachEdge, hsrStationOut, hsrStationTrack, recomputeHsrCover, HSRF_STATION, HSR_STN_LEN, stnCell, type HsrStn, type HsrStationPlan } from './hsr';
 import { type TransitModel, TRANSFER_MIN, isJctRamp, assignTrips, buildJunctions, buildRoadGraph, buildTransitModel, congestionFactor, Destination, junctionGroup, LAYER, normalizeAvenueJunctions, Origin, parkingMinutes, TRUCK_PCE } from './traffic';
 
@@ -227,7 +228,7 @@ export const AIR_NOISE_LV = 0.32;
 export const HSR_NOISE_LV = 0.1;
 export const HSR_STATION_LV = 0.3;
 // 1日の列車の本数（片道）：乗客が多いほど多い（30〜120 本）。描画の列車の数もこれに合わせる
-export const hsrTrainsPerDay = (riders: number) => Math.max(30, Math.min(120, Math.round(30 + riders / 60)));
+export { hsrTrainsPerDay } from './hsrOps';
 const LINE_LAYER_OF = { rail: LAYER.rail, erail: LAYER.erail, mono: LAYER.mono, sub: LAYER.sub, hsr: LAYER.hsr } as const;
 const IL_WANT_PORT = 0.06;
 const IL_WANT_PORT_FLAT = 100;
@@ -2054,7 +2055,7 @@ export class World {
     const noise = this.airportNoise();
     // 高速鉄道の騒音：線路沿いの地価が少し下がる（住宅地のそばは防音壁で小さくなる）
     let hn: Float32Array | null = null;
-    for (let i = 0; i < N; i++) if (g.hsr[i]) { hn = hsrNoise(g, Math.min(1, this.hsrStats.trains / 120), new Float32Array(N)); break; }
+    for (let i = 0; i < N; i++) if (g.hsr[i]) { hn = hsrNoise(g, Math.min(1, this.hsrStats.trains / 160), new Float32Array(N)); break; }
     for (let i = 0; i < N; i++) {
       if (noise[i]) lvb[i] -= (noise[i] / 255) * AIR_NOISE_LV;
       if (hn && hn[i] > 0) {

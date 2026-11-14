@@ -685,78 +685,76 @@ export function trainCar(kind: TrainKind, head: boolean) {
 }
 
 // ---------------- 高速鉄道 ----------------
-// ヨーロッパの高速鉄道のような白い流線型の車両（架空のデザイン。会社のロゴや塗装はない）。1 両 25m。
-// 先頭車は長い鼻（約 9m）。前は +z。HSR_CAR_L（sim/hsrOps）と同じ長さ
-export const HSR_CAR = { L: 25, W: 2.9, y0: 0.85, y1: 2.15, y2: 4.0 } as const;
-const HSR_BODY = 0xf1f3f4, HSR_BAND = 0x1d6b86, HSR_LINE = 0xaeb6bd, HSR_SKIRT = 0x6f767d;
-// 断面（右下から上を回って左下へ）。w = 半分の幅、y0 = 下、y1 = 肩、y2 = 上
+// ドイツの高速鉄道（ICE 3 のような）の、丸みのある落ち着いた先頭の形（架空のデザイン。会社のロゴや名前はない）。
+// 1 両 25m。先頭車は短い丸い鼻（約 5.5m）と、鼻へなめらかに流れる大きな前の窓。横は平らで、窓の帯が続く。
+// 塗装は青：下は濃い青、上は明るい空色、そのあいだに白い線。前は +z。HSR_CAR_L（sim/hsrOps）と同じ長さ
+export const HSR_CAR = { L: 25, W: 2.95, y0: 0.85, y1: 2.15, y2: 4.0 } as const;
+const HSR_DEEP = 0x1d4f96, HSR_SKY = 0x8ec5ea, HSR_ROOF = 0xc9e0f1, HSR_WHITE = 0xf6f8fa, HSR_SKIRT = 0x2a3646;
+// 断面（右下から上を回って左下へ、12 点）。w = 半分の幅、y0 = 下、y1 = 肩、y2 = 上
 function hsrRing(z: number, w: number, y0: number, y1: number, y2: number): V[] {
-  const r = Math.min(0.55, (y2 - y1) * 0.45);
+  const r = Math.min(0.6, (y2 - y1) * 0.45);
   return [
-    [w * 0.9, y0, z], [w, y0 + 0.45, z], [w, y1, z], [w * 0.985, y1 + (y2 - y1) * 0.55, z], [w - r * 0.55, y2 - r * 0.3, z], [w * 0.55, y2, z],
-    [-w * 0.55, y2, z], [-w + r * 0.55, y2 - r * 0.3, z], [-w * 0.985, y1 + (y2 - y1) * 0.55, z], [-w, y1, z], [-w, y0 + 0.45, z], [-w * 0.9, y0, z],
+    [w * 0.9, y0, z], [w, y0 + 0.4, z], [w, y1, z], [w * 0.99, y1 + (y2 - y1) * 0.55, z], [w - r * 0.6, y2 - r * 0.3, z], [w * 0.5, y2, z],
+    [-w * 0.5, y2, z], [-w + r * 0.6, y2 - r * 0.3, z], [-w * 0.99, y1 + (y2 - y1) * 0.55, z], [-w, y1, z], [-w, y0 + 0.4, z], [-w * 0.9, y0, z],
   ];
 }
+// 断面の面ごとの色：下（0,1,9,10）は濃い青、横の上（2,8）は空色、屋根は明るい空色
+const ringCol = (j: number) => (j <= 1 || j >= 9 ? HSR_DEEP : j === 2 || j === 8 ? HSR_SKY : HSR_ROOF);
 export function hsrCar(head: boolean) {
   const P = new Parts();
   const { L, W, y0, y1, y2 } = HSR_CAR;
   const hl = L / 2, hw = W / 2;
+  const NOSE = 5.5;
   P.smooth = true;
-  // 車体の断面を並べてつなぐ（先頭車は鼻の先へ細く低くなる）
-  const rings: { r: V[]; t: number }[] = [];
-  const NOSE = 9.5;
-  rings.push({ r: hsrRing(-hl, hw, y0, y1, y2), t: 1 });
+  const rings: { r: V[]; t: number }[] = [{ r: hsrRing(-hl, hw, y0, y1, y2), t: 1 }];
   if (head) {
-    const K = 8;
+    // t = 1 が鼻の付け根、0 が鼻の先。幅はあまり細くせず、上を丸く下げる（とがらせない）
+    const K = 7;
     for (let k = K; k >= 0; k--) {
-      const t = k / K; // 1 = 鼻の付け根、0 = 鼻の先
+      const t = k / K;
       const z = hl - NOSE * t;
       const e = Math.sqrt(t);
-      const top = y0 + 0.75 + (y2 - y0 - 0.75) * (1 - (1 - t) ** 2.2);
-      const sh = Math.min(top - 0.1, y0 + 0.55 + (y1 - y0 - 0.55) * e);
-      rings.push({ r: hsrRing(z, hw * (0.32 + 0.68 * e), y0 + 0.18 * (1 - t), sh, top), t });
+      const top = y0 + 1.35 + (y2 - y0 - 1.35) * (1 - (1 - t) ** 1.7);
+      const sh = Math.min(top - 0.2, y0 + 0.9 + (y1 - y0 - 0.9) * e);
+      rings.push({ r: hsrRing(z, hw * (0.62 + 0.38 * e), y0 + 0.05 * (1 - t), sh, top), t });
     }
   } else rings.push({ r: hsrRing(hl, hw, y0, y1, y2), t: 1 });
   for (let i = 0; i + 1 < rings.length; i++) {
     const A = rings[i].r, B = rings[i + 1].r, tm = (rings[i].t + rings[i + 1].t) / 2;
     for (let j = 0; j + 1 < A.length; j++) {
-      // 前の窓：鼻の上の面（付け根に近い所）
-      const upper = j >= 3 && j <= 7;
-      const glass = head && i > 0 && upper && tm > 0.38 && tm < 0.82;
-      const ctr: V = [0, (y0 + y2) / 2, 0];
+      // 大きな前の窓：鼻の上から横へ回りこむ
+      const glass = head && i > 0 && j >= 2 && j <= 8 && tm > 0.2 && tm < 0.9 && !(j === 2 || j === 8 ? tm < 0.45 : false);
+      const col = glass ? GLASS : head && i > 0 && j <= 2 ? HSR_DEEP : head && i > 0 && j >= 8 ? HSR_DEEP : ringCol(j);
       const mid = lerp3(lerp3(A[j], A[j + 1], 0.5), lerp3(B[j], B[j + 1], 0.5), 0.5);
-      P.quad(A[j], A[j + 1], B[j + 1], B[j], glass ? GLASS : HSR_BODY, glass ? PART.glass : PART.plain, sub(mid, [ctr[0], ctr[1], mid[2]]));
+      P.quad(A[j], A[j + 1], B[j + 1], B[j], col, glass ? PART.glass : PART.plain, sub(mid, [0, (y0 + y2) / 2, mid[2]]));
     }
   }
   P.smooth = false;
-  // 鼻の先と後ろの端をふさぐ
-  const tip = rings[rings.length - 1].r, back = rings[0].r;
-  P.poly(tip, HSR_BODY, PART.plain, [0, 0, 1]);
-  P.poly(back, 0x3a3f45, PART.plain, [0, 0, -1]);
-  if (!head) P.poly(rings[1].r, 0x3a3f45, PART.plain, [0, 0, 1]);
-  // 窓の帯・色の帯・細い線（両側）
-  const z0 = -hl + 1.2, z1 = head ? hl - NOSE - 0.4 : hl - 1.2;
+  // 鼻の先（丸い面をふさぐ）と、連結面
+  P.poly(rings[rings.length - 1].r, HSR_DEEP, PART.plain, [0, 0, 1]);
+  P.poly(rings[0].r, 0x2c333b, PART.plain, [0, 0, -1]);
+  // 窓の帯（続いている）と白い線（両側）。中間車も先頭車も同じ高さ
+  const z0 = -hl + 0.9, z1 = head ? hl - NOSE + 0.6 : hl - 0.9;
   for (const s of [1, -1]) {
     const x = s * (hw + 0.012);
-    P.quad([x, 2.35, z0], [x, 2.35, z1], [x, 3.15, z1], [x, 3.15, z0], WIN, PART.win, [s, 0, 0]);
-    P.quad([x, 1.55, z0], [x, 1.55, head ? hl - 1.5 : z1], [x, 1.85, head ? hl - 1.5 : z1], [x, 1.85, z0], HSR_BAND, PART.plain, [s, 0, 0]);
-    P.quad([x, 1.97, z0], [x, 1.97, z1], [x, 2.03, z1], [x, 2.03, z0], HSR_LINE, PART.alu, [s, 0, 0]);
-    // ドア（車両の端の近く）
-    for (const dz of head ? [-hl + 2.2] : [-hl + 2.2, hl - 2.2]) P.quad([x * 1.001, y0 + 0.35, dz - 0.55], [x * 1.001, y0 + 0.35, dz + 0.55], [x * 1.001, 3.05, dz + 0.55], [x * 1.001, 3.05, dz - 0.55], 0xc9cdd1, PART.alu, [s, 0, 0]);
+    P.quad([x, 2.4, z0], [x, 2.4, z1], [x, 3.2, z1], [x, 3.2, z0], WIN, PART.win, [s, 0, 0]);
+    P.quad([x, 2.08, z0], [x, 2.08, z1], [x, 2.2, z1], [x, 2.2, z0], HSR_WHITE, PART.plain, [s, 0, 0]);
+    // ドア（車両の端の近く、窓の帯に合わせた暗い窓）
+    for (const dz of head ? [-hl + 2.0] : [-hl + 2.0, hl - 2.0]) P.quad([x * 1.001, y0 + 0.3, dz - 0.5], [x * 1.001, y0 + 0.3, dz + 0.5], [x * 1.001, 2.0, dz + 0.5], [x * 1.001, 2.0, dz - 0.5], 0x3c6aa8, PART.alu, [s, 0, 0]);
   }
   // 床下のスカートと台車
-  P.box(W - 0.3, 0.45, L - (head ? NOSE : 1.6), 0, y0 - 0.1, head ? -NOSE / 2 + 0.6 : 0, HSR_SKIRT, PART.trim, '+x-x+z-z');
-  for (const z of [-hl + 3.4, head ? hl - NOSE - 1.5 : hl - 3.4]) P.box(2.2, 0.75, 3.0, 0, 0.5, z, 0x26292d, PART.trim, '+x-x+z-z');
+  P.box(W - 0.3, 0.45, L - (head ? NOSE : 1.4), 0, y0 - 0.1, head ? -NOSE / 2 + 0.4 : 0, HSR_SKIRT, PART.trim, '+x-x+z-z');
+  for (const z of [-hl + 3.2, head ? hl - NOSE - 1.2 : hl - 3.2]) P.box(2.2, 0.75, 3.0, 0, 0.5, z, 0x22262b, PART.trim, '+x-x+z-z');
   if (head) {
-    // 前照灯（鼻の両側）と、運転台の後ろのパンタグラフ
-    for (const s of [1, -1]) P.box(0.42, 0.16, 0.3, s * 0.62, y0 + 0.62, hl - 2.1, HEAD, PART.head, '+x-x+y+z');
-    const py = y2 + 0.08, pz = -hl + 5.5;
-    P.box(1.2, 0.16, 1.0, 0, py, pz, 0x5a5f66, PART.trim);
-    P.box(0.07, 0.07, 1.3, 0, py + 0.6, pz + 0.2, 0x30343a, PART.trim);
-    P.box(1.5, 0.06, 0.1, 0, py + 1.1, pz + 0.6, 0x30343a, PART.trim);
+    // 前照灯（鼻の下の両側）
+    for (const s of [1, -1]) P.box(0.5, 0.18, 0.25, s * 0.78, y0 + 0.7, hl - 0.55, HEAD, PART.head, '+x-x+y+z');
   } else {
-    // 屋根の上の機器のおおい
-    P.box(1.6, 0.25, 6.0, 0, y2 + 0.08, 0, 0xd9dcdf, PART.plain, '+x-x+y+z-z');
+    // 中間車の屋根のパンタグラフ（低い台と枠）と、機器のおおい
+    const py = y2 + 0.06, pz = -hl + 5;
+    P.box(1.2, 0.16, 1.0, 0, py, pz, 0x5a5f66, PART.trim);
+    P.box(0.07, 0.07, 1.3, 0, py + 0.55, pz + 0.2, 0x30343a, PART.trim);
+    P.box(1.5, 0.06, 0.1, 0, py + 1.0, pz + 0.6, 0x30343a, PART.trim);
+    P.box(1.6, 0.22, 6.0, 0, y2 + 0.06, 3, HSR_ROOF, PART.plain, '+x-x+y+z-z');
   }
   return P.build();
 }

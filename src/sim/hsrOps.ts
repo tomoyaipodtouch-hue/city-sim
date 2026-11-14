@@ -1,6 +1,6 @@
 // 高速鉄道の列車の運行（画面の列車の動き）。three.js を使わないので、テストからも動かせる。
 //
-// 路線（hsrRoutes）ごとに、決まった本数の列車が走る。乗客が多いほど本数と両数が多い（8〜12 両）。
+// 路線（hsrRoutes）ごとに、決まった本数の列車が走る。乗客が多いほど本数と両数が多い（6 両か 8 両。8 両 = 約 204m で、224m のホームに収まる）。
 //   ・ターミナル駅（路線の端の駅）：着いた列車は止まり、向きを変えて折り返す
 //   ・中間駅：各駅に止まる列車（副本線のホームに入る）と、止まらずに本線を通過する列車がある
 //   ・マップの端：列車は隣の都市へ出ていき、隣の都市から入ってくる
@@ -41,11 +41,16 @@ export interface OpsTrain {
 
 export const trainLen = (cars: number) => cars * HSR_CAR_L + (cars - 1) * HSR_CAR_GAP;
 // 乗客の数から、1 本の両数
-export const hsrCars = (riders: number) => (riders < 1500 ? 8 : riders < 5000 ? 10 : 12);
-// 路線の長さと乗客の数から、走らせる列車の数（両方向の合計）
+export const HSR_MAX_CARS = 8;
+export const HSR_SEATS_PER_CAR = 60;
+export const hsrCars = (riders: number) => (riders < 2000 ? 6 : HSR_MAX_CARS);
+// 1 日の列車の本数（片道）：両方向の乗客を、席の 6 割で運べるだけ（30〜160 本）
+export const hsrTrainsPerDay = (riders: number) =>
+  Math.max(30, Math.min(160, Math.round(riders / (2 * 0.6 * HSR_SEATS_PER_CAR * hsrCars(riders)))));
+// 路線の長さと乗客の数から、画面に走らせる列車の数（両方向の合計）。編成が短いので、乗客が多いと本数で運ぶ
 export function hsrTrainCount(len: number, riders: number) {
   const base = Math.max(2, Math.ceil(len / 1400));
-  return Math.min(14, Math.max(2, Math.round(base * (1 + Math.min(1.5, riders / 2500)))));
+  return Math.min(16, Math.max(2, Math.round(base * (1 + Math.min(2, riders / 2000)))));
 }
 // 向き：はじめに並べるときは k で交互、あとから出すときは出した数で交互
 const initialDir = (_k: number, q: number) => (q % 2 === 0 ? 1 : -1);

@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import { Grid } from '../sim/grid';
 import { CELL } from '../sim/constants';
 import { hsrBits, hsrChains, hsrPoly, hsrAt, HsrPoly, HSRF_STATION, HSR_GIRDER, HSR_PLAT, HSR_STN_LEN, HSR_TRACK, resNear, stnCell } from '../sim/hsr';
-import { HsrOps, HSR_CAR_GAP, HSR_CAR_L, stationWeight } from '../sim/hsrOps';
+import { HsrOps, HSR_CAR_GAP, HSR_CAR_L, HSR_MAX_CARS, stationWeight } from '../sim/hsrOps';
 import type { Building } from '../sim/world';
 import { createInfraMaterial, matColor, PbrBuf, RM } from './infraMaterial';
 import { createVehicleMaterial } from './vehicleMaterial';
@@ -284,8 +284,8 @@ function flush(m: THREE.InstancedMesh, k: number) {
   m.instanceMatrix.addUpdateRange(0, k * 16);
   m.instanceMatrix.needsUpdate = true;
 }
-const MAX_TRAINS = 48;
-const MAX_MID = 10; // 12 両編成の中間車
+const MAX_TRAINS = 64;
+const MAX_MID = HSR_MAX_CARS - 2; // 8 両編成の中間車
 export class HsrTrains {
   group = new THREE.Group();
   ops = new HsrOps();

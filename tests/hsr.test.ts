@@ -201,10 +201,12 @@ describe('HSR stations', () => {
     expect(r.endB).toBe('end');
     expect(r.stops.map((s) => s.term)).toEqual([false, true]);
     expect(ops.trains.length).toBeGreaterThanOrEqual(2);
-    // 8〜12 両
-    for (const t of ops.trains) expect(t.cars).toBeGreaterThanOrEqual(8), expect(t.cars).toBeLessThanOrEqual(12);
+    // 6〜8 両（8 両 = 約 204m で、224m のホームに収まる）
+    for (const t of ops.trains) expect(t.cars).toBeGreaterThanOrEqual(6), expect(t.cars).toBeLessThanOrEqual(8);
+    expect(trainLen(8)).toBeLessThanOrEqual(14 * CELL);
     const seen = new Map<number, { reversed: boolean; stoppedMid: boolean; passedMid: boolean; express: boolean }>();
     const mid = r.stops[0];
+    let outside = 0;
     for (let k = 0; k < 20 * 60 * 10; k++) {
       const before = new Map(ops.trains.map((t) => [t.id, t.dir]));
       ops.step(0.1);
@@ -213,10 +215,17 @@ describe('HSR stations', () => {
         if (before.has(t.id) && before.get(t.id) !== t.dir) e.reversed = true;
         const inMid = t.s - (t.dir * trainLen(t.cars)) / 2 > mid.s0 && t.s - (t.dir * trainLen(t.cars)) / 2 < mid.s1;
         if (inMid && t.dwell > 0) e.stoppedMid = true;
+        // 止まっている列車は、先頭も最後尾もホームの中
+        if (t.dwell > 0 && t.last >= 0) {
+          const st = r.stops[t.last], tail = t.s - t.dir * trainLen(t.cars);
+          const lo = Math.min(t.s, tail), hi = Math.max(t.s, tail);
+          if (lo < st.s0 - 0.5 || hi > st.s1 + 0.5) outside++;
+        }
         if (inMid && t.dwell <= 0 && t.v > 30) e.passedMid = true;
         seen.set(t.id, e);
       }
     }
+    expect(outside).toBe(0);
     const all = [...seen.values()];
     expect(all.some((e) => e.reversed)).toBe(true);
     expect(all.some((e) => !e.express && e.stoppedMid)).toBe(true);
