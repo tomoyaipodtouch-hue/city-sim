@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta name="pm-build" content="1795880649478">
+
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Pocket Metro" />
+    <meta name="theme-color" content="#1b2530" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./icons/icon-180.png?v=5" />
+    <link rel="icon" type="image/png" href="./icons/icon-192.png?v=5" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=M+PLUS+1:wght@400;500;700;800&display=swap" />
+    <title>Pocket Metro</title>
+    <script type="module" crossorigin src="./assets/index-BBl2wYDz.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-LRZHpOGc.css">
+  </head>
+  <body>
+    <div id="boot" aria-live="polite">
+      <style>#boot{z-index:9999;color:#e8eef2;background:radial-gradient(circle at 50% 45%,#16324a,#0a1622 70%);flex-direction:column;justify-content:center;align-items:center;gap:18px;font-family:"M PLUS 1",Hiragino Sans,sans-serif;transition:opacity .35s;display:flex;position:fixed;inset:0}#boot.out{opacity:0;pointer-events:none}#boot img{border-radius:20px;width:84px;height:84px;box-shadow:0 6px 24px #00000059}#boot .t{letter-spacing:.02em;font-size:22px;font-weight:700}#boot .t b{color:#7fc3ea;font-weight:700}#boot canvas{width:min(300px,80vw);height:auto;display:block}#boot .s{color:#8fa3b3;letter-spacing:.08em;font-size:13px}</style>
+      <img src="./icons/icon-192.png?v=5" alt="" />
+      <div class="t">Pocket <b>Metro</b></div>
+      <canvas id="bootcity" width="680" height="300" aria-hidden="true"></canvas>
+      <div class="s">Loading…</div>
+      <script>
+        // 読み込み中のアニメーション「街が育つ」：道路 → 家 → ビル → 夜の窓明かり → ふわっと消えて繰り返す（約 5 秒）
+        (function () {
+          var cv = document.getElementById('bootcity'), boot = document.getElementById('boot');
+          if (!cv || !cv.getContext) return;
+          var ctx = cv.getContext('2d'), W = cv.width, G = 250, LOOP = 5200, t0 = performance.now(), running = false;
+          var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+          var houses = [[40,26,22],[78,30,26],[120,24,20],[470,28,24],[512,26,22],[560,32,26],[606,24,20]];
+          var towers = [[150,44,110],[200,52,170],[258,40,130],[302,60,210],[366,46,150],[416,54,185],[470,38,120],[520,48,95]];
+          function ease(t) { return t < 0 ? 0 : t > 1 ? 1 : 1 - Math.pow(1 - t, 3); }
+          function rnd(i, j) { var s = Math.sin(i * 127.1 + j * 311.7) * 43758.5453; return s - Math.floor(s); }
+          function draw(now) {
+            if (boot.style.display === 'none') { running = false; return; } // 消えたら止める
+            var t = reduce ? 3800 : (now - t0) % LOOP;
+            ctx.clearRect(0, 0, W, cv.height);
+            var road = ease(t / 600);
+            ctx.fillStyle = '#3b4d5c'; ctx.fillRect(0, G, W * road, 6);
+            ctx.fillStyle = '#f5c400'; for (var x = 12; x < W * road - 10; x += 34) ctx.fillRect(x, G + 2, 16, 2);
+            towers.forEach(function (b, i) {
+              var p = ease((t - 1100 - i * 140) / 700); if (p <= 0) return;
+              var hh = b[2] * p;
+              ctx.fillStyle = i % 2 ? '#2f9bd6' : '#2a86bd'; ctx.fillRect(b[0], G - hh, b[1], hh);
+              ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(b[0], G - hh, 3, hh);
+              for (var r = 0; r < Math.floor(hh / 16); r++) for (var c = 0; c < Math.floor((b[1] - 8) / 10); c++) {
+                ctx.fillStyle = (t - 3000) / 900 > rnd(i * 13 + r, c) ? '#f5c400' : 'rgba(10,22,34,0.45)';
+                ctx.fillRect(b[0] + 6 + c * 10, G - hh + 8 + r * 16, 5, 7);
+              }
+            });
+            houses.forEach(function (b, i) {
+              var p = ease((t - 500 - i * 90) / 450); if (p <= 0) return;
+              var hh = b[2] * p;
+              ctx.fillStyle = '#7fc3ea'; ctx.fillRect(b[0], G - hh, b[1], hh);
+              ctx.fillStyle = '#e8eef2'; ctx.beginPath(); ctx.moveTo(b[0] - 3, G - hh); ctx.lineTo(b[0] + b[1] / 2, G - hh - 10 * p); ctx.lineTo(b[0] + b[1] + 3, G - hh); ctx.fill();
+              if ((t - 3200) / 700 > rnd(i, 7)) { ctx.fillStyle = '#f5c400'; ctx.fillRect(b[0] + b[1] / 2 - 3, G - hh + 6, 6, 6); }
+            });
+            cv.style.opacity = reduce ? 1 : String(1 - ease((t - 4700) / 500));
+            if (!reduce) requestAnimationFrame(draw); else running = false;
+          }
+          function start() { if (running) return; running = true; requestAnimationFrame(draw); }
+          start();
+          // main.ts が読み込み中の画面をもう一度出したら、アニメーションも最初から
+          new MutationObserver(function () { if (boot.style.display !== 'none' && !boot.classList.contains('out')) { t0 = performance.now(); start(); } }).observe(boot, { attributes: true, attributeFilter: ['style', 'class'] });
+        })();
+      </script>
+    </div>
+    <div id="app">
+      <canvas id="view"></canvas>
+      <div id="ui"></div>
+    </div>
+  </body>
+</html>
